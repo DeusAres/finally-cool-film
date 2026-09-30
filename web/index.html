@@ -2,7 +2,7 @@
 <html lang="it">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -12,34 +12,49 @@
   :root { --bg: #0e0d0c; --fg: #efe9e1; --muted: #8f877d; --accent: #e8a33d; --line: #2a2622; --card: #171513; }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
-         font: 15px/1.35 -apple-system, system-ui, sans-serif; }
+         font: 15px/1.35 -apple-system, system-ui, sans-serif; overscroll-behavior: none; }
   body { display: flex; flex-direction: column; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
   header { display: flex; align-items: center; gap: 8px; padding: 10px 16px; }
   header h1 { font-size: 16px; margin: 0; flex: 1; min-width: 0; letter-spacing: .02em; white-space: nowrap;
          overflow: hidden; text-overflow: ellipsis; }
-  @media (max-width: 430px) { header h1 small { display: none; } }
   header h1 small { color: var(--muted); font-weight: 400; }
+  @media (max-width: 430px) { header h1 small { display: none; } }
   .btn { background: var(--accent); color: #1a1208; border: 0; border-radius: 999px; padding: 9px 16px;
          font: 600 15px system-ui; cursor: pointer; }
   .btn.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
   .btn:disabled { opacity: .35; }
   input[type=file] { display: none; }
-  #stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 0 16px;
-         position: relative; }
-  #view { max-width: 100%; max-height: 100%; border-radius: 4px; touch-action: none; user-select: none;
-         -webkit-user-select: none; -webkit-touch-callout: none; display: none; }
-  #empty { text-align: center; color: var(--muted); }
-  #empty .btn { font-size: 17px; padding: 14px 24px; margin-bottom: 12px; }
-  #badge { position: absolute; top: 8px; left: 24px; background: #000a; padding: 3px 8px; border-radius: 6px;
-         font-size: 12px; display: none; }
-  #controls { padding: 8px 16px 12px; border-top: 1px solid var(--line); background: var(--card); }
-  .row { display: grid; grid-template-columns: 92px 1fr 44px; align-items: center; gap: 8px; min-height: 38px; }
+
+  /* Stage: canvas centred, zoom/pan purely via CSS transform (the stage never scrolls). */
+  #stage { flex: 1; min-height: 0; position: relative; overflow: hidden; touch-action: none; }
+  #wrap { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+  #view { display: none; flex: none; transform-origin: center center; will-change: transform; }
+  #empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+         justify-content: center; gap: 12px; color: var(--muted); text-align: center; padding: 16px; }
+  #empty .btn { font-size: 17px; padding: 14px 24px; }
+  .overlay { position: absolute; z-index: 2; }
+  #tools { bottom: 10px; left: 12px; display: flex; gap: 6px; }
+  #tools[hidden] { display: none; }
+  .chip { background: #000b; color: var(--fg); border: 1px solid #fff3; border-radius: 999px; padding: 7px 12px;
+         font: 600 13px system-ui; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: pointer; }
+  #badge { top: 10px; left: 50%; transform: translateX(-50%); background: #000b; padding: 3px 10px;
+         border-radius: 6px; font-size: 12px; display: none; }
+  #zoomLabel { bottom: 16px; right: 14px; font: 12px ui-monospace, Menlo, monospace; color: var(--muted); }
+
+  #controls { padding: 6px 16px 8px; border-top: 1px solid var(--line); background: var(--card); }
+  .row { display: grid; grid-template-columns: 92px 1fr 44px; align-items: center; gap: 8px; min-height: 36px; }
   .row label { font-size: 14px; color: var(--muted); }
   .row output { font: 12px ui-monospace, Menlo, monospace; text-align: right; color: var(--muted); }
   input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; }
   #status { font-size: 12px; color: var(--muted); padding: 4px 16px 8px; min-height: 22px; }
-  #saveBar { display: none; gap: 8px; padding: 0 16px 8px; }
-  #saveBar .btn { flex: 1; }
+
+  #logPanel { display: none; position: fixed; inset: 0; z-index: 10; background: #000e;
+         padding: calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));
+         flex-direction: column; gap: 8px; }
+  #logPanel pre { flex: 1; overflow: auto; margin: 0; font: 11px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap;
+         word-break: break-word; background: var(--card); padding: 8px; border-radius: 8px; }
+  #logPanel .bar { display: flex; gap: 8px; }
+  #logPanel .bar .btn { flex: 1; }
 </style>
 </head>
 <body>
@@ -51,17 +66,17 @@
 </header>
 
 <div id="stage">
+  <div id="wrap"><canvas id="view"></canvas></div>
   <div id="empty">
     <label class="btn">Scegli foto<input type="file" id="pick" accept="image/*"></label>
-    <div>Tieni premuto sull’immagine per vedere l’originale</div>
+    <div>Pizzica per zoomare · trascina per spostarti<br>tieni premuto “A/B” per l’originale</div>
   </div>
-  <canvas id="view"></canvas>
-  <div id="badge">ORIGINALE</div>
-</div>
-
-<div id="saveBar">
-  <button class="btn" id="save">Salva / Condividi</button>
-  <button class="btn ghost" id="dismiss">Chiudi</button>
+  <div class="overlay" id="tools" hidden>
+    <span class="chip" id="compare">A/B</span>
+    <span class="chip" id="fit">Adatta</span>
+  </div>
+  <div class="overlay" id="badge">ORIGINALE</div>
+  <div class="overlay" id="zoomLabel"></div>
 </div>
 
 <div id="controls">
@@ -73,6 +88,15 @@
   <div class="row"><label for="halation">Halation</label><input type="range" id="halation" min="0" max="3" step="0.1" value="1"><output for="halation"></output></div>
 </div>
 <div id="status">Caricamento motore…</div>
+
+<div id="logPanel">
+  <strong id="logTitle">Log</strong>
+  <pre id="logText"></pre>
+  <div class="bar">
+    <button class="btn" id="logCopy">Copia log</button>
+    <button class="btn ghost" id="logClose">Chiudi</button>
+  </div>
+</div>
 
 <script type="module" src="app.js"></script>
 </body>

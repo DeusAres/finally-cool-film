@@ -16,8 +16,11 @@ di pellicola → stampa → scansione, nel browser via WebAssembly + WebGPU. Foc
 
 - Scegli foto → **auto-lab**: esposizione e contrasto di stampa calcolati per foto (come una stampatrice da lab), così la luminosità resta quella dell'originale.
 - Slider: esposizione, contrasto, filtri ingranditore (magenta↔verde, giallo↔blu), grana, halation. Doppio tap sull'etichetta = reset.
-- Tieni premuto sull'immagine = originale.
-- **Esporta**: sviluppo a piena risoluzione + JPEG con jpegli (distance 1.0, progressive, 4:4:4) → Salva/Condividi.
+- Zoom/pan: pizzica, trascina, doppio tap (adatta ↔ 100%). Tieni premuto **A/B** = originale.
+- **Esporta**: piena risoluzione (max 12.5 MP) a tile 1024 px, una striscia alla volta passata in streaming a jpegli
+  (worker, distance 1.0, 4:4:4, baseline sopra 6 MP perché il progressive tiene tutti i coefficienti DCT in heap),
+  EXIF dell'originale preservati, download diretto.
+- Tocca la riga di stato per il **log**; se la scheda muore durante un export, al riavvio il log si apre da solo.
 
 ## Build locale
 
