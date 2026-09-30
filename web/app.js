@@ -13,6 +13,7 @@ const EXPORT_PAD = 128;           // tile overlap: covers halation / DIR diffusi
 const MAX_EXPORT_PIXELS = 12.5e6; // keeps native 12 MP iPhone frames; 48 MP gets downscaled (20 MP crashed the grain exporter)
 const JPEG_DISTANCE = 1.0;        // butteraugli distance for jpegli
 const PROGRESSIVE_PIXEL_LIMIT = 6e6; // progressive keeps all DCT coeffs in the wasm heap (~29 B/px): baseline above
+const BORDER_FRACTION = 0.01;     // white mat, fraction of the long side, all four sides (as in grain pro)
 
 const $ = (id) => document.getElementById(id);
 const stage = $('stage'), view = $('view');
@@ -166,7 +167,7 @@ async function render() {
       engine.update(JSON.stringify(renderParams(u, auto)));
       const out = await run(photo.preview);
       photo.after = toImageData(out, photo.preview.w, photo.preview.h);
-      if (!showingBefore) ctx.putImageData(photo.after, 0, 0);
+      if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); }
       status(`${photo.preview.w}×${photo.preview.h} · ${Math.round(performance.now() - t)} ms${gpu ? '' : ' (CPU)'}`);
     } while (dirty);
   } catch (e) {
@@ -177,11 +178,49 @@ async function render() {
   }
 }
 
+// ---------- histogram (overlay, top left) ----------
+// RGB + luminance of what is on screen, from the 8-bit display pixels (every
+// other pixel in both directions is plenty). Square-root scale against the
+// tallest bin that is not a clipped end: a dark or sky-heavy frame keeps a
+// readable shape instead of one spike and a flat line.
+const histo = $('histo'), hctx = histo.getContext('2d');
+function drawHistogram(img) {
+  const bins = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+  const { data, width, height } = img;
+  for (let y = 0; y < height; y += 2) {
+    for (let i = y * width * 4, end = i + width * 4; i < end; i += 8) {
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      bins[0][r]++; bins[1][g]++; bins[2][b]++;
+      bins[3][(r * 54 + g * 183 + b * 19) >> 8]++;
+    }
+  }
+  let max = 1;
+  for (const h of bins) for (let v = 1; v < 255; v++) max = Math.max(max, h[v]);
+  max = Math.sqrt(max);
+  const W = histo.width, H = histo.height;
+  hctx.clearRect(0, 0, W, H);
+  const area = (h, style, op) => {
+    hctx.globalCompositeOperation = op;
+    hctx.fillStyle = style;
+    hctx.beginPath(); hctx.moveTo(0, H);
+    for (let v = 0; v < 256; v++) hctx.lineTo(v * W / 255, H - Math.min(1, Math.sqrt(h[v]) / max) * (H - 2));
+    hctx.lineTo(W, H); hctx.closePath(); hctx.fill();
+  };
+  area(bins[3], 'rgba(200,200,200,0.35)', 'source-over');
+  area(bins[0], 'rgba(255,60,60,0.55)', 'lighter');
+  area(bins[1], 'rgba(60,255,60,0.55)', 'lighter');
+  area(bins[2], 'rgba(70,110,255,0.6)', 'lighter');
+  hctx.globalCompositeOperation = 'source-over';
+  histo.style.display = 'block';
+}
+
 let showingBefore = false;
 function showBefore(on) {
   if (!photo?.after) return;
   showingBefore = on;
-  ctx.putImageData(on ? photo.preview.before : photo.after, 0, 0);
+  const img = on ? photo.preview.before : photo.after;
+  ctx.putImageData(img, 0, 0);
+  drawHistogram(img);
   $('badge').style.display = on ? 'block' : 'none';
 }
 const compare = $('compare');
@@ -279,6 +318,7 @@ async function loadPhoto(file) {
     view.style.width = preview.w + 'px'; view.style.height = preview.h + 'px';
     view.style.display = 'block'; $('empty').style.display = 'none'; $('tools').hidden = false;
     ctx.putImageData(preview.before, 0, 0);
+    drawHistogram(preview.before);
     fitToScreen();
     await runAuto();
     $('export').disabled = false; $('auto').disabled = false; $('newPhoto').hidden = false;
@@ -311,7 +351,7 @@ const encoder = new Worker('export-worker.js');
 let encoderError = null, encoderDone = null;
 encoder.onmessage = ({ data }) => {
   if (data.cmd === 'error') { encoderError = data.error; log('jpegli error: ' + data.error); encoderDone?.reject(new Error(data.error)); }
-  else if (data.cmd === 'done') { log(`jpegli done, heap ${data.heapMB} MB`); encoderDone?.resolve(data.jpeg); }
+  else if (data.cmd === 'done') { log(`jpegli done ${data.width}x${data.height}, heap ${data.heapMB} MB`); encoderDone?.resolve(data); }
 };
 encoder.onerror = (e) => { encoderError = e.message || 'worker error'; log('jpegli worker error: ' + encoderError); encoderDone?.reject(new Error(encoderError)); };
 
@@ -336,7 +376,8 @@ async function exportFull() {
     status('Esporto: decodifica…');
     const { data, w, h, p3 } = decodeRGBA(bitmap, longCap);
     const progressive = w * h > PROGRESSIVE_PIXEL_LIMIT ? 0 : 2;
-    log(`export start ${w}x${h} p3=${p3} progressive=${progressive}`);
+    const border = $('border').checked ? Math.round(Math.max(w, h) * BORDER_FRACTION) : 0;
+    log(`export start ${w}x${h} p3=${p3} progressive=${progressive} border=${border}`);
 
     ensureEngine(u);
     await updatePreviewInput(u);   // metering must see the same (lens-applied) preview the user saw
@@ -349,7 +390,7 @@ async function exportFull() {
     encoderError = null;
     const done = new Promise((resolve, reject) => { encoderDone = { resolve, reject }; });
     done.catch(() => {});
-    encoder.postMessage({ cmd: 'start', width: w, height: h, distance: JPEG_DISTANCE, progressive, yuv444: 1 });
+    encoder.postMessage({ cmd: 'start', width: w, height: h, distance: JPEG_DISTANCE, progressive, yuv444: 1, border });
 
     for (let s = 0; s < strips; s++) {
       const ty = s * EXPORT_TILE, ch = Math.min(EXPORT_TILE, h - ty);
@@ -375,17 +416,18 @@ async function exportFull() {
     }
     status('Esporto: JPEG (jpegli)…');
     encoder.postMessage({ cmd: 'finish' });
-    let bytes = await done;
+    const result = await done;
+    let bytes = result.jpeg;
     try {
       const seg = await readExifSegment(photo.file);
-      if (seg) { bytes = insertExif(bytes, patchExif(seg, w, h)); log(`EXIF carried over (${seg.length} B)`); }
+      if (seg) { bytes = insertExif(bytes, patchExif(seg, result.width, result.height)); log(`EXIF carried over (${seg.length} B)`); }
     } catch (e) { log('EXIF skipped: ' + (e?.message || e)); }
     const blob = new Blob([bytes], { type: 'image/jpeg' });
     const base = (photo.file.name || 'foto').replace(/\.[^.]+$/, '');
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
     log(`export done ${(blob.size / 1e6).toFixed(1)} MB in ${secs} s`);
-    status(`Esportata: ${w}×${h}, ${(blob.size / 1e6).toFixed(1)} MB in ${secs} s`);
-    download(blob, `${base}_gold200.jpg`);
+    status(`Esportata: ${result.width}×${result.height}, ${(blob.size / 1e6).toFixed(1)} MB in ${secs} s`);
+    download(blob, `${base}_gold200${border ? '_bordo' : ''}.jpg`);
   } catch (e) {
     encoder.postMessage({ cmd: 'abort' });
     log('export error: ' + (e?.stack || e));
@@ -439,6 +481,8 @@ $('pick').addEventListener('change', (e) => loadPhoto(e.target.files[0]));
 $('newPhoto').addEventListener('click', () => $('pick').click());
 $('auto').addEventListener('click', () => runAuto());
 $('export').addEventListener('click', exportFull);
+try { $('border').checked = localStorage.getItem('fcf_border') === '1'; } catch {}
+$('border').addEventListener('change', () => { try { localStorage.setItem('fcf_border', $('border').checked ? '1' : '0'); } catch {} });
 syncOutputs();
 
 const crashed = takeCrashMarker();

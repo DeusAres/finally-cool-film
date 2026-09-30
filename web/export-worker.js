@@ -1,12 +1,15 @@
 // Streaming JPEG encoder (jpegli wasm) running off the main thread.
 //
 // Protocol (messages are handled strictly in order):
-//   { cmd: 'start', width, height, distance, progressive, yuv444 }
+//   { cmd: 'start', width, height, distance, progressive, yuv444, border }
 //   { cmd: 'rows', rgb: ArrayBuffer }        // whole rows, RGB 8-bit, top to bottom
 //   { cmd: 'finish' }                        // → { cmd: 'done', jpeg: ArrayBuffer }
 //   { cmd: 'abort' }
 // Errors → { cmd: 'error', error }.
 //
+// `border` (px, optional) adds a white mat of that width on all four sides; it is
+// synthesised row by row, so the output is (width + 2·border) × (height + 2·border)
+// and the caller still sends only the image rows.
 // Rows are pushed into the wasm heap a batch at a time, so the full RGB image
 // never exists there. Progressive mode still keeps every DCT coefficient in
 // the heap (up to ~29 B/px at 4:4:4), so callers use baseline for large frames.
@@ -15,8 +18,26 @@ importScripts('vendor/jpegli_wasm2.js');
 
 const ROW_BATCH = 64;
 const ready = JpegliModule();
-let M = null, ctx = 0, width = 0, rowPtr = 0;
+let M = null, ctx = 0, width = 0, border = 0, outW = 0, outH = 0, rowPtr = 0;
 let queue = Promise.resolve();
+
+// Push the first `n` rows staged at rowPtr.
+function writeBatch(n) {
+  const outStride = outW * 3;
+  for (let done = 0; done < n;) {
+    const d = M._jpegli_wasm_write_rows(ctx, rowPtr + done * outStride, n - done);
+    if (d <= 0) throw new Error('jpegli_wasm_write_rows failed');
+    done += d;
+  }
+}
+
+function writeWhite(rows) {
+  for (let y = 0; y < rows; y += ROW_BATCH) {
+    const n = Math.min(ROW_BATCH, rows - y);
+    M.HEAPU8.fill(255, rowPtr, rowPtr + n * outW * 3);
+    writeBatch(n);
+  }
+}
 
 function cleanup() {
   if (rowPtr) M._free(rowPtr);
@@ -27,26 +48,32 @@ async function handle(msg) {
   M = M || await ready;
   switch (msg.cmd) {
     case 'start': {
-      width = msg.width;
-      ctx = M._jpegli_wasm_start(msg.width, msg.height, msg.distance ?? 1.0, msg.progressive ?? 0, msg.yuv444 ?? 1);
+      width = msg.width; border = msg.border | 0;
+      outW = width + 2 * border; outH = msg.height + 2 * border;
+      ctx = M._jpegli_wasm_start(outW, outH, msg.distance ?? 1.0, msg.progressive ?? 0, msg.yuv444 ?? 1);
       if (!ctx) throw new Error('jpegli_wasm_start failed');
-      rowPtr = M._malloc(width * 3 * ROW_BATCH);
+      rowPtr = M._malloc(outW * 3 * ROW_BATCH);
+      writeWhite(border);                        // top mat
       break;
     }
     case 'rows': {
       const rgb = new Uint8Array(msg.rgb), stride = width * 3, rows = rgb.length / stride;
+      const outStride = outW * 3, side = border * 3;
       for (let y = 0; y < rows; y += ROW_BATCH) {
         const n = Math.min(ROW_BATCH, rows - y);
-        M.HEAPU8.set(rgb.subarray(y * stride, (y + n) * stride), rowPtr);
-        for (let done = 0; done < n;) {
-          const d = M._jpegli_wasm_write_rows(ctx, rowPtr + done * stride, n - done);
-          if (d <= 0) throw new Error('jpegli_wasm_write_rows failed');
-          done += d;
+        if (border) {
+          const heap = M.HEAPU8;
+          heap.fill(255, rowPtr, rowPtr + n * outStride);
+          for (let r = 0; r < n; r++) heap.set(rgb.subarray((y + r) * stride, (y + r + 1) * stride), rowPtr + r * outStride + side);
+        } else {
+          M.HEAPU8.set(rgb.subarray(y * stride, (y + n) * stride), rowPtr);
         }
+        writeBatch(n);
       }
       break;
     }
     case 'finish': {
+      writeWhite(border);                        // bottom mat
       const lenPtr = M._malloc(4);
       const out = M._jpegli_wasm_finish(ctx, lenPtr);
       const len = M.HEAPU32[lenPtr >> 2];
@@ -55,7 +82,7 @@ async function handle(msg) {
       const jpeg = M.HEAPU8.slice(out, out + len).buffer;
       M._jpegli_wasm_free(out);
       cleanup();
-      self.postMessage({ cmd: 'done', jpeg, heapMB: Math.round(M.HEAPU8.length / 1048576) }, [jpeg]);
+      self.postMessage({ cmd: 'done', jpeg, width: outW, height: outH, heapMB: Math.round(M.HEAPU8.length / 1048576) }, [jpeg]);
       break;
     }
     case 'abort': {
