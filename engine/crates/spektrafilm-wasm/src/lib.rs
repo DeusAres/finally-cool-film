@@ -45,7 +45,9 @@ pub fn default_params() -> String {
 
 #[wasm_bindgen]
 pub struct Engine {
-    pipeline: Pipeline,
+    pipeline: Option<Pipeline>,
+    /// Full params as JSON (defaults + every override applied so far).
+    params: serde_json::Value,
 }
 
 #[wasm_bindgen]
@@ -56,20 +58,38 @@ impl Engine {
         let mut base = serde_json::to_value(RuntimeParams::default())?;
         let overrides: serde_json::Value = serde_json::from_str(overrides_json)?;
         merge(&mut base, overrides);
-        let params: RuntimeParams = serde_json::from_value(base)?;
+        let params: RuntimeParams = serde_json::from_value(base.clone())?;
 
         let data_dir = Path::new(DATA_DIR);
         let film = profile::load_profile_by_name(data_dir, film)?;
         let print = profile::load_profile_by_name(data_dir, paper)?;
         let pipeline = Pipeline::new_with_spectral(film, print, params, data_dir)
             .map_err(|e| JsError::new(&e))?;
-        Ok(Engine { pipeline })
+        Ok(Engine { pipeline: Some(pipeline), params: base })
+    }
+
+    /// Merge render-time overrides (print exposure, contrast morph, grain,
+    /// halation, scanner…) without re-running calibration. Calibration inputs
+    /// (enlarger filters/illuminant, camera EV) need a new `Engine`.
+    pub fn update(&mut self, overrides_json: &str) -> Result<(), JsError> {
+        let overrides: serde_json::Value = serde_json::from_str(overrides_json)?;
+        let mut next = self.params.clone();
+        merge(&mut next, overrides);
+        let params: RuntimeParams = serde_json::from_value(next.clone())?;
+        let pipeline = self.pipeline.take().expect("pipeline present");
+        self.pipeline = Some(pipeline.with_params(params));
+        self.params = next;
+        Ok(())
+    }
+
+    fn pipeline(&self) -> &Pipeline {
+        self.pipeline.as_ref().expect("pipeline present")
     }
 
     /// Run the full chain on interleaved RGB f32 (w*h*3). Returns interleaved RGB f32.
     pub fn process(&self, rgb: Vec<f32>, width: u32, height: u32) -> Vec<f32> {
         let image = ImageBuf::from_data(width, height, rgb);
-        self.pipeline.process(image, &CpuBackend).data
+        self.pipeline().process(image, &CpuBackend).data
     }
 
     /// GPU-resident run (requires `init_gpu`). Resolves to a Float32Array of
@@ -79,7 +99,7 @@ impl Engine {
             .with(|g| g.borrow().clone())
             .ok_or_else(|| JsError::new("GPU not initialised"))?;
         let image = ImageBuf::from_data(width, height, rgb);
-        self.pipeline
+        self.pipeline()
             .process_resident_borrowed(&image, gpu.as_ref())
             .ok_or_else(|| JsError::new("GPU-resident path unavailable for these params"))?;
         Ok(wasm_bindgen_futures::future_to_promise(async move {

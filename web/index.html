@@ -4,68 +4,75 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<title>finally cool film — test GPU</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0e0d0c">
+<title>finally cool film</title>
 <style>
-  :root { --bg: #111; --fg: #eee; --muted: #999; --accent: #e8a33d; --card: #1c1c1c; }
-  * { box-sizing: border-box; }
-  body { margin: 0; padding: 16px; padding-bottom: calc(16px + env(safe-area-inset-bottom));
-         background: var(--bg); color: var(--fg); font: 15px/1.4 -apple-system, system-ui, sans-serif; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  p.sub { color: var(--muted); margin: 0 0 16px; }
-  section { background: var(--card); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
-  h2 { font-size: 15px; margin: 0 0 8px; color: var(--accent); }
-  button, label.btn { display: inline-block; background: var(--accent); color: #111; border: 0; border-radius: 10px;
-         padding: 12px 16px; font: 600 15px system-ui; margin: 4px 4px 4px 0; cursor: pointer; }
-  button:disabled { opacity: .4; }
-  select { font-size: 15px; padding: 8px; border-radius: 8px; }
+  :root { --bg: #0e0d0c; --fg: #efe9e1; --muted: #8f877d; --accent: #e8a33d; --line: #2a2622; --card: #171513; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+         font: 15px/1.35 -apple-system, system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  header { display: flex; align-items: center; gap: 8px; padding: 10px 16px; }
+  header h1 { font-size: 16px; margin: 0; flex: 1; min-width: 0; letter-spacing: .02em; white-space: nowrap;
+         overflow: hidden; text-overflow: ellipsis; }
+  @media (max-width: 430px) { header h1 small { display: none; } }
+  header h1 small { color: var(--muted); font-weight: 400; }
+  .btn { background: var(--accent); color: #1a1208; border: 0; border-radius: 999px; padding: 9px 16px;
+         font: 600 15px system-ui; cursor: pointer; }
+  .btn.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+  .btn:disabled { opacity: .35; }
   input[type=file] { display: none; }
-  pre { white-space: pre-wrap; word-break: break-word; font: 12px/1.4 ui-monospace, Menlo, monospace; margin: 0; }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid #333; }
-  canvas { width: 100%; height: auto; border-radius: 8px; display: block; margin-top: 8px; touch-action: manipulation; }
-  .muted { color: var(--muted); font-size: 13px; }
-  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  #stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 0 16px;
+         position: relative; }
+  #view { max-width: 100%; max-height: 100%; border-radius: 4px; touch-action: none; user-select: none;
+         -webkit-user-select: none; -webkit-touch-callout: none; display: none; }
+  #empty { text-align: center; color: var(--muted); }
+  #empty .btn { font-size: 17px; padding: 14px 24px; margin-bottom: 12px; }
+  #badge { position: absolute; top: 8px; left: 24px; background: #000a; padding: 3px 8px; border-radius: 6px;
+         font-size: 12px; display: none; }
+  #controls { padding: 8px 16px 12px; border-top: 1px solid var(--line); background: var(--card); }
+  .row { display: grid; grid-template-columns: 92px 1fr 44px; align-items: center; gap: 8px; min-height: 38px; }
+  .row label { font-size: 14px; color: var(--muted); }
+  .row output { font: 12px ui-monospace, Menlo, monospace; text-align: right; color: var(--muted); }
+  input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; }
+  #status { font-size: 12px; color: var(--muted); padding: 4px 16px 8px; min-height: 22px; }
+  #saveBar { display: none; gap: 8px; padding: 0 16px 8px; }
+  #saveBar .btn { flex: 1; }
 </style>
 </head>
 <body>
-<h1>finally cool film</h1>
-<p class="sub">Test WebGPU · Kodak Gold 200 → Portra Endura</p>
+<header>
+  <h1>finally cool film <small>· Gold 200</small></h1>
+  <button class="btn ghost" id="newPhoto" hidden>Foto</button>
+  <button class="btn ghost" id="auto" disabled>Auto</button>
+  <button class="btn" id="export" disabled>Esporta</button>
+</header>
 
-<section>
-  <h2>Stato</h2>
-  <pre id="status">Caricamento…</pre>
-</section>
-
-<section>
-  <h2>1 · Benchmark</h2>
-  <div class="row">
-    <button id="bench" disabled>Avvia benchmark</button>
-    <label class="muted"><input type="checkbox" id="bench4"> anche 4 MP</label>
-    <label class="muted"><input type="checkbox" id="benchCpu"> anche CPU (lento)</label>
+<div id="stage">
+  <div id="empty">
+    <label class="btn">Scegli foto<input type="file" id="pick" accept="image/*"></label>
+    <div>Tieni premuto sull’immagine per vedere l’originale</div>
   </div>
-  <table id="benchTable" hidden><thead><tr><th>MP</th><th>1ª (ms)</th><th>mediana (ms)</th></tr></thead><tbody></tbody></table>
-</section>
+  <canvas id="view"></canvas>
+  <div id="badge">ORIGINALE</div>
+</div>
 
-<section>
-  <h2>2 · Prova con una tua foto</h2>
-  <div class="row">
-    <label class="btn" id="pickLabel">Scegli foto<input type="file" id="pick" accept="image/*" disabled></label>
-    <select id="longSide">
-      <option value="1024">1024 px</option>
-      <option value="1600" selected>1600 px</option>
-      <option value="2048">2048 px</option>
-      <option value="3024">3024 px</option>
-    </select>
-  </div>
-  <p class="muted" id="photoInfo">Tocca l’immagine per confrontare prima/dopo.</p>
-  <canvas id="out" hidden></canvas>
-</section>
+<div id="saveBar">
+  <button class="btn" id="save">Salva / Condividi</button>
+  <button class="btn ghost" id="dismiss">Chiudi</button>
+</div>
 
-<section>
-  <h2>Risultati da incollare</h2>
-  <button id="copy">Copia report</button>
-  <pre id="report"></pre>
-</section>
+<div id="controls">
+  <div class="row"><label for="ev">Esposizione</label><input type="range" id="ev" min="-2" max="2" step="0.1" value="0"><output for="ev"></output></div>
+  <div class="row"><label for="contrast">Contrasto</label><input type="range" id="contrast" min="-1" max="1" step="0.05" value="0"><output for="contrast"></output></div>
+  <div class="row"><label for="mshift">Magenta ↔ Verde</label><input type="range" id="mshift" min="-30" max="30" step="1" value="0"><output for="mshift"></output></div>
+  <div class="row"><label for="yshift">Giallo ↔ Blu</label><input type="range" id="yshift" min="-30" max="30" step="1" value="0"><output for="yshift"></output></div>
+  <div class="row"><label for="grain">Grana</label><input type="range" id="grain" min="0" max="3" step="0.1" value="1"><output for="grain"></output></div>
+  <div class="row"><label for="halation">Halation</label><input type="range" id="halation" min="0" max="3" step="0.1" value="1"><output for="halation"></output></div>
+</div>
+<div id="status">Caricamento motore…</div>
 
 <script type="module" src="app.js"></script>
 </body>

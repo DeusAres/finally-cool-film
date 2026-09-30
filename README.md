@@ -8,9 +8,16 @@ di pellicola → stampa → scansione, nel browser via WebAssembly + WebGPU. Foc
 | Path | Cosa |
 |---|---|
 | `engine/` | motore Rust da [spektrafilm-rs](https://github.com/turbasvin/spektrafilm-rs) @ `9dd59b0` (GPL-3.0) + patch wasm/WebGPU (`spike/patches/`) + wrapper `spektrafilm-wasm` |
-| `web/` | app statica (per ora: pagina di test GPU per iPhone) |
+| `web/` | app: `index.html` (MVP) e `bench.html` (test GPU / diagnostica) |
 | `web/data/` | profili Gold 200 / Portra Endura, LUT spettrale, filtri neutri (CC BY-SA 4.0) |
 | `spike/` | report della spike, patch, harness di benchmark |
+
+## App (MVP)
+
+- Scegli foto → **auto-lab**: esposizione e contrasto di stampa calcolati per foto (come una stampatrice da lab), così la luminosità resta quella dell'originale.
+- Slider: esposizione, contrasto, filtri ingranditore (magenta↔verde, giallo↔blu), grana, halation. Doppio tap sull'etichetta = reset.
+- Tieni premuto sull'immagine = originale.
+- **Esporta**: sviluppo a piena risoluzione + JPEG con jpegli (distance 1.0, progressive, 4:4:4) → Salva/Condividi.
 
 ## Build locale
 
