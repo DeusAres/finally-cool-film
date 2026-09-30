@@ -118,3 +118,22 @@ I path nei bench sono relativi al layout della sessione di spike: da adattare.
 2. Decidere come integrare upstream (fork con patch / submodule / vendoring).
 3. Input P3 + HEIC, preview su canvas, 3–4 slider, export jpegli (streaming, in Worker).
 4. Ottimizzazioni: niente readback in preview (render diretto da buffer GPU a canvas), readback solo in export.
+
+## ⚠️ Input display-referred (problema aperto, priorità alta)
+
+Feedback su foto iPhone reale: **risultato scuro**. Misura su rampa di grigi (Gold 200 → Endura, auto-exposure off, grana/halation off):
+
+| EV vs grigio medio | in (8 bit) | out (8 bit) |
+|---|---|---|
+| −3 | 41 | 21 |
+| −2 | 60 | 35 |
+| −1 | 85 | 68 |
+| 0 | 118 | 116 |
+| +1 | 162 | 164 |
+| +2 | 221 | 200 |
+
+Grigio medio preservato, ombre molto schiacciate: è la S-curve pellicola+carta, corretta **se l'input è scene-linear**.
+Ma JPEG/HEIC iPhone sono **display-referred** (curva tonale già applicata, anche col profilo "zero") → doppia curva.
+
+Strade: (1) input ProRAW/DNG (lineare vero, serve decoder DNG in wasm); (2) inversione approssimata
+della curva base iPhone prima della simulazione; (3) intanto: slider esposizione / print exposure nell'MVP.
