@@ -1,0 +1,622 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 6c92ef7..7309bfa 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,6 +7,7 @@ members = [
+     "crates/spektrafilm-model",
+     "crates/spektrafilm-cli",
+     "crates/spektrafilm-gui",
++    "crates/spektrafilm-wasm",
+ ]
+ 
+ [workspace.package]
+@@ -17,7 +18,7 @@ rust-version = "1.85"
+ 
+ [workspace.dependencies]
+ spektrafilm-core = { path = "crates/spektrafilm-core" }
+-spektrafilm-gpu = { path = "crates/spektrafilm-gpu" }
++spektrafilm-gpu = { path = "crates/spektrafilm-gpu", default-features = false }
+ spektrafilm-math = { path = "crates/spektrafilm-math" }
+ spektrafilm-model = { path = "crates/spektrafilm-model" }
+ 
+@@ -28,7 +29,7 @@ rand = "0.9"
+ rand_distr = "0.5"
+ image = { version = "0.25", default-features = false, features = ["tiff", "png", "jpeg"] }
+ exr = "1.73"
+-wgpu = "24"
++wgpu = { version = "24", default-features = false, features = ["wgsl", "webgpu", "fragile-send-sync-non-atomic-wasm"] }
+ clap = { version = "4", features = ["derive"] }
+ eframe = { version = "0.31", default-features = false, features = ["wgpu", "glow", "default_fonts", "wayland", "x11"] }
+ egui = "0.31"
+diff --git a/crates/spektrafilm-cli/Cargo.toml b/crates/spektrafilm-cli/Cargo.toml
+index 530211f..e8be806 100644
+--- a/crates/spektrafilm-cli/Cargo.toml
++++ b/crates/spektrafilm-cli/Cargo.toml
+@@ -26,7 +26,7 @@ precision-f64 = [
+ 
+ [dependencies]
+ spektrafilm-core.workspace = true
+-spektrafilm-gpu.workspace = true
++spektrafilm-gpu = { workspace = true, features = ["wgpu-backend"] }
+ spektrafilm-math.workspace = true
+ clap.workspace = true
+ serde_json.workspace = true
+diff --git a/crates/spektrafilm-core/Cargo.toml b/crates/spektrafilm-core/Cargo.toml
+index 40bfad9..a92ccbd 100644
+--- a/crates/spektrafilm-core/Cargo.toml
++++ b/crates/spektrafilm-core/Cargo.toml
+@@ -12,6 +12,7 @@ precision-f64 = [
+ ]
+ 
+ [dependencies]
++web-time = "1"
+ spektrafilm-math.workspace = true
+ spektrafilm-gpu.workspace = true
+ spektrafilm-model.workspace = true
+@@ -27,6 +28,6 @@ image.workspace = true
+ cblas = "0.4"
+ blas-src = { version = "0.10", features = ["accelerate"] }
+ 
+-[target.'cfg(all(not(target_os = "macos"), not(target_os = "windows")))'.dependencies]
++[target.'cfg(all(not(target_os = "macos"), not(target_os = "windows"), not(target_arch = "wasm32")))'.dependencies]
+ cblas = "0.4"
+ blas-src = { version = "0.10", features = ["openblas"] }
+diff --git a/crates/spektrafilm-core/src/lib.rs b/crates/spektrafilm-core/src/lib.rs
+index 4eea25b..f0455e9 100644
+--- a/crates/spektrafilm-core/src/lib.rs
++++ b/crates/spektrafilm-core/src/lib.rs
+@@ -11,3 +11,4 @@ pub mod print_morph;
+ pub mod profile;
+ pub mod spectral_service;
+ pub mod stages;
++pub mod vfs;
+diff --git a/crates/spektrafilm-core/src/neutral_filters.rs b/crates/spektrafilm-core/src/neutral_filters.rs
+index dabe169..d524d6f 100644
+--- a/crates/spektrafilm-core/src/neutral_filters.rs
++++ b/crates/spektrafilm-core/src/neutral_filters.rs
+@@ -22,8 +22,9 @@ impl NeutralFilters {
+     /// Returns an empty database if the file is missing — matches Python's behavior.
+     pub fn load(data_dir: &Path) -> Self {
+         let path = data_dir.join("filters").join("neutral_print_filters.json");
+-        let db = std::fs::read_to_string(&path)
++        let db = crate::vfs::read(&path)
+             .ok()
++            .and_then(|b| String::from_utf8(b).ok())
+             .and_then(|s| serde_json::from_str::<RawDb>(&s).ok())
+             .map(|raw| raw.0)
+             .unwrap_or_default();
+diff --git a/crates/spektrafilm-core/src/pipeline.rs b/crates/spektrafilm-core/src/pipeline.rs
+index 6d159de..a4e2719 100644
+--- a/crates/spektrafilm-core/src/pipeline.rs
++++ b/crates/spektrafilm-core/src/pipeline.rs
+@@ -6,7 +6,7 @@
+ ///   3. Compute print exposure normalization factor from midgray spectral density
+ ///   4. Pass all calibration data to the pipeline stages
+ use std::path::Path;
+-use std::time::Instant;
++use web_time::Instant;
+ 
+ use spektrafilm_gpu::ComputeBackend;
+ use spektrafilm_math::image::ImageBuf;
+diff --git a/crates/spektrafilm-core/src/profile.rs b/crates/spektrafilm-core/src/profile.rs
+index 4816ed7..416e3f0 100644
+--- a/crates/spektrafilm-core/src/profile.rs
++++ b/crates/spektrafilm-core/src/profile.rs
+@@ -345,9 +345,9 @@ impl Profile {
+ 
+ /// Load a profile from a JSON file on disk.
+ pub fn load_profile(path: &Path) -> Result<Profile, ProfileError> {
+-    let file =
+-        std::fs::File::open(path).map_err(|e| ProfileError::Io(path.display().to_string(), e))?;
+-    let reader = std::io::BufReader::new(file);
++    let bytes =
++        crate::vfs::read(path).map_err(|e| ProfileError::Io(path.display().to_string(), e))?;
++    let reader = std::io::Cursor::new(bytes);
+     let mut profile: Profile = serde_json::from_reader(reader)
+         .map_err(|e| ProfileError::Parse(path.display().to_string(), e))?;
+     validate_profile(&profile)?;
+diff --git a/crates/spektrafilm-core/src/spectral_service.rs b/crates/spektrafilm-core/src/spectral_service.rs
+index 314ef93..e6b5b80 100644
+--- a/crates/spektrafilm-core/src/spectral_service.rs
++++ b/crates/spektrafilm-core/src/spectral_service.rs
+@@ -9,7 +9,7 @@ use spektrafilm_math::spectral::{self, N_WAVELENGTHS, TcLut};
+ 
+ // Pull in BLAS for the spectra→tc_lut contraction (matches Python's
+ // opt_einsum + numpy summation pattern bit-for-bit on macOS Accelerate).
+-#[cfg(not(target_os = "windows"))]
++#[cfg(not(any(target_os = "windows", target_arch = "wasm32")))]
+ #[allow(unused_imports)]
+ use blas_src as _;
+ 
+@@ -18,7 +18,7 @@ fn dgemm_no_transpose(a: &[f64], b: &[f64], c: &mut [f64], m: usize, n: usize, k
+     assert_eq!(b.len(), k * n, "dgemm_no_transpose: b.len() != k*n");
+     assert_eq!(c.len(), m * n, "dgemm_no_transpose: c.len() != m*n");
+ 
+-    #[cfg(not(target_os = "windows"))]
++    #[cfg(not(any(target_os = "windows", target_arch = "wasm32")))]
+     unsafe {
+         cblas::dgemm(
+             cblas::Layout::RowMajor,
+@@ -38,7 +38,7 @@ fn dgemm_no_transpose(a: &[f64], b: &[f64], c: &mut [f64], m: usize, n: usize, k
+         );
+     }
+ 
+-    #[cfg(target_os = "windows")]
++    #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
+     {
+         for row in 0..m {
+             for col in 0..n {
+@@ -60,9 +60,9 @@ pub fn load_spectra_lut(data_dir: &Path) -> Result<SpectraLut, String> {
+         .join("spectral_upsampling")
+         .join("irradiance_xy_tc.npy");
+ 
+-    let file = std::fs::File::open(&path)
++    let file = crate::vfs::read(&path)
+         .map_err(|e| format!("opening spectra LUT {}: {e}", path.display()))?;
+-    let reader = std::io::BufReader::new(file);
++    let reader = std::io::Cursor::new(file);
+ 
+     let (shape, data) =
+         npy::load_npy_f32(reader).map_err(|e| format!("loading spectra LUT: {e}"))?;
+@@ -99,9 +99,9 @@ pub fn load_arctic2026alpha02_lut(data_dir: &Path) -> Result<SpectraLut, String>
+         .join("arctic2026alpha02")
+         .join("reflectance_xy_tc.npy");
+ 
+-    let file = std::fs::File::open(&path)
++    let file = crate::vfs::read(&path)
+         .map_err(|e| format!("opening arctic2026alpha02 LUT {}: {e}", path.display()))?;
+-    let reader = std::io::BufReader::new(file);
++    let reader = std::io::Cursor::new(file);
+ 
+     let (shape, data) =
+         npy::load_npy_f32(reader).map_err(|e| format!("loading arctic2026alpha02 LUT: {e}"))?;
+diff --git a/crates/spektrafilm-core/src/stages/filming.rs b/crates/spektrafilm-core/src/stages/filming.rs
+index 040788f..d46ab2f 100644
+--- a/crates/spektrafilm-core/src/stages/filming.rs
++++ b/crates/spektrafilm-core/src/stages/filming.rs
+@@ -8,7 +8,7 @@ use spektrafilm_math::colorspace;
+ use spektrafilm_math::image::ImageBuf;
+ use spektrafilm_math::precision::{from_f32, from_f64, to_f32};
+ use spektrafilm_math::spectral::{self, TcLut};
+-use std::time::Instant;
++use web_time::Instant;
+ 
+ use crate::params::RuntimeParams;
+ use crate::profile::Profile;
+diff --git a/crates/spektrafilm-core/src/vfs.rs b/crates/spektrafilm-core/src/vfs.rs
+new file mode 100644
+index 0000000..2016ae6
+--- /dev/null
++++ b/crates/spektrafilm-core/src/vfs.rs
+@@ -0,0 +1,30 @@
++//! Minimal file-access shim. Native builds read from disk; wasm32 builds read
++//! from an in-memory table the host (JS) fills via `register` before use.
++use std::io;
++use std::path::Path;
++
++#[cfg(target_arch = "wasm32")]
++static FILES: std::sync::Mutex<std::collections::BTreeMap<String, Vec<u8>>> =
++    std::sync::Mutex::new(std::collections::BTreeMap::new());
++
++#[cfg(target_arch = "wasm32")]
++pub fn register(path: &str, bytes: Vec<u8>) {
++    FILES.lock().unwrap().insert(path.to_string(), bytes);
++}
++
++pub fn read(path: &Path) -> io::Result<Vec<u8>> {
++    #[cfg(target_arch = "wasm32")]
++    {
++        let key = path.to_string_lossy().replace('\\', "/");
++        FILES
++            .lock()
++            .unwrap()
++            .get(&key)
++            .cloned()
++            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, key))
++    }
++    #[cfg(not(target_arch = "wasm32"))]
++    {
++        std::fs::read(path)
++    }
++}
+diff --git a/crates/spektrafilm-gpu/Cargo.toml b/crates/spektrafilm-gpu/Cargo.toml
+index 26ae41b..55e3967 100644
+--- a/crates/spektrafilm-gpu/Cargo.toml
++++ b/crates/spektrafilm-gpu/Cargo.toml
+@@ -11,6 +11,8 @@ cuda-backend = ["dep:cudarc"]
+ precision-f64 = ["spektrafilm-math/precision-f64"]
+ 
+ [dependencies]
++web-time = "1"
++futures-channel = "0.3"
+ spektrafilm-math.workspace = true
+ rayon.workspace = true
+ thiserror.workspace = true
+@@ -27,7 +29,7 @@ cblas = "0.4"
+ blas-src = { version = "0.10", features = ["accelerate"] }
+ accelerate-src = "0.3"
+ 
+-[target.'cfg(all(not(target_os = "macos"), not(target_os = "windows")))'.dependencies]
++[target.'cfg(all(not(target_os = "macos"), not(target_os = "windows"), not(target_arch = "wasm32")))'.dependencies]
+ cblas = "0.4"
+ blas-src = { version = "0.10", features = ["openblas"] }
+ openblas-src = "0.10"
+diff --git a/crates/spektrafilm-gpu/src/cpu_backend.rs b/crates/spektrafilm-gpu/src/cpu_backend.rs
+index e4736d0..5a1fea2 100644
+--- a/crates/spektrafilm-gpu/src/cpu_backend.rs
++++ b/crates/spektrafilm-gpu/src/cpu_backend.rs
+@@ -8,7 +8,7 @@ use crate::{ComputeBackend, Lut3D};
+ // Pull in BLAS-src so `cblas_dgemm` is available at link time. The
+ // provider crate (Accelerate on macOS, OpenBLAS elsewhere) is selected
+ // in this crate's Cargo.toml.
+-#[cfg(not(target_os = "windows"))]
++#[cfg(not(any(target_os = "windows", target_arch = "wasm32")))]
+ #[allow(unused_imports)]
+ use blas_src as _;
+ 
+@@ -47,7 +47,7 @@ fn dgemm_blas(
+ ) {
+     assert_eq!(a.len(), m * k, "dgemm_blas: a.len() != m*k");
+     assert_eq!(c.len(), m * n, "dgemm_blas: c.len() != m*n");
+-    #[cfg(not(target_os = "windows"))]
++    #[cfg(not(any(target_os = "windows", target_arch = "wasm32")))]
+     unsafe {
+         cblas::dgemm(
+             cblas::Layout::RowMajor,
+@@ -69,7 +69,7 @@ fn dgemm_blas(
+             n as i32,
+         );
+     }
+-    #[cfg(target_os = "windows")]
++    #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
+     {
+         let _ = ldb;
+         c.par_chunks_exact_mut(n).enumerate().for_each(|(row, crow)| {
+diff --git a/crates/spektrafilm-gpu/src/lib.rs b/crates/spektrafilm-gpu/src/lib.rs
+index 84adcab..19dae9d 100644
+--- a/crates/spektrafilm-gpu/src/lib.rs
++++ b/crates/spektrafilm-gpu/src/lib.rs
+@@ -427,7 +427,8 @@ pub fn select_backend() -> Box<dyn ComputeBackend> {
+         tracing::warn!("CUDA backend requested but spektrafilm-gpu was built without cuda-backend");
+     }
+ 
+-    #[cfg(feature = "wgpu-backend")]
++    // wasm: the wgpu backend needs async init (`WgpuBackend::new_async`).
++    #[cfg(all(feature = "wgpu-backend", not(target_arch = "wasm32")))]
+     {
+         if requested.as_deref().is_none() || requested.as_deref() == Some("wgpu") {
+             if let Some(gpu) = wgpu_backend::WgpuBackend::new() {
+diff --git a/crates/spektrafilm-gpu/src/wgpu_backend.rs b/crates/spektrafilm-gpu/src/wgpu_backend.rs
+index 6e4b0c1..409040c 100644
+--- a/crates/spektrafilm-gpu/src/wgpu_backend.rs
++++ b/crates/spektrafilm-gpu/src/wgpu_backend.rs
+@@ -9,6 +9,30 @@ use spektrafilm_math::image::ImageBuf;
+ #[cfg(feature = "wgpu-backend")]
+ use crate::{ComputeBackend, Lut3D, cpu_backend};
+ 
++/// 1-D workgroup size. WebGPU only guarantees 256 invocations per workgroup
++/// (common mobile ceiling), so wasm builds rewrite the shaders down to 256.
++#[cfg(feature = "wgpu-backend")]
++const WG_1D: u32 = if cfg!(target_arch = "wasm32") { 256 } else { 1024 };
++
++#[cfg(feature = "wgpu-backend")]
++fn wgsl_for_target(src: &'static str) -> Cow<'static, str> {
++    if WG_1D == 1024 {
++        Cow::Borrowed(src)
++    } else {
++        Cow::Owned(src.replace("@workgroup_size(1024)", &format!("@workgroup_size({WG_1D})")))
++    }
++}
++
++/// Readback left in flight by `run_film_chain` on wasm, where the GPU cannot
++/// be waited on synchronously. Collected with `WgpuBackend::take_readback`.
++#[cfg(all(feature = "wgpu-backend", target_arch = "wasm32"))]
++struct PendingReadback {
++    buffer: wgpu::Buffer,
++    width: u32,
++    height: u32,
++    mapped: futures_channel::oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
++}
++
+ /// Borrow a `&[Scalar]` as `&[f32]` for GPU upload.
+ /// Zero-copy in f32 mode; allocates a converted Vec in f64 mode.
+ #[cfg(all(feature = "wgpu-backend", not(feature = "precision-f64")))]
+@@ -97,6 +121,8 @@ pub struct WgpuBackend {
+     /// Cache compiled compute pipelines keyed by shader source pointer.
+     /// `&'static str` is fine because all our shader sources come from `include_str!`.
+     pipeline_cache: std::sync::Mutex<std::collections::HashMap<usize, CachedPipeline>>,
++    #[cfg(target_arch = "wasm32")]
++    pending_readback: std::sync::Mutex<Option<PendingReadback>>,
+ }
+ 
+ #[cfg(feature = "wgpu-backend")]
+@@ -107,17 +133,24 @@ struct CachedPipeline {
+ 
+ #[cfg(feature = "wgpu-backend")]
+ impl WgpuBackend {
++    #[cfg(not(target_arch = "wasm32"))]
+     pub fn new() -> Option<Self> {
++        pollster::block_on(Self::new_async())
++    }
++
++    pub async fn new_async() -> Option<Self> {
+         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+             backends: wgpu::Backends::PRIMARY,
+             ..Default::default()
+         });
+ 
+-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+-            power_preference: wgpu::PowerPreference::HighPerformance,
+-            compatible_surface: None,
+-            force_fallback_adapter: false,
+-        }))?;
++        let adapter = instance
++            .request_adapter(&wgpu::RequestAdapterOptions {
++                power_preference: wgpu::PowerPreference::HighPerformance,
++                compatible_surface: None,
++                force_fallback_adapter: false,
++            })
++            .await?;
+ 
+         // The default `Limits` cap storage buffer bindings at 128 MB,
+         // which a 6-channel ≥ 14 MP image exceeds (image_bytes =
+@@ -151,16 +184,18 @@ impl WgpuBackend {
+         } else {
+             wgpu::Features::empty()
+         };
+-        let (device, queue) = pollster::block_on(adapter.request_device(
+-            &wgpu::DeviceDescriptor {
+-                label: Some("spektrafilm"),
+-                required_features: opt_feats,
+-                required_limits: limits,
+-                memory_hints: wgpu::MemoryHints::Performance,
+-            },
+-            None,
+-        ))
+-        .ok()?;
++        let (device, queue) = adapter
++            .request_device(
++                &wgpu::DeviceDescriptor {
++                    label: Some("spektrafilm"),
++                    required_features: opt_feats,
++                    required_limits: limits,
++                    memory_hints: wgpu::MemoryHints::Performance,
++                },
++                None,
++            )
++            .await
++            .ok()?;
+ 
+         tracing::info!(
+             adapter = adapter_info.name,
+@@ -172,9 +207,22 @@ impl WgpuBackend {
+             device,
+             queue,
+             pipeline_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
++            #[cfg(target_arch = "wasm32")]
++            pending_readback: std::sync::Mutex::new(None),
+         })
+     }
+ 
++    /// Await the readback left in flight by the last `run_film_chain` (wasm only).
++    #[cfg(target_arch = "wasm32")]
++    pub async fn take_readback(&self) -> Option<ImageBuf> {
++        let pending = self.pending_readback.lock().unwrap().take()?;
++        pending.mapped.await.ok()?.ok()?;
++        let slice = pending.buffer.slice(..);
++        let out: Vec<f32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
++        pending.buffer.unmap();
++        Some(ImageBuf::from_data(pending.width, pending.height, out))
++    }
++
+     /// Get or compile + cache a pipeline keyed by shader source pointer.
+     /// All shader sources come from `include_str!` so the pointer is stable.
+     fn get_or_compile_pipeline<F>(
+@@ -192,7 +240,7 @@ impl WgpuBackend {
+                 .device
+                 .create_shader_module(wgpu::ShaderModuleDescriptor {
+                     label: Some("compute_shader"),
+-                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader_source)),
++                    source: wgpu::ShaderSource::Wgsl(wgsl_for_target(shader_source)),
+                 });
+             let entries = layout_entries_fn();
+             let bind_group_layout =
+@@ -240,7 +288,7 @@ impl WgpuBackend {
+         n_pixels: u32,
+         output_idx: usize,
+     ) -> Vec<f32> {
+-        let t_start = std::time::Instant::now();
++        let t_start = web_time::Instant::now();
+         let layout_entries: Vec<wgpu::BindGroupLayoutEntry> = bindings
+             .iter()
+             .enumerate()
+@@ -302,7 +350,7 @@ impl WgpuBackend {
+         });
+ 
+         // Dispatch
+-        let workgroup_size = 1024u32;
++        let workgroup_size = WG_1D;
+         let num_workgroups = (n_pixels + workgroup_size - 1) / workgroup_size;
+ 
+         let mut encoder = self.device.create_command_encoder(&Default::default());
+@@ -755,7 +803,7 @@ impl WgpuBackend {
+     /// Only one upload at the start and one readback at the end.
+     pub fn run_film_chain(&self, p: &crate::FilmChainParams<'_>) -> ImageBuf {
+         use wgpu::util::DeviceExt;
+-        let t_start = std::time::Instant::now();
++        let t_start = web_time::Instant::now();
+         // Pull all references into locals so the existing body below
+         // doesn't need a rewrite — only the param sources change.
+         let image = p.image;
+@@ -1095,7 +1143,7 @@ impl WgpuBackend {
+         );
+ 
+         // ── Build bind groups (per dispatch, but no buffer creation) ─────
+-        let workgroup_size = 1024u32;
++        let workgroup_size = WG_1D;
+ 
+         // Front pass: hanatos (params + rgb_in + tc_lut + raw_out) or mallett
+         // (params + rgb_in + raw_out). The tc_lut buffer rides along in the
+@@ -1639,31 +1687,52 @@ impl WgpuBackend {
+ 
+         // Single sync point at the end. Map buf_b directly on the zero-copy
+         // path, or the staging buffer otherwise.
+-        let map_target = readback.as_ref().unwrap_or(&buf_b);
+-        let slice = map_target.slice(..);
+-        let (tx, rx) = std::sync::mpsc::channel();
+-        slice.map_async(wgpu::MapMode::Read, move |r| {
+-            tx.send(r).unwrap();
+-        });
+-        self.device.poll(wgpu::Maintain::Wait);
+-        rx.recv().unwrap().unwrap();
+-        let gpu_wait_ms = t_start.elapsed().as_secs_f32() * 1000.0 - cpu_setup_ms;
+-        let data = slice.get_mapped_range();
+-        let out_f32: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
+-        drop(data);
+-        map_target.unmap();
+-
+-        let out = ImageBuf::from_data(image.width, image.height, f32_to_scalars(out_f32));
+-        tracing::debug!(
+-            cpu_setup_ms = format!("{cpu_setup_ms:.1}"),
+-            gpu_wait_ms = format!("{gpu_wait_ms:.1}"),
+-            readback_ms = format!(
+-                "{:.1}",
+-                t_start.elapsed().as_secs_f32() * 1000.0 - cpu_setup_ms - gpu_wait_ms
+-            ),
+-            "film chain timings"
+-        );
+-        out
++        #[cfg(target_arch = "wasm32")]
++        {
++            // The browser cannot block on the GPU: start the map and hand back
++            // an empty image; the caller awaits `take_readback` for the pixels.
++            let map_target = readback.unwrap_or(buf_b);
++            let (tx, rx) = futures_channel::oneshot::channel();
++            map_target.slice(..).map_async(wgpu::MapMode::Read, move |r| {
++                let _ = tx.send(r);
++            });
++            *self.pending_readback.lock().unwrap() = Some(PendingReadback {
++                buffer: map_target,
++                width: image.width,
++                height: image.height,
++                mapped: rx,
++            });
++            let _ = cpu_setup_ms;
++            return ImageBuf { width: image.width, height: image.height, data: Vec::new() };
++        }
++        #[cfg(not(target_arch = "wasm32"))]
++        {
++            let map_target = readback.as_ref().unwrap_or(&buf_b);
++            let slice = map_target.slice(..);
++            let (tx, rx) = std::sync::mpsc::channel();
++            slice.map_async(wgpu::MapMode::Read, move |r| {
++                tx.send(r).unwrap();
++            });
++            self.device.poll(wgpu::Maintain::Wait);
++            rx.recv().unwrap().unwrap();
++            let gpu_wait_ms = t_start.elapsed().as_secs_f32() * 1000.0 - cpu_setup_ms;
++            let data = slice.get_mapped_range();
++            let out_f32: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
++            drop(data);
++            map_target.unmap();
++
++            let out = ImageBuf::from_data(image.width, image.height, f32_to_scalars(out_f32));
++            tracing::debug!(
++                cpu_setup_ms = format!("{cpu_setup_ms:.1}"),
++                gpu_wait_ms = format!("{gpu_wait_ms:.1}"),
++                readback_ms = format!(
++                    "{:.1}",
++                    t_start.elapsed().as_secs_f32() * 1000.0 - cpu_setup_ms - gpu_wait_ms
++                ),
++                "film chain timings"
++            );
++            out
++        }
+     }
+ 
+     /// Get-or-compile a pipeline by shader source + binding layout. Cached by
+@@ -1695,7 +1764,7 @@ impl WgpuBackend {
+                 .device
+                 .create_shader_module(wgpu::ShaderModuleDescriptor {
+                     label: Some("compute_shader"),
+-                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader_source)),
++                    source: wgpu::ShaderSource::Wgsl(wgsl_for_target(shader_source)),
+                 });
+             let bind_group_layout =
+                 self.device
+@@ -3122,7 +3191,7 @@ impl DiffusionState {
+             });
+             pass.set_pipeline(&job.pipeline.pipeline);
+             pass.set_bind_group(0, &job.bg, &[]);
+-            pass.dispatch_workgroups(n.div_ceil(1024), 1, 1);
++            pass.dispatch_workgroups(n.div_ceil(WG_1D), 1, 1);
+         };
+ 
+         // Zero the accumulator (add_scaled_per_channel has no clear).
+@@ -3482,7 +3551,7 @@ impl HighlightBoostState {
+         });
+         pass.set_pipeline(&self.boost.pipeline.pipeline);
+         pass.set_bind_group(0, &self.boost.bg, &[]);
+-        pass.dispatch_workgroups(self.n_values.div_ceil(1024), 1, 1);
++        pass.dispatch_workgroups(self.n_values.div_ceil(WG_1D), 1, 1);
+     }
+ }
+ 
+@@ -3500,7 +3569,7 @@ impl InplaceUnaryState {
+         });
+         pass.set_pipeline(&self.job.pipeline.pipeline);
+         pass.set_bind_group(0, &self.job.bg, &[]);
+-        pass.dispatch_workgroups(n_pixels.div_ceil(1024), 1, 1);
++        pass.dispatch_workgroups(n_pixels.div_ceil(WG_1D), 1, 1);
+     }
+ }
+ 
+diff --git a/crates/spektrafilm-gui/Cargo.toml b/crates/spektrafilm-gui/Cargo.toml
+index 04e91a7..2363b51 100644
+--- a/crates/spektrafilm-gui/Cargo.toml
++++ b/crates/spektrafilm-gui/Cargo.toml
+@@ -17,7 +17,7 @@ precision-f64 = [
+ 
+ [dependencies]
+ spektrafilm-core.workspace = true
+-spektrafilm-gpu.workspace = true
++spektrafilm-gpu = { workspace = true, features = ["wgpu-backend"] }
+ spektrafilm-math.workspace = true
+ eframe.workspace = true
+ egui.workspace = true
+diff --git a/crates/spektrafilm-math/Cargo.toml b/crates/spektrafilm-math/Cargo.toml
+index 5185003..bf25bfe 100644
+--- a/crates/spektrafilm-math/Cargo.toml
++++ b/crates/spektrafilm-math/Cargo.toml
+@@ -18,3 +18,6 @@ half = "2.7"
+ libm.workspace = true
+ rand_mt = "5"
+ rustfft.workspace = true
++
++[target.'cfg(target_arch = "wasm32")'.dependencies]
++getrandom = { version = "0.3", features = ["wasm_js"] }
+diff --git a/crates/spektrafilm-model/Cargo.toml b/crates/spektrafilm-model/Cargo.toml
+index 69100eb..5668f18 100644
+--- a/crates/spektrafilm-model/Cargo.toml
++++ b/crates/spektrafilm-model/Cargo.toml
+@@ -11,6 +11,7 @@ precision-f64 = [
+ ]
+ 
+ [dependencies]
++web-time = "1"
+ spektrafilm-math.workspace = true
+ spektrafilm-gpu.workspace = true
+ rayon.workspace = true
+diff --git a/crates/spektrafilm-model/src/grain.rs b/crates/spektrafilm-model/src/grain.rs
+index 8441391..a680fe7 100644
+--- a/crates/spektrafilm-model/src/grain.rs
++++ b/crates/spektrafilm-model/src/grain.rs
+@@ -6,7 +6,7 @@ use spektrafilm_math::gaussian;
+ use spektrafilm_math::image::ImageBuf;
+ use spektrafilm_math::precision::{Scalar, ZERO, from_f64};
+ use rayon::prelude::*;
+-use std::time::Instant;
++use web_time::Instant;
+ 
+ fn stage_timings_enabled() -> bool {
+     std::env::var_os("SPEKTRAFILM_STAGE_TIMINGS").is_some()

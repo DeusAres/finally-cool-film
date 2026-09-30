@@ -1,0 +1,43 @@
+<!doctype html><meta charset="utf-8"><title>spike</title>
+<pre id="log"></pre><canvas id="c"></canvas>
+<script type="module">
+import init, * as sf from './pkg/spektrafilm_wasm.js';
+const log = (...a) => { document.getElementById('log').textContent += a.join(' ') + '\n'; console.log(...a); };
+window.run = async () => {
+  await init();
+  for (const p of ['profiles/kodak_gold_200.json','profiles/kodak_portra_endura.json',
+                   'luts/spectral_upsampling/irradiance_xy_tc.npy','filters/neutral_print_filters.json'])
+    sf.register_file('data/' + p, new Uint8Array(await (await fetch('data/' + p)).arrayBuffer()));
+  const bmp = await createImageBitmap(await (await fetch('chart.jpg')).blob());
+  const s = Math.min(1, 1024 / Math.max(bmp.width, bmp.height));
+  const w = Math.round(bmp.width * s), h = Math.round(bmp.height * s);
+  const cv = document.getElementById('c'); cv.width = w; cv.height = h;
+  const ctx = cv.getContext('2d'); ctx.drawImage(bmp, 0, 0, w, h);
+  const px = ctx.getImageData(0, 0, w, h).data;
+  const rgb = new Float32Array(w * h * 3);
+  for (let i = 0, j = 0; i < px.length; i += 4) { rgb[j++] = px[i]/255; rgb[j++] = px[i+1]/255; rgb[j++] = px[i+2]/255; }
+  const params = JSON.stringify({ io: { input_color_space: 'sRGB', input_cctf_decoding: true },
+                                  settings: { use_enlarger_lut: true, use_scanner_lut: true } });
+  const res = { w, h, webgpu: !!navigator.gpu };
+  let t = performance.now();
+  const eng = new sf.Engine('kodak_gold_200', 'kodak_portra_endura', params);
+  res.init_ms = performance.now() - t;
+  res.gpu = await sf.init_gpu();
+  let gpuOut;
+  if (res.gpu) {
+    res.gpu_ms = [];
+    for (let i = 0; i < 4; i++) { t = performance.now(); gpuOut = await eng.process_gpu(rgb, w, h); res.gpu_ms.push(Math.round(performance.now() - t)); }
+  }
+  t = performance.now(); const cpuOut = eng.process(rgb, w, h); res.cpu_ms = Math.round(performance.now() - t);
+  if (gpuOut) {
+    let s = 0, m = 0, nan = 0;
+    for (let i = 0; i < cpuOut.length; i++) { const d = Math.abs(cpuOut[i] - gpuOut[i]) * 255; if (!Number.isFinite(d)) nan++; else { s += d; m = Math.max(m, d); } }
+    res.gpu_vs_cpu = { mean: +(s / cpuOut.length).toFixed(2), max: +m.toFixed(1), nan };
+  }
+  const out = gpuOut || cpuOut, img = ctx.createImageData(w, h);
+  for (let i = 0, j = 0; i < img.data.length; i += 4) { img.data[i] = out[j++]*255; img.data[i+1] = out[j++]*255; img.data[i+2] = out[j++]*255; img.data[i+3] = 255; }
+  ctx.putImageData(img, 0, 0);
+  log(JSON.stringify(res));
+  return res;
+};
+</script>
