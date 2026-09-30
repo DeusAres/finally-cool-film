@@ -5,6 +5,7 @@ use std::rc::Rc;
 use spektrafilm_core::params::RuntimeParams;
 use spektrafilm_core::pipeline::Pipeline;
 use spektrafilm_core::profile;
+use spektrafilm_core::stages;
 use spektrafilm_gpu::cpu_backend::CpuBackend;
 use spektrafilm_gpu::wgpu_backend::WgpuBackend;
 use spektrafilm_math::image::ImageBuf;
@@ -80,6 +81,15 @@ impl Engine {
         self.pipeline = Some(pipeline.with_params(params));
         self.params = next;
         Ok(())
+    }
+
+    /// Auto-exposure EV the pipeline would apply to this image (same metering
+    /// as `camera.auto_exposure`). Lets tiled renders share one frame-wide value.
+    pub fn auto_exposure_ev(&self, rgb: Vec<f32>, width: u32, height: u32) -> f32 {
+        let params = &self.pipeline().params;
+        let rgb_to_xyz = stages::filming::input_colorspace_to_xyz(&params.io.input_color_space);
+        let image = ImageBuf::from_data(width, height, rgb);
+        stages::filming::measure_autoexposure_ev(&image, &rgb_to_xyz, &params.camera.auto_exposure_method)
     }
 
     fn pipeline(&self) -> &Pipeline {

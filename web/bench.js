@@ -1,4 +1,4 @@
-import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, SRGB_INPUT, REC2020_LINEAR_INPUT, readPixels } from './lib/common.js';
+import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, SRGB_INPUT, inputParams, readPixels } from './lib/common.js';
 
 const $ = (id) => document.getElementById(id);
 const report = { ua: navigator.userAgent, when: new Date().toISOString() };
@@ -12,7 +12,7 @@ const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s[s.len
 
 function engine(kind) {
   if (!engines[kind]) {
-    const io = kind === 'p3' ? REC2020_LINEAR_INPUT : SRGB_INPUT;
+    const io = kind === 'srgb' ? SRGB_INPUT : inputParams(kind === 'p3');
     const t = now();
     engines[kind] = new sf.Engine(FILM, PAPER, JSON.stringify({ ...BASE_PARAMS, ...io }));
     report[`engine_init_ms_${kind}`] = Math.round(now() - t);
@@ -126,7 +126,7 @@ async function onPhoto(file) {
     status(`Sviluppo ${w}×${h}…`);
     await new Promise((r) => setTimeout(r, 30));
     t = now();
-    const out = await run(engine(p3 ? 'p3' : 'srgb'), rgb, w, h, gpuOk);
+    const out = await run(engine(p3 ? 'p3' : 'srgb-linear'), rgb, w, h, gpuOk);
     const process_ms = Math.round(now() - t);
     const after = new ImageData(w, h);
     for (let i = 0, j = 0; i < after.data.length; i += 4, j += 3) {

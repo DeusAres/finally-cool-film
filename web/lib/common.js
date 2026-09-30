@@ -46,15 +46,17 @@ export function deepMerge(...objs) {
   return out;
 }
 
-/** Input colour-space params matching what `readPixels` produced. */
-export const inputParams = (p3) => (p3 ? REC2020_LINEAR_INPUT : SRGB_INPUT);
+// Engine input is always linear: Rec.2020 (from Display P3) or linear sRGB.
+const SRGB_LINEAR_INPUT = { io: { input_color_space: 'sRGB', input_cctf_decoding: false } };
+
+/** Input colour-space params matching what `readPixels` / `extractLinear` produce. */
+export const inputParams = (p3) => (p3 ? REC2020_LINEAR_INPUT : SRGB_LINEAR_INPUT);
 
 /**
- * Draw `bitmap` scaled to fit `longSide` and return engine-ready pixels:
- * linear Rec.2020 when the canvas can read Display P3, else sRGB-encoded.
- * `before` is the displayable original (ImageData, P3 when available).
+ * Draw `bitmap` scaled to fit `longSide` and return its 8-bit RGBA pixels,
+ * read as Display P3 when the canvas supports it.
  */
-export function readPixels(bitmap, longSide = Infinity) {
+export function decodeRGBA(bitmap, longSide = Infinity) {
   const s = Math.min(1, longSide / Math.max(bitmap.width, bitmap.height));
   const w = Math.round(bitmap.width * s), h = Math.round(bitmap.height * s);
   const canvas = document.createElement('canvas');
@@ -63,20 +65,39 @@ export function readPixels(bitmap, longSide = Infinity) {
   const p3 = ctx.getContextAttributes?.().colorSpace === 'display-p3';
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(bitmap, 0, 0, w, h);
-  const src = (p3 ? ctx.getImageData(0, 0, w, h, { colorSpace: 'display-p3' }) : ctx.getImageData(0, 0, w, h)).data;
+  const data = (p3 ? ctx.getImageData(0, 0, w, h, { colorSpace: 'display-p3' }) : ctx.getImageData(0, 0, w, h)).data;
+  canvas.width = canvas.height = 0;   // release the backing store now (matters on iOS)
+  return { data, w, h, p3 };
+}
+
+/**
+ * Linear engine input for the region (x0, y0, w, h) of 8-bit RGBA `data`
+ * (row stride `W`), multiplied by `scale`.
+ */
+export function extractLinear(data, W, p3, x0 = 0, y0 = 0, w = W, h = data.length / 4 / W, scale = 1) {
   const rgb = new Float32Array(w * h * 3);
   const M = P3_TO_REC2020;
-  for (let i = 0, j = 0; i < src.length; i += 4, j += 3) {
-    if (p3) {
-      const r = LIN8[src[i]], g = LIN8[src[i + 1]], b = LIN8[src[i + 2]];
-      rgb[j] = M[0][0] * r + M[0][1] * g + M[0][2] * b;
-      rgb[j + 1] = M[1][0] * r + M[1][1] * g + M[1][2] * b;
-      rgb[j + 2] = M[2][0] * r + M[2][1] * g + M[2][2] * b;
-    } else {
-      rgb[j] = src[i] / 255; rgb[j + 1] = src[i + 1] / 255; rgb[j + 2] = src[i + 2] / 255;
+  let j = 0;
+  for (let y = y0; y < y0 + h; y++) {
+    for (let i = (y * W + x0) * 4, end = i + w * 4; i < end; i += 4, j += 3) {
+      const r = LIN8[data[i]] * scale, g = LIN8[data[i + 1]] * scale, b = LIN8[data[i + 2]] * scale;
+      if (p3) {
+        rgb[j] = M[0][0] * r + M[0][1] * g + M[0][2] * b;
+        rgb[j + 1] = M[1][0] * r + M[1][1] * g + M[1][2] * b;
+        rgb[j + 2] = M[2][0] * r + M[2][1] * g + M[2][2] * b;
+      } else {
+        rgb[j] = r; rgb[j + 1] = g; rgb[j + 2] = b;
+      }
     }
   }
-  const before = new ImageData(src, w, h, p3 ? { colorSpace: 'display-p3' } : undefined);
+  return rgb;
+}
+
+/** Whole image at `longSide`: engine-ready linear pixels plus the displayable original. */
+export function readPixels(bitmap, longSide = Infinity) {
+  const { data, w, h, p3 } = decodeRGBA(bitmap, longSide);
+  const rgb = extractLinear(data, w, p3);
+  const before = new ImageData(data, w, h, p3 ? { colorSpace: 'display-p3' } : undefined);
   return { rgb, w, h, p3, before };
 }
 
