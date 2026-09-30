@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>finally cool film — test GPU</title>
+<style>
+  :root { --bg: #111; --fg: #eee; --muted: #999; --accent: #e8a33d; --card: #1c1c1c; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; padding-bottom: calc(16px + env(safe-area-inset-bottom));
+         background: var(--bg); color: var(--fg); font: 15px/1.4 -apple-system, system-ui, sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 16px; }
+  section { background: var(--card); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+  h2 { font-size: 15px; margin: 0 0 8px; color: var(--accent); }
+  button, label.btn { display: inline-block; background: var(--accent); color: #111; border: 0; border-radius: 10px;
+         padding: 12px 16px; font: 600 15px system-ui; margin: 4px 4px 4px 0; cursor: pointer; }
+  button:disabled { opacity: .4; }
+  select { font-size: 15px; padding: 8px; border-radius: 8px; }
+  input[type=file] { display: none; }
+  pre { white-space: pre-wrap; word-break: break-word; font: 12px/1.4 ui-monospace, Menlo, monospace; margin: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid #333; }
+  canvas { width: 100%; height: auto; border-radius: 8px; display: block; margin-top: 8px; touch-action: manipulation; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+</style>
+</head>
+<body>
+<h1>finally cool film</h1>
+<p class="sub">Test WebGPU · Kodak Gold 200 → Portra Endura</p>
+
+<section>
+  <h2>Stato</h2>
+  <pre id="status">Caricamento…</pre>
+</section>
+
+<section>
+  <h2>1 · Benchmark</h2>
+  <div class="row">
+    <button id="bench" disabled>Avvia benchmark</button>
+    <label class="muted"><input type="checkbox" id="bench4"> anche 4 MP</label>
+    <label class="muted"><input type="checkbox" id="benchCpu"> anche CPU (lento)</label>
+  </div>
+  <table id="benchTable" hidden><thead><tr><th>MP</th><th>1ª (ms)</th><th>mediana (ms)</th></tr></thead><tbody></tbody></table>
+</section>
+
+<section>
+  <h2>2 · Prova con una tua foto</h2>
+  <div class="row">
+    <label class="btn" id="pickLabel">Scegli foto<input type="file" id="pick" accept="image/*" disabled></label>
+    <select id="longSide">
+      <option value="1024">1024 px</option>
+      <option value="1600" selected>1600 px</option>
+      <option value="2048">2048 px</option>
+      <option value="3024">3024 px</option>
+    </select>
+  </div>
+  <p class="muted" id="photoInfo">Tocca l’immagine per confrontare prima/dopo.</p>
+  <canvas id="out" hidden></canvas>
+</section>
+
+<section>
+  <h2>Risultati da incollare</h2>
+  <button id="copy">Copia report</button>
+  <pre id="report"></pre>
+</section>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

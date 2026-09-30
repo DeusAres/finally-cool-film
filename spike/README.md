@@ -4,7 +4,7 @@ Obiettivo: verificare che il motore Rust di [spektrafilm-rs](https://github.com/
 (port di [spektrafilm](https://github.com/andreavolpato/spektrafilm)) giri nel browser, CPU e WebGPU.
 
 Upstream: `turbasvin/spektrafilm-rs` @ `9dd59b0380194b93686aaa230a8bb9680aa270a4` (GPL-3.0).
-Il codice upstream **non** è incluso: qui ci sono solo patch, wrapper e harness.
+Il motore patchato ora vive in `../engine/` (wrapper incluso); qui restano report, patch e harness.
 
 ## Esito
 
@@ -45,7 +45,7 @@ Misurato solo su SwiftShader (GPU emulata su CPU) → numeri non significativi (
 
 Nota: il workspace nativo non è stato ricompilato qui (manca OpenBLAS nel container) — da verificare prima di proporre upstream.
 
-## API wrapper (`spektrafilm-wasm`)
+## API wrapper (`engine/crates/spektrafilm-wasm`)
 
 ```ts
 register_file(path: string, bytes: Uint8Array): void   // es. "data/profiles/kodak_gold_200.json"
@@ -91,7 +91,7 @@ Proposta default: distance 1.0, progressive, 4:4:4 (preserva la grana cromatica;
 git clone https://github.com/turbasvin/spektrafilm-rs && cd spektrafilm-rs
 git checkout 9dd59b0380194b93686aaa230a8bb9680aa270a4
 git apply ../spike/patches/0001-wasm-webgpu.patch
-cp -r ../spike/spektrafilm-wasm crates/ && sed -i 's|"crates/spektrafilm-gui",|"crates/spektrafilm-gui",\n    "crates/spektrafilm-wasm",|' Cargo.toml
+cp -r ../engine/crates/spektrafilm-wasm crates/ && sed -i 's|"crates/spektrafilm-gui",|"crates/spektrafilm-gui",\n    "crates/spektrafilm-wasm",|' Cargo.toml
 rustup target add wasm32-unknown-unknown && cargo install wasm-bindgen-cli --version 0.2.100
 RUSTFLAGS='--cfg getrandom_backend="wasm_js"' cargo build --target wasm32-unknown-unknown -p spektrafilm-wasm --release
 wasm-bindgen --target web   --out-dir pkg-web  target/wasm32-unknown-unknown/release/spektrafilm_wasm.wasm

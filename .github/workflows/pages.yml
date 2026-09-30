@@ -1,0 +1,48 @@
+name: Deploy web to GitHub Pages
+
+on:
+  push:
+    branches: [claude/spektrafilm-mobile-web-har40e, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/wasm-bindgen
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: cargo-${{ hashFiles('engine/Cargo.lock', 'rust-toolchain.toml') }}
+      - name: wasm-bindgen CLI (must match the crate version)
+        run: command -v wasm-bindgen || cargo install wasm-bindgen-cli --version 0.2.100 --locked
+      - name: Build
+        run: ./scripts/build-web.sh
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
