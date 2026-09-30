@@ -1,6 +1,8 @@
 import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, extractLinear, readPixels, toImageData, srgbToLinear } from './lib/common.js';
 import { log, logText, clearLog, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
+import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
+import { LensGPU } from './lib/lens-gpu.js';
 
 const PREVIEW_LONG_SIDE = 2000;   // display canvas cap (bigger canvases make iOS compositing crash when zoomed)
 const FIT_LONG_SIDE = 256;        // proxy used by the auto-lab fit
@@ -17,6 +19,7 @@ const stage = $('stage'), view = $('view');
 const ctx = view.getContext('2d', { colorSpace: 'display-p3' });
 
 let gpu = false;
+let lensGpu = null;          // WebGPU lens stage (CPU fallback in lens.js)
 let engine = null;          // sf.Engine for the current photo + calibration
 let engineCalib = '';       // JSON of the calibration params `engine` was built with
 let photo = null;           // { file, bitmap, preview, fit, after }
@@ -29,7 +32,10 @@ const ui = () => ({
   ev: +$('ev').value, contrast: +$('contrast').value,
   mshift: +$('mshift').value, yshift: +$('yshift').value,
   grain: +$('grain').value, halation: +$('halation').value,
+  ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value,
 });
+// CA slider is quadratic: realistic (subtle) amounts get most of the travel.
+const lensOf = (u) => ({ ca: u.ca * u.ca, vignette: u.vignette, falloff: u.falloff });
 
 // Enlarger filtration is baked in at engine construction (calibration).
 const calibParams = (u) => ({ enlarger: { m_filter_shift: u.mshift, y_filter_shift: u.yshift } });
@@ -59,6 +65,26 @@ function ensureEngine(u) {
 }
 
 const run = (img) => (gpu ? engine.process_gpu(img.rgb, img.w, img.h) : Promise.resolve(engine.process(img.rgb, img.w, img.h)));
+
+// ---------- lens ----------
+// Applied to the light reaching the film (engine input), in frame coordinates.
+
+/** Engine input for a region of the frame currently loaded in the lens stage. */
+async function lensInput(frame, x0, y0, w, h, scale, lens) {
+  if (!lensActive(lens)) return extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, scale);
+  if (lensGpu) return lensGpu.extract(frame.p3, x0, y0, w, h, scale, lens);
+  return extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, scale, lensGeometry(frame.w, frame.h, lens));
+}
+
+/** Recompute the preview input only when the lens sliders changed. */
+async function updatePreviewInput(u) {
+  const key = JSON.stringify(lensOf(u));
+  if (photo.lensKey === key) return;
+  const pv = photo.preview, t = performance.now();
+  pv.rgb = await lensInput(pv, 0, 0, pv.w, pv.h, 1, lensOf(u));
+  photo.lensKey = key;
+  if (lensActive(lensOf(u))) log(`lens ${key} ${Math.round(performance.now() - t)} ms (${lensGpu ? 'gpu' : 'cpu'})`);
+}
 
 // ---------- auto-lab ----------
 // Like a lab printer metering each negative: choose print exposure so the
@@ -134,9 +160,10 @@ async function render() {
     do {
       dirty = false;
       const u = ui();
+      const t = performance.now();
+      await updatePreviewInput(u);
       ensureEngine(u);
       engine.update(JSON.stringify(renderParams(u, auto)));
-      const t = performance.now();
       const out = await run(photo.preview);
       photo.after = toImageData(out, photo.preview.w, photo.preview.h);
       if (!showingBefore) ctx.putImageData(photo.after, 0, 0);
@@ -245,7 +272,8 @@ async function loadPhoto(file) {
     const preview = readPixels(bitmap, PREVIEW_LONG_SIDE);
     const fit = readPixels(bitmap, FIT_LONG_SIDE);
     log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
-    photo = { file, bitmap, preview, fit };
+    photo = { file, bitmap, preview, fit, lensKey: JSON.stringify(lensOf({ ca: 0, vignette: 0, falloff: 0 })) };
+    lensGpu?.setFrame(preview.data, preview.w, preview.h);
     engine?.free(); engine = null;
     view.width = preview.w; view.height = preview.h;
     view.style.width = preview.w + 'px'; view.style.height = preview.h + 'px';
@@ -311,7 +339,10 @@ async function exportFull() {
     log(`export start ${w}x${h} p3=${p3} progressive=${progressive}`);
 
     ensureEngine(u);
+    await updatePreviewInput(u);   // metering must see the same (lens-applied) preview the user saw
     const exposure = 2 ** engine.auto_exposure_ev(photo.preview.rgb, photo.preview.w, photo.preview.h);
+    const frame = { data, w, h, p3 };
+    lensGpu?.setFrame(data, w, h);
     const longSide = Math.max(w, h);
     const strips = Math.ceil(h / EXPORT_TILE), cols = Math.ceil(w / EXPORT_TILE);
 
@@ -332,7 +363,7 @@ async function exportFull() {
         engine.update(JSON.stringify(deepMerge(renderParams(u, auto), {
           camera: { auto_exposure: false, film_format_mm: FILM_FORMAT_MM * Math.max(tw, th) / longSide },
         })));
-        const out = await run({ rgb: extractLinear(data, w, p3, x0, y0, tw, th, exposure), w: tw, h: th });
+        const out = await run({ rgb: await lensInput(frame, x0, y0, tw, th, exposure, lensOf(u)), w: tw, h: th });
         const cw = Math.min(EXPORT_TILE, w - tx);
         for (let y = 0; y < ch; y++) {
           let src = ((ty - y0 + y) * tw + (tx - x0)) * 3, dst = (y * w + tx) * 3;
@@ -362,6 +393,7 @@ async function exportFull() {
   } finally {
     setBusy(null);
     exporting = false;
+    lensGpu?.setFrame(photo.preview.data, photo.preview.w, photo.preview.h);   // back to the preview frame
     $('export').disabled = false;
     engine?.update(JSON.stringify(renderParams(ui(), auto)));   // back to preview params
   }
@@ -391,8 +423,11 @@ const FORMAT = {
   yshift: (v) => `${v > 0 ? '+' : ''}${v}`,
   grain: (v) => (v === 0 ? 'off' : `${v.toFixed(1)}×`),
   halation: (v) => (v === 0 ? 'off' : `${v.toFixed(1)}×`),
+  ca: (v) => (v === 0 ? 'off' : `${Math.round(v * 100)}`),
+  vignette: (v) => (v === 0 ? 'off' : `${Math.round(v * 100)}`),
+  falloff: (v) => `${Math.round(v * 100)}`,
 };
-const DEFAULTS = { ev: 0, contrast: 0, mshift: 0, yshift: 0, grain: 1, halation: 1 };
+const DEFAULTS = { ev: 0, contrast: 0, mshift: 0, yshift: 0, grain: 1, halation: 1, ca: 0, vignette: 0, falloff: 0.4 };
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }
 
 for (const id of Object.keys(FORMAT)) {
@@ -411,8 +446,9 @@ if (crashed) openLog(`La sessione precedente si è interrotta durante: ${crashed
 else clearLog();
 log(`boot ${navigator.userAgent}`);
 
-bootEngine().then((ok) => {
+bootEngine().then(async (ok) => {
   gpu = ok;
-  log(`engine ready, gpu=${gpu}`);
+  try { lensGpu = await LensGPU.create(); } catch (e) { log('lens gpu unavailable: ' + (e?.message || e)); }
+  log(`engine ready, gpu=${gpu}, lens=${lensGpu ? 'gpu' : 'cpu'}`);
   status(gpu ? 'Pronto. Scegli una foto.' : 'WebGPU non disponibile: userò la CPU (lento).');
 }).catch((e) => { log('boot error: ' + (e?.stack || e)); status('Errore avvio: ' + (e?.message || e)); });

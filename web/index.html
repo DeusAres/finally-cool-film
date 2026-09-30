@@ -41,7 +41,8 @@
          border-radius: 6px; font-size: 12px; display: none; }
   #zoomLabel { bottom: 16px; right: 14px; font: 12px ui-monospace, Menlo, monospace; color: var(--muted); }
 
-  #controls { padding: 6px 16px 8px; border-top: 1px solid var(--line); background: var(--card); }
+  #controls { padding: 6px 16px 8px; border-top: 1px solid var(--line); background: var(--card);
+         max-height: 42vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
   .row { display: grid; grid-template-columns: 92px 1fr 44px; align-items: center; gap: 8px; min-height: 36px; }
   .row label { font-size: 14px; color: var(--muted); }
   .row output { font: 12px ui-monospace, Menlo, monospace; text-align: right; color: var(--muted); }
@@ -86,6 +87,9 @@
   <div class="row"><label for="yshift">Giallo ↔ Blu</label><input type="range" id="yshift" min="-30" max="30" step="1" value="0"><output for="yshift"></output></div>
   <div class="row"><label for="grain">Grana</label><input type="range" id="grain" min="0" max="3" step="0.1" value="1"><output for="grain"></output></div>
   <div class="row"><label for="halation">Halation</label><input type="range" id="halation" min="0" max="3" step="0.1" value="1"><output for="halation"></output></div>
+  <div class="row"><label for="ca">Aberrazione</label><input type="range" id="ca" min="0" max="1" step="0.01" value="0"><output for="ca"></output></div>
+  <div class="row"><label for="vignette">Vignettatura</label><input type="range" id="vignette" min="0" max="1" step="0.01" value="0"><output for="vignette"></output></div>
+  <div class="row"><label for="falloff">Falloff</label><input type="range" id="falloff" min="0" max="1" step="0.01" value="0.4"><output for="falloff"></output></div>
 </div>
 <div id="status">Caricamento motore…</div>
 

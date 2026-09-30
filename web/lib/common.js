@@ -1,7 +1,8 @@
 // Shared by the app and the benchmark page: engine boot + photo decoding.
 import init, * as sf from '../pkg/spektrafilm_wasm.js';
+import { srgbToLinear, LIN8, P3_TO_REC2020 } from './color.js';
 
-export { sf };
+export { sf, srgbToLinear };
 
 export const FILM = 'kodak_gold_200';
 export const PAPER = 'kodak_portra_endura';
@@ -15,15 +16,6 @@ const DATA_FILES = [
 export const BASE_PARAMS = { settings: { use_enlarger_lut: true, use_scanner_lut: true } };
 export const SRGB_INPUT = { io: { input_color_space: 'sRGB', input_cctf_decoding: true } };
 export const REC2020_LINEAR_INPUT = { io: { input_color_space: 'ITU-R BT.2020', input_cctf_decoding: false } };
-// Linear Display P3 → linear Rec.2020 (both D65), derived from the primaries.
-const P3_TO_REC2020 = [
-  [0.75383303, 0.19859737, 0.0475696],
-  [0.04574385, 0.94177722, 0.01247893],
-  [-0.00121034, 0.01760172, 0.98360862],
-];
-
-export const srgbToLinear = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-const LIN8 = Float32Array.from({ length: 256 }, (_, i) => srgbToLinear(i / 255));
 
 /** Load wasm + data files. Resolves to true when the WebGPU backend is up. */
 export async function bootEngine() {
@@ -98,7 +90,7 @@ export function readPixels(bitmap, longSide = Infinity) {
   const { data, w, h, p3 } = decodeRGBA(bitmap, longSide);
   const rgb = extractLinear(data, w, p3);
   const before = new ImageData(data, w, h, p3 ? { colorSpace: 'display-p3' } : undefined);
-  return { rgb, w, h, p3, before };
+  return { rgb, w, h, p3, before, data };
 }
 
 /** Engine output (sRGB-encoded floats, interleaved RGB) → RGBA ImageData. */
