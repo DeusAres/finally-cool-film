@@ -154,3 +154,8 @@ della curva base iPhone prima della simulazione; (3) intanto: slider esposizione
 
 Limite residuo: bianchi carta ~L* 78–90 (Dmin Endura sotto D50), scene ad alta gamma dinamica (cortile) oltre la latitudine della carta.
 Nota: le foto caricate in chat erano ricodificate (1932×2576, EXIF rimossi); i test veri vanno fatti con gli originali dalla pagina web.
+
+Secondo set (kayak, mare, campo, nuvola — tutti P3). Mediana L* originale → default → auto-lab:
+kayak 35→22→35 · mare 34→49→34 · campo 55→56→54 · nuvola 56→41→56.
+Il default non è "sempre scuro" ma **imprevedibile** (dipende dall'auto-exposure del negativo); l'auto-lab lo rende stabile.
+Griglia contrasto estesa a 0.4–1.0; valori scelti 0.6–0.8.

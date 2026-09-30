@@ -2,7 +2,7 @@ const fs=require('fs');const sharp=require('./nodetest/node_modules/sharp');cons
 const D='/home/user/finally-cool-film/web/data/';
 for (const p of ['profiles/kodak_gold_200.json','profiles/kodak_portra_endura.json','luts/spectral_upsampling/irradiance_xy_tc.npy','filters/neutral_print_filters.json']) sf.register_file('data/'+p, fs.readFileSync(D+p));
 const U='/root/.claude/uploads/42d188f6-730a-5c80-916c-9e420e41aad8/';
-const PHOTOS=[['cortile','98160cd0-image.png'],['facciata','e237ea8d-image.jpg'],['chiesa','be043384-image.jpg'],['campo','7aa2e60e-image.png']];
+const PHOTOS=process.env.SET==='2'?[['kayak','be0b6c85-image.jpg'],['mare','d176393f-image.jpg'],['campo','26ebbbfb-image.jpg'],['nuvola','84cff04a-image.jpg']]:[['cortile','98160cd0-image.png'],['facciata','e237ea8d-image.jpg'],['chiesa','be043384-image.jpg'],['campo','7aa2e60e-image.png']];
 const M=[[0.75383303,0.19859737,0.0475696],[0.04574385,0.94177722,0.01247893],[-0.00121034,0.01760172,0.98360862]];
 const lin=c=>c<=0.04045?c/12.92:((c+0.055)/1.055)**2.4, enc=v=>v<=0.0031308?12.92*v:1.055*Math.max(v,0)**(1/2.4)-0.055;
 const Lstar=Y=>Y>0.008856?116*Math.cbrt(Y)-16:903.3*Y;
