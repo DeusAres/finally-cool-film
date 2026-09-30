@@ -27,10 +27,20 @@ Il motore patchato ora vive in `../engine/` (wrapper incluso); qui restano repor
 → CPU wasm ≈ 4 s/MP: ok come fallback/export, **non** per preview interattiva.
 Hotspot: `libm pow` f64 software (~1/3), RNG grana, pchip3d, CAM16.
 
-### Timing GPU
+### Timing GPU — iPhone reale (Safari 27, iOS 18.7, WebGPU Apple), 2026-09-30
 
-Misurato solo su SwiftShader (GPU emulata su CPU) → numeri non significativi (~700 ms @ 0.17 MP).
-**Da misurare su iPhone reale** — è il prossimo gate.
+| MP | 1ª (ms) | mediana (ms) |
+|---|---|---|
+| 0.5 | 32 | 18 |
+| 1 | 40 | 38 |
+| 2 | 82 | 82 |
+| 4 | 200 | 215 |
+| CPU wasm 0.5 | 837 | — |
+
+- Foto reale 1200×1600 (P3, arrivata come JPEG 3024×4032 dal picker iOS): decode 68 ms, sviluppo 131 ms end-to-end.
+- Scala ~lineare (~50 ms/MP) → preview 2 MP interattiva; 12 MP stimati ~0.6–0.8 s (memoria da verificare).
+- Adapter Apple: `maxComputeInvocationsPerWorkgroup = 1024` (il limite 256 serve per Android/altri).
+- Gate superato: **preview interattiva fattibile**.
 
 ## Patch a upstream (`patches/0001-wasm-webgpu.patch`)
 
