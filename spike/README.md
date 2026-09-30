@@ -137,3 +137,20 @@ Ma JPEG/HEIC iPhone sono **display-referred** (curva tonale già applicata, anch
 
 Strade: (1) input ProRAW/DNG (lineare vero, serve decoder DNG in wasm); (2) inversione approssimata
 della curva base iPhone prima della simulazione; (3) intanto: slider esposizione / print exposure nell'MVP.
+
+### Esperimento "auto-lab" (spike/tone/, 4 foto reali iPhone "!fotocamera", P3)
+
+- `camera.exposure_compensation_ev` **non schiarisce**: `print_exposure_compensation` la ricompensa in stampa. La leva è `enlarger.print_exposure` (più basso = stampa più chiara).
+- Output di default: mediana L* spesso più bassa dell'originale (cortile 14→7) e ombre schiacciate (chiesa p25 26→10).
+- **Auto print exposure** (come le stampatrici da lab): bisezione su `print_exposure` finché la mediana L* in uscita = mediana in ingresso. Converge in 8 passi su un proxy 256 px.
+- **+ contrasto carta** (`print_render.density_curves_morph.gamma_factor`): scelto per far combaciare lo spread p25–p75.
+
+| foto | gamma | print_exposure | L* in p25/p50/p75 | L* fit p25/p50/p75 |
+|---|---|---|---|---|
+| cortile | 0.6 (limite griglia) | 1.06 | 2/14/33 | 6/14/36 |
+| facciata (no ICC → sRGB) | 1.0 | 1.24 | 21/33/55 | 22/33/51 |
+| chiesa | 0.7 | 0.79 | 26/65/73 | 23/66/72 |
+| campo | 0.6 | 1.01 | 37/55/58 | 38/55/58 |
+
+Limite residuo: bianchi carta ~L* 78–90 (Dmin Endura sotto D50), scene ad alta gamma dinamica (cortile) oltre la latitudine della carta.
+Nota: le foto caricate in chat erano ricodificate (1932×2576, EXIF rimossi); i test veri vanno fatti con gli originali dalla pagina web.
