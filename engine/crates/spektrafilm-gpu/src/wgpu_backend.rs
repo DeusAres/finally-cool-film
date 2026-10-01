@@ -24,12 +24,18 @@ fn wgsl_for_target(src: &'static str) -> Cow<'static, str> {
 }
 
 /// Every buffer a frame creates goes through these. On native, dropping a
-/// `wgpu::Buffer` frees it; on the web (wgpu 24 webgpu backend) `Drop` is a
-/// no-op and the memory is only reclaimed when the JS GC collects the
-/// GPUBuffer, so ~10 full-frame buffers per render pile up (hundreds of MB
-/// while a slider moves) until iOS kills the tab. On wasm the buffers are
-/// recorded and explicitly destroyed once the frame has been read back
-/// (`release_frame_buffers`). No buffer outlives its frame.
+/// `wgpu::Buffer` frees it. On the web (wgpu 24 webgpu backend) `Drop` is a
+/// no-op: GPU memory is only reclaimed on `destroy()` or when the JS GC
+/// collects the GPUBuffer. And even with `destroy()`, WebKit frees in its GPU
+/// process asynchronously, so allocating ~10 full-frame buffers per render
+/// (~400 MB/frame at 3 MP while a slider moves) outruns it until iOS kills
+/// the tab. So on wasm a frame's buffers are POOLED: at frame end
+/// (`release_frame_buffers`) they become free for the next frame, which
+/// takes same-size/same-usage ones back (cleared on the GPU first, so they
+/// read exactly like fresh zero-initialised buffers). Pooled buffers the
+/// next frame does not reuse (size changed: another photo, export tiles)
+/// are destroyed then. Small init-with-contents buffers (uniforms, LUTs,
+/// kernels) are created and destroyed per frame.
 #[cfg(feature = "wgpu-backend")]
 trait TrackedCreate {
     fn create_buffer_t(&self, desc: &wgpu::BufferDescriptor<'_>) -> wgpu::Buffer;
@@ -37,35 +43,73 @@ trait TrackedCreate {
 }
 
 #[cfg(all(feature = "wgpu-backend", target_arch = "wasm32"))]
-thread_local! {
-    static FRAME_BUFFERS: std::cell::RefCell<Vec<wgpu::Buffer>> = const { std::cell::RefCell::new(Vec::new()) };
+#[derive(Default)]
+struct BufferPool {
+    queue: Option<wgpu::Queue>,
+    /// Created with contents or not poolable: destroyed at frame end.
+    transient: Vec<wgpu::Buffer>,
+    /// Poolable buffers handed out during the current frame.
+    used: Vec<wgpu::Buffer>,
+    /// Left by the previous frame, available for reuse.
+    free: Vec<wgpu::Buffer>,
 }
 
-#[cfg(feature = "wgpu-backend")]
-#[inline]
-fn track(buf: wgpu::Buffer) -> wgpu::Buffer {
-    #[cfg(target_arch = "wasm32")]
-    FRAME_BUFFERS.with(|b| b.borrow_mut().push(buf.clone()));
-    buf
+#[cfg(all(feature = "wgpu-backend", target_arch = "wasm32"))]
+thread_local! {
+    static POOL: std::cell::RefCell<BufferPool> = std::cell::RefCell::new(BufferPool::default());
 }
 
 #[cfg(feature = "wgpu-backend")]
 impl TrackedCreate for wgpu::Device {
     fn create_buffer_t(&self, desc: &wgpu::BufferDescriptor<'_>) -> wgpu::Buffer {
-        track(self.create_buffer(desc))
+        #[cfg(target_arch = "wasm32")]
+        {
+            let poolable = !desc.mapped_at_creation && desc.usage.contains(wgpu::BufferUsages::COPY_DST);
+            return POOL.with(|p| {
+                let mut p = p.borrow_mut();
+                if poolable {
+                    if let Some(i) = p.free.iter().position(|b| b.size() == desc.size && b.usage() == desc.usage) {
+                        let buf = p.free.swap_remove(i);
+                        if let Some(q) = p.queue.as_ref() {
+                            let mut enc = self.create_command_encoder(&Default::default());
+                            enc.clear_buffer(&buf, 0, None);
+                            q.submit(Some(enc.finish()));
+                        }
+                        p.used.push(buf.clone());
+                        return buf;
+                    }
+                }
+                let buf = self.create_buffer(desc);
+                if poolable { p.used.push(buf.clone()) } else { p.transient.push(buf.clone()) }
+                buf
+            });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.create_buffer(desc)
     }
     fn create_buffer_init_t(&self, desc: &wgpu::util::BufferInitDescriptor<'_>) -> wgpu::Buffer {
         use wgpu::util::DeviceExt;
-        track(self.create_buffer_init(desc))
+        let buf = self.create_buffer_init(desc);
+        #[cfg(target_arch = "wasm32")]
+        POOL.with(|p| p.borrow_mut().transient.push(buf.clone()));
+        buf
     }
 }
 
-/// Destroy every buffer created since the last call (wasm; see `TrackedCreate`).
+/// End of frame (wasm; see `TrackedCreate`): destroy the transient buffers and
+/// the pooled ones this frame did not reuse; this frame's become the pool.
 #[cfg(all(feature = "wgpu-backend", target_arch = "wasm32"))]
 fn release_frame_buffers() {
-    for b in FRAME_BUFFERS.with(|b| std::mem::take(&mut *b.borrow_mut())) {
-        b.destroy();
-    }
+    POOL.with(|p| {
+        let mut p = p.borrow_mut();
+        for b in p.transient.drain(..) {
+            b.destroy();
+        }
+        for b in p.free.drain(..) {
+            b.destroy();
+        }
+        p.free = std::mem::take(&mut p.used);
+    });
 }
 
 /// Readback left in flight by `run_film_chain` on wasm, where the GPU cannot
@@ -293,6 +337,8 @@ impl WgpuBackend {
             "wgpu backend initialized"
         );
 
+        #[cfg(target_arch = "wasm32")]
+        POOL.with(|p| p.borrow_mut().queue = Some(queue.clone()));
         Some(Self {
             device,
             queue,
