@@ -63,6 +63,51 @@ export function decodeRGBA(bitmap, longSide = Infinity) {
   return { data, w, h, p3 };
 }
 
+// ---------- clipped highlights ----------
+// Where the phone clipped (sky through a blind, a window, a lamp) the real
+// light was far brighter than display white. The print can't show the
+// difference (it is paper white either way), but halation and scatter spread
+// a few % of the light, so they need it: a slit of sky must be a +6 EV
+// source, not a +2.5 EV one. Clipping is detected per pixel at FULL
+// resolution (a 2 px slit is no longer clipped once the preview averages it
+// with the dark around it) and carried in the frame's alpha channel: the
+// fraction of the pixel that clipped, 0..255. The input stage multiplies that
+// fraction of the light by CLIP_GAIN. Frame-independent, so export tiles
+// (alpha per pixel) match the preview (alpha = area average).
+const CLIP_LO = 235, CLIP_HI = 252;          // min(R,G,B), 8-bit: neutral clipping only
+export const CLIP_GAIN = 2 ** 5 - 1;        // clipped light is +5 EV
+const CLIP_W = Uint8Array.from({ length: 256 }, (_, v) => {
+  const t = Math.max(0, Math.min(1, (v - CLIP_LO) / (CLIP_HI - CLIP_LO)));
+  return Math.round(255 * t * t * (3 - 2 * t));
+});
+const clipWeight = (d, i) => CLIP_W[Math.min(d[i], d[i + 1], d[i + 2])];
+
+/** Write the clip weight into the alpha of 8-bit RGBA `data`, in place. */
+export function writeClipAlpha(data) {
+  for (let i = 0; i < data.length; i += 4) data[i + 3] = clipWeight(data, i);
+}
+
+/** Clip fraction per pixel of a w×h preview: clip weights of the full-resolution decode, area-averaged. */
+export function clipMask(bitmap, w, h, longCap = 4096) {
+  const full = decodeRGBA(bitmap, longCap), sx = w / full.w, sy = h / full.h;
+  const sum = new Float32Array(w * h), cnt = new Float32Array(w * h);
+  for (let y = 0; y < full.h; y++) {
+    const row = Math.min(h - 1, (y * sy) | 0) * w;
+    for (let x = 0, i = y * full.w * 4; x < full.w; x++, i += 4) {
+      const k = row + Math.min(w - 1, (x * sx) | 0);
+      sum[k] += clipWeight(full.data, i); cnt[k]++;
+    }
+  }
+  return Uint8Array.from(sum, (s, k) => Math.round(s / cnt[k]));
+}
+
+/** Copy of RGBA `data` with `mask` as alpha (the frame uploaded to the GPU). */
+export function withAlpha(data, mask) {
+  const out = new Uint8Array(data);
+  for (let k = 0; k < mask.length; k++) out[k * 4 + 3] = mask[k];
+  return out;
+}
+
 /**
  * Linear engine input for the region (x0, y0, w, h) of 8-bit RGBA `data`
  * (row stride `W`), multiplied by `scale`. With `tone` (tone.js) the display

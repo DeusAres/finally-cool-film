@@ -8,6 +8,7 @@
 import { LENS_CONST, lensGeometry } from './lens.js';
 import { P3_TO_REC2020 } from './color.js';
 import { TONE_SQRT_N } from './tone.js';
+import { CLIP_GAIN } from './common.js';
 
 const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
 
@@ -74,6 +75,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let k = lut(0u, max(c.r, max(c.g, c.b)));
   let S = ${TONE_SQRT_N}u + 1u;
   c = vec3<f32>(lut(S, c.r * k), lut(S, c.g * k), lut(S, c.b * k));
+  // Clipped highlights (alpha = clipped fraction of the pixel, common.js): that
+  // fraction of the light was really much brighter; it feeds halation/scatter.
+  c *= 1.0 + ${CLIP_GAIN}.0 * at(pos).a;
   var gainOut = p.scale;
   if (p.depth > 0.0) {
     let lost = p.depth * g;                    // fraction of light the lens loses here

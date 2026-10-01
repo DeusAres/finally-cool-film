@@ -1,4 +1,4 @@
-import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, extractLinear, to8 } from './lib/common.js';
+import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, extractLinear, to8, clipMask, writeClipAlpha, withAlpha } from './lib/common.js';
 import { transferChart, readTransfer, buildTone, autoTone } from './lib/tone.js';
 import { LIN8 } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
@@ -316,7 +316,10 @@ async function loadPhoto(file) {
     preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
     log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
     photo = { file, bitmap, preview };
-    if (gpu) sf.set_frame(preview.data, preview.w, preview.h);
+    if (gpu) {
+      preview.clip = clipMask(bitmap, preview.w, preview.h);   // full-res clipping, see common.js
+      sf.set_frame(withAlpha(preview.data, preview.clip), preview.w, preview.h);
+    }
     engine?.free(); engine = null;
     view.width = preview.w; view.height = preview.h;
     view.style.width = preview.w + 'px'; view.style.height = preview.h + 'px';
@@ -381,7 +384,7 @@ async function exportFull() {
 
     await ensureTone(u);
     const frame = { data, w, h, p3 };
-    if (gpu) sf.set_frame(data, w, h);
+    if (gpu) { writeClipAlpha(data); sf.set_frame(data, w, h); }
     const longSide = Math.max(w, h);
     const strips = Math.ceil(h / EXPORT_TILE), cols = Math.ceil(w / EXPORT_TILE);
 
@@ -435,7 +438,7 @@ async function exportFull() {
   } finally {
     setBusy(null);
     exporting = false;
-    if (gpu) sf.set_frame(photo.preview.data, photo.preview.w, photo.preview.h);   // back to the preview frame
+    if (gpu) sf.set_frame(withAlpha(photo.preview.data, photo.preview.clip), photo.preview.w, photo.preview.h);   // back to the preview frame
     $('export').disabled = false;
     engine?.update(JSON.stringify(renderParams(ui())));   // back to preview params
   }
