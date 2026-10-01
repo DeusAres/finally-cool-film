@@ -17,9 +17,13 @@
 // blacks are never pure, as on any print.
 // Before the inversion, a display tone curve shapes the result (displayCurve):
 // a monotone spline in log space (EV around mid grey) whose control points make
-// `ev` move the mids a lot and shadows / lights little, and whose `rolloff`
-// lowers the lights and makes white an asymptote reached with slope < 1 — a soft
-// shoulder that lets the mids climb without clipping the highlights.
+// `ev` move the mids a lot and shadows / lights little (with diminishing returns,
+// so the mids never eat the lights' headroom), and whose `rolloff` makes white an
+// asymptote reached with slope < 1 — a soft shoulder.
+// The display curve is applied to the pixel's max(R,G,B) and the resulting gain
+// to all three channels (hue and saturation survive a brighter exposure, as with
+// a real exposure change); only the inversion is per channel, which keeps the
+// film's colour response.
 import { LIN8 } from './color.js';
 
 const LO = -12, HI = 8, N = 81;      // patch exposures: log2(s / 0.18), EV
@@ -100,8 +104,11 @@ function monotoneSpline(P, M) {
  *   spread evenly and white is approached gently (no band where the iPhone
  *   clipped); with full rolloff white lands just below 1, like paper.
  */
+const MID_HEADROOM = XW - 1.1;       // mids stay ≥ 1.1 EV below white however far ev goes
+
 function displayCurve(ev, rolloff) {
-  const mid = 0.9 * ev, white = XW - 0.06 * rolloff;
+  const lift = 0.9 * ev;
+  const mid = lift > 0 ? MID_HEADROOM * Math.tanh(lift / MID_HEADROOM) : lift, white = XW - 0.06 * rolloff;
   const shadows = Math.min(mid - 0.25 * 3.5, -3.5 + 0.15 * ev);
   const secant = (white - mid) / XW;
   return monotoneSpline(
@@ -110,11 +117,10 @@ function displayCurve(ev, rolloff) {
   );
 }
 
-/** Scene-linear value for display-linear d, through the display curve `curve`. */
-function sceneValue(T, d, look, curve) {
-  const y = curve(Math.log2(Math.max(d, 1e-5) / 0.18));
-  const dc = 0.18 * 2 ** y;
-  return 0.18 * 2 ** ((1 - look) * inverse(T, Math.min(dc, 1)) + look * y);
+/** Scene-linear value for a display-linear value dc that has been through the display curve. */
+function sceneValue(T, dc, look) {
+  dc = Math.max(dc, 1e-5);
+  return 0.18 * 2 ** ((1 - look) * inverse(T, Math.min(dc, 1)) + look * Math.log2(dc / 0.18));
 }
 
 /**
@@ -127,39 +133,54 @@ export function autoTone(Ys) {
   const v = Float32Array.from(Ys).sort();
   const q = (p) => Math.max(v[Math.floor(p * (v.length - 1))], 1e-4);
   const median = q(0.5), spread = Math.log2(q(0.75) / q(0.25));
-  const ev = Math.max(-1, Math.min(1.5, 0.6 * Math.log2(0.2 / median)));
+  // Back off when much of the frame is already bright (backlight, sky through leaves):
+  // lifting the mids there just washes the lights out.
+  let bright = 0; for (const y of v) if (y > 0.5) bright++;
+  const hold = Math.max(0, 1 - 2.5 * bright / v.length);
+  const ev = Math.max(-1, Math.min(1.5, 0.6 * Math.log2(0.2 / median) * (median < 0.2 ? hold : 1)));
   const look = Math.max(0.2, Math.min(0.75, 0.4 + 0.12 * (2.5 - spread)));
   return { ev: Math.round(ev * 10) / 10, look: Math.round(look * 20) / 20 };
 }
 
 /**
- * Lookup tables for one (transfer, look, ev):
- *   lut8[code]          8-bit display code value → scene-linear
- *   lutSqrt[i]          display-linear c = (i/SQRT_N)² → scene-linear (for interpolated samples)
- *   out8[i]             engine output (sRGB-encoded, i/4095) → display 8-bit after the white stretch
+ * Lookup tables for one (transfer, look, ev, rolloff), all over sqrt(display linear):
+ *   gain[i]     display curve as a gain for a pixel whose max(R,G,B) is (i/N)²
+ *   scene[i]    per-channel display value (i/N)² (after the gain) → scene light
+ *   out8[j]     engine output (sRGB-encoded, j/4095) → display 8-bit after the white stretch
+ * `packed` is gain ++ scene, as the WebGPU lens stage reads it.
  */
 export function buildTone(T, { look, ev, rolloff = 0.6 }) {
   const curve = displayCurve(ev, rolloff);
-  const lut8 = Float32Array.from(LIN8, (d) => sceneValue(T, d, look, curve));
-  const lutSqrt = new Float32Array(SQRT_N + 1);
-  for (let i = 0; i <= SQRT_N; i++) lutSqrt[i] = sceneValue(T, (i / SQRT_N) ** 2, look, curve);
+  const gain = new Float32Array(SQRT_N + 1), scene = new Float32Array(SQRT_N + 1);
+  for (let i = 0; i <= SQRT_N; i++) {
+    const n = Math.max((i / SQRT_N) ** 2, 1e-6);
+    gain[i] = (0.18 * 2 ** curve(Math.log2(n / 0.18))) / n;
+    scene[i] = sceneValue(T, (i / SQRT_N) ** 2, look);
+  }
   // White stretch, plus a soft floor at the paper black: scanner sharpening and
   // grain can undershoot locally, but a print is never darker than its Dmax.
   const out8 = new Uint8ClampedArray(4096), f = T.floor * 0.85;
-  for (let i = 0; i < 4096; i++) {
-    const x = Math.min(1, lin(i / 4095) / T.white);
-    out8[i] = Math.round(255 * enc(Math.min(1, Math.sqrt(x * x + f * f))));
+  for (let j = 0; j < 4096; j++) {
+    const x = Math.min(1, lin(j / 4095) / T.white);
+    out8[j] = Math.round(255 * enc(Math.min(1, Math.sqrt(x * x + f * f))));
   }
-  return { lut8, lutSqrt, out8 };
+  const packed = new Float32Array(2 * (SQRT_N + 1));
+  packed.set(gain, 0); packed.set(scene, SQRT_N + 1);
+  return { gain, scene, out8, packed };
 }
 
-/** Scene value for an interpolated display-linear sample (CPU twin of the shader lookup). */
-export function sceneFromLinear(lutSqrt, c) {
-  const f = Math.sqrt(Math.max(0, Math.min(1, c))) * SQRT_N, i = f | 0;
-  return i >= SQRT_N ? lutSqrt[SQRT_N] : lutSqrt[i] + (lutSqrt[i + 1] - lutSqrt[i]) * (f - i);
+const lookup = (lut, c) => {
+  const f = Math.sqrt(c <= 0 ? 0 : c >= 1 ? 1 : c) * SQRT_N, i = f | 0;
+  return i >= SQRT_N ? lut[SQRT_N] : lut[i] + (lut[i + 1] - lut[i]) * (f - i);
+};
+
+/** Display-linear RGB → scene-linear RGB (written to out[o..o+2]). CPU twin of the shader. */
+export function applyTone(tone, r, g, b, out, o) {
+  const k = lookup(tone.gain, Math.max(r, g, b));
+  out[o] = lookup(tone.scene, r * k); out[o + 1] = lookup(tone.scene, g * k); out[o + 2] = lookup(tone.scene, b * k);
 }
 
 export const TONE_SQRT_N = SQRT_N;
 
-/** For inspection/tests: the display curve as a function of display-linear d. */
+/** For inspection/tests: the display curve as a function of display-linear d (neutral pixels). */
 export const displayTone = (ev, rolloff) => { const c = displayCurve(ev, rolloff); return (d) => 0.18 * 2 ** c(Math.log2(Math.max(d, 1e-5) / 0.18)); };

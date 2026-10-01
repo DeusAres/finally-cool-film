@@ -21,10 +21,14 @@ struct P {
 @group(0) @binding(1) var smp: sampler;
 @group(0) @binding(2) var<uniform> p: P;
 @group(0) @binding(3) var<storage, read_write> outBuf: array<f32>;
-@group(0) @binding(4) var<storage, read> tone: array<f32>;   // scene light over sqrt(display linear), tone.js
+@group(0) @binding(4) var<storage, read> tone: array<f32>;   // tone.js `packed`: gain ++ scene, over sqrt(display linear)
 
-fn toScene(v: f32) -> f32 {                    // same lookup as tone.js sceneFromLinear
+fn lut(base: u32, v: f32) -> f32 {             // same lookup as tone.js
   let f = sqrt(clamp(v, 0.0, 1.0)) * ${TONE_SQRT_N}.0;
+  let i = u32(f);
+  if (i >= ${TONE_SQRT_N}u) { return tone[base + ${TONE_SQRT_N}u]; }
+  return mix(tone[base + i], tone[base + i + 1u], f - f32(i));
+}.0;
   let i = u32(f);
   if (i >= ${TONE_SQRT_N}u) { return tone[${TONE_SQRT_N}u]; }
   return mix(tone[i], tone[i + 1u], f - f32(i));
@@ -68,17 +72,20 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   } else {
     c = at(pos).rgb;
   }
-  c = vec3<f32>(toScene(c.r), toScene(c.g), toScene(c.b));
-  var k = p.scale;
+  // tone.js applyTone: display curve on max(R,G,B) as a common gain, then per-channel scene LUT.
+  let k = lut(0u, max(c.r, max(c.g, c.b)));
+  let S = ${TONE_SQRT_N}u + 1u;
+  c = vec3<f32>(lut(S, c.r * k), lut(S, c.g * k), lut(S, c.b * k));
+  var gainOut = p.scale;
   if (p.depth > 0.0) {
     let lost = p.depth * g;                    // fraction of light the lens loses here
-    k *= 1.0 - lost;
+    gainOut *= 1.0 - lost;
     c.r *= 1.0 + ${WARM_R} * lost;
     c.b *= 1.0 - ${WARM_B} * lost;
   }
   if (p.p3 > 0.5) { c = vec3<f32>(dot(p.m0.xyz, c), dot(p.m1.xyz, c), dot(p.m2.xyz, c)); }
   let i = (id.y * u32(p.regionW) + id.x) * 3u;
-  outBuf[i] = c.r * k; outBuf[i + 1u] = c.g * k; outBuf[i + 2u] = c.b * k;
+  outBuf[i] = c.r * gainOut; outBuf[i + 1u] = c.g * gainOut; outBuf[i + 2u] = c.b * gainOut;
 }`;
 
 export class LensGPU {
@@ -99,15 +106,16 @@ export class LensGPU {
     this.frame = null;
   }
 
-  // Tone LUT buffer, re-uploaded only when the LUT object changes.
-  toneBuffer(lut) {
-    if (!lut) {
-      lut = this.identity ||= Float32Array.from({ length: TONE_SQRT_N + 1 }, (_, i) => (i / TONE_SQRT_N) ** 2);
+  // Tone LUT buffer (tone.js `packed`), re-uploaded only when it changes.
+  toneBuffer(packed) {
+    if (!packed) {
+      const n = TONE_SQRT_N + 1;
+      packed = this.identity ||= Float32Array.from({ length: 2 * n }, (_, i) => (i < n ? 1 : ((i - n) / TONE_SQRT_N) ** 2));
     }
-    if (this.toneLut !== lut) {
-      this.toneBuf ||= this.device.createBuffer({ size: (TONE_SQRT_N + 1) * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-      this.device.queue.writeBuffer(this.toneBuf, 0, lut);
-      this.toneLut = lut;
+    if (this.toneLut !== packed) {
+      this.toneBuf ||= this.device.createBuffer({ size: 2 * (TONE_SQRT_N + 1) * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+      this.device.queue.writeBuffer(this.toneBuf, 0, packed);
+      this.toneLut = packed;
     }
     return this.toneBuf;
   }
@@ -123,8 +131,8 @@ export class LensGPU {
   }
 
   /** Same contract as lens.js extractLens, for the frame last passed to setFrame. */
-  /** `lutSqrt` (tone.js) maps display-linear samples to scene light; null = identity. */
-  async extract(p3, x0, y0, w, h, scale, lens, lutSqrt = null) {
+  /** `tone` (tone.js) turns display-linear samples into scene light; null = identity. */
+  async extract(p3, x0, y0, w, h, scale, lens, tone = null) {
     const { device, frame } = this;
     const geo = lensGeometry(frame.W, frame.H, lens);
     const M = P3_TO_REC2020;
@@ -141,7 +149,7 @@ export class LensGPU {
     const bind = device.createBindGroup({
       layout: this.pipeline.getBindGroupLayout(0),
       entries: [
-        { binding: 4, resource: { buffer: this.toneBuffer(lutSqrt) } },
+        { binding: 4, resource: { buffer: this.toneBuffer(tone?.packed) } },
         { binding: 0, resource: frame.texture.createView() },
         { binding: 1, resource: this.sampler },
         { binding: 2, resource: { buffer: this.uniform } },

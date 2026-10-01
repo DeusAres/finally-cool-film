@@ -1,6 +1,7 @@
 // Shared by the app and the benchmark page: engine boot + photo decoding.
 import init, * as sf from '../pkg/spektrafilm_wasm.js';
 import { srgbToLinear, LIN8, P3_TO_REC2020 } from './color.js';
+import { applyTone } from './tone.js';
 
 export { sf, srgbToLinear };
 
@@ -64,16 +65,18 @@ export function decodeRGBA(bitmap, longSide = Infinity) {
 
 /**
  * Linear engine input for the region (x0, y0, w, h) of 8-bit RGBA `data`
- * (row stride `W`), multiplied by `scale`. `lut` maps each 8-bit code value to
- * linear light (default: plain sRGB decode; tone.js supplies the scene-referred one).
+ * (row stride `W`), multiplied by `scale`. With `tone` (tone.js) the display
+ * values are turned into scene light first; without it they are just decoded.
  */
-export function extractLinear(data, W, p3, x0 = 0, y0 = 0, w = W, h = data.length / 4 / W, scale = 1, lut = LIN8) {
-  const rgb = new Float32Array(w * h * 3);
+export function extractLinear(data, W, p3, x0 = 0, y0 = 0, w = W, h = data.length / 4 / W, scale = 1, tone = null) {
+  const rgb = new Float32Array(w * h * 3), px = new Float32Array(3);
   const M = P3_TO_REC2020;
   let j = 0;
   for (let y = y0; y < y0 + h; y++) {
     for (let i = (y * W + x0) * 4, end = i + w * 4; i < end; i += 4, j += 3) {
-      const r = lut[data[i]] * scale, g = lut[data[i + 1]] * scale, b = lut[data[i + 2]] * scale;
+      let r = LIN8[data[i]], g = LIN8[data[i + 1]], b = LIN8[data[i + 2]];
+      if (tone) { applyTone(tone, r, g, b, px, 0); r = px[0]; g = px[1]; b = px[2]; }
+      r *= scale; g *= scale; b *= scale;
       if (p3) {
         rgb[j] = M[0][0] * r + M[0][1] * g + M[0][2] * b;
         rgb[j + 1] = M[1][0] * r + M[1][1] * g + M[1][2] * b;

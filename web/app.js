@@ -92,9 +92,9 @@ async function ensureTone(u) {
 
 /** Scene-light engine input for a region of the frame currently loaded in the lens stage. */
 async function lensInput(frame, x0, y0, w, h, lens) {
-  if (!lensActive(lens)) return extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, 1, tone.lut8);
-  if (lensGpu) return lensGpu.extract(frame.p3, x0, y0, w, h, 1, lens, tone.lutSqrt);
-  return extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lensGeometry(frame.w, frame.h, lens), tone.lutSqrt);
+  if (!lensActive(lens)) return extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, 1, tone);
+  if (lensGpu) return lensGpu.extract(frame.p3, x0, y0, w, h, 1, lens, tone);
+  return extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lensGeometry(frame.w, frame.h, lens), tone);
 }
 
 /** Recompute the preview input only when the lens or tone changed. */
