@@ -31,7 +31,50 @@ struct PendingReadback {
     width: u32,
     height: u32,
     mapped: futures_channel::oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    /// True when the buffer holds packed 8-bit RGBA (see `set_output_pack`).
+    packed: bool,
 }
+
+/// Web front/back ends of the film chain, so a browser frame never crosses
+/// the JS↔wasm boundary as floats:
+/// - `frame`: the photo as an 8-bit sRGB-encoded texture, uploaded once;
+/// - `input`: a caller-supplied WGSL pass that fills the chain input from
+///   that texture (lens, tone, colour matrix), replacing the upload;
+/// - `pack`: an 8-bit LUT; the chain output is packed to RGBA through it.
+/// `input` and `pack` apply to the next `run_film_chain` only.
+#[cfg(feature = "wgpu-backend")]
+#[derive(Default)]
+struct WebIo {
+    frame: Option<wgpu::Texture>,
+    input: Option<InputPass>,
+    pack: Option<Vec<u32>>,
+    input_pipe: Option<(String, wgpu::ComputePipeline)>,
+    pack_pipe: Option<wgpu::ComputePipeline>,
+}
+
+#[cfg(feature = "wgpu-backend")]
+struct InputPass {
+    wgsl: String,
+    uniform: Vec<f32>,
+    tone: Vec<f32>,
+}
+
+/// Chain output (interleaved RGB f32, display-encoded) → RGBA8 through a
+/// 4096-entry LUT, index round(v * 4095), alpha 255.
+#[cfg(feature = "wgpu-backend")]
+const PACK_WGSL: &str = r#"
+@group(0) @binding(0) var<storage, read> src: array<f32>;
+@group(0) @binding(1) var<storage, read> lut: array<u32>;
+@group(0) @binding(2) var<storage, read_write> dst: array<u32>;
+@group(0) @binding(3) var<uniform> n: vec4<u32>;
+fn q(v: f32) -> u32 { return lut[u32(clamp(v * 4095.0 + 0.5, 0.0, 4095.0))]; }
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = id.x + id.y * n.y;
+  if (i >= n.x) { return; }
+  dst[i] = q(src[3u * i]) | (q(src[3u * i + 1u]) << 8u) | (q(src[3u * i + 2u]) << 16u) | 0xff000000u;
+}
+"#;
 
 /// Borrow a `&[Scalar]` as `&[f32]` for GPU upload.
 /// Zero-copy in f32 mode; allocates a converted Vec in f64 mode.
@@ -123,6 +166,7 @@ pub struct WgpuBackend {
     pipeline_cache: std::sync::Mutex<std::collections::HashMap<usize, CachedPipeline>>,
     #[cfg(target_arch = "wasm32")]
     pending_readback: std::sync::Mutex<Option<PendingReadback>>,
+    io: std::sync::Mutex<WebIo>,
 }
 
 #[cfg(feature = "wgpu-backend")]
@@ -165,6 +209,7 @@ impl WgpuBackend {
         limits.max_compute_workgroups_per_dimension =
             adapter_limits.max_compute_workgroups_per_dimension;
         limits.max_bind_groups = adapter_limits.max_bind_groups.max(limits.max_bind_groups);
+        limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
         // Our per-pixel shaders use `@workgroup_size(1024)` so the
         // dispatch grid stays under the 65535-per-dimension limit even
         // for 30+ MP images. The default Limits cap workgroup
@@ -209,13 +254,187 @@ impl WgpuBackend {
             pipeline_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             #[cfg(target_arch = "wasm32")]
             pending_readback: std::sync::Mutex::new(None),
+            io: std::sync::Mutex::new(WebIo::default()),
         })
+    }
+
+    /// Upload the frame the `set_input_pass` shader samples: 8-bit RGBA,
+    /// sRGB-encoded (Display P3 shares the curve), decoded to linear by the sampler.
+    pub fn set_frame(&self, rgba: &[u8], width: u32, height: u32) {
+        let mut io = self.io.lock().unwrap();
+        if let Some(t) = io.frame.take() {
+            t.destroy();
+        }
+        let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("frame"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            tex.as_image_copy(),
+            rgba,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width * 4), rows_per_image: Some(height) },
+            size,
+        );
+        io.frame = Some(tex);
+    }
+
+    /// Fill the next chain input on the GPU with `wgsl` (entry `main`,
+    /// workgroup 16×16 over the region): binding 0 the frame texture, 1 a
+    /// linear clamp sampler, 2 `uniform` (its fields 14/15 are the region
+    /// width/height), 3 the chain input (RGB f32), 4 `tone` (storage, read).
+    pub fn set_input_pass(&self, wgsl: &str, uniform: Vec<f32>, tone: Vec<f32>) {
+        self.io.lock().unwrap().input = Some(InputPass { wgsl: wgsl.to_owned(), uniform, tone });
+    }
+
+    /// Pack the next chain output to RGBA8 through `lut` (4096 entries); read
+    /// it with `take_readback_packed`.
+    pub fn set_output_pack(&self, lut: &[u8]) {
+        self.io.lock().unwrap().pack = Some(lut.iter().map(|&v| v as u32).collect());
+    }
+
+    /// Drop pending `set_input_pass` / `set_output_pack` requests (the run they
+    /// were meant for did not happen).
+    pub fn cancel_io(&self) {
+        let mut io = self.io.lock().unwrap();
+        io.input = None;
+        io.pack = None;
+    }
+
+    fn encode_input_pass(&self, encoder: &mut wgpu::CommandEncoder, req: &InputPass, out: &wgpu::Buffer, w: u32, h: u32) {
+        use wgpu::util::DeviceExt;
+        let mut io = self.io.lock().unwrap();
+        if io.input_pipe.as_ref().is_none_or(|(src, _)| *src != req.wgsl) {
+            let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("input_pass"),
+                source: wgpu::ShaderSource::Wgsl(Cow::Owned(req.wgsl.clone())),
+            });
+            let pipe = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("input_pass"),
+                layout: None,
+                module: &module,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            io.input_pipe = Some((req.wgsl.clone(), pipe));
+        }
+        let pipe = &io.input_pipe.as_ref().unwrap().1;
+        let frame = io.frame.as_ref().expect("set_frame before an input pass");
+        let view = frame.create_view(&Default::default());
+        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let uni = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("input_uniform"),
+            contents: bytemuck::cast_slice(&req.uniform),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let tone = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("input_tone"),
+            contents: bytemuck::cast_slice(&req.tone),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipe.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: uni.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: out.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: tone.as_entire_binding() },
+            ],
+        });
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(pipe);
+        pass.set_bind_group(0, &bg, &[]);
+        pass.dispatch_workgroups(w.div_ceil(16), h.div_ceil(16), 1);
+    }
+
+    /// Encode the RGBA8 pack of `src` (n pixels); returns the packed buffer.
+    fn encode_pack_pass(&self, encoder: &mut wgpu::CommandEncoder, lut: &[u32], src: &wgpu::Buffer, n: u32) -> wgpu::Buffer {
+        use wgpu::util::DeviceExt;
+        let mut io = self.io.lock().unwrap();
+        let pipe = io.pack_pipe.get_or_insert_with(|| {
+            let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("pack_rgba8"),
+                source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(PACK_WGSL)),
+            });
+            self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("pack_rgba8"),
+                layout: None,
+                module: &module,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        });
+        let groups = n.div_ceil(256);
+        let gx = groups.min(65535);
+        let gy = groups.div_ceil(gx);
+        let dst = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("packed"),
+            size: n as u64 * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let lut_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("pack_lut"),
+            contents: bytemuck::cast_slice(lut),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let dims = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("pack_dims"),
+            contents: bytemuck::cast_slice(&[n, gx * 256, 0u32, 0u32]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipe.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: src.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: lut_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: dst.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: dims.as_entire_binding() },
+            ],
+        });
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(pipe);
+        pass.set_bind_group(0, &bg, &[]);
+        pass.dispatch_workgroups(gx, gy, 1);
+        drop(pass);
+        dst
+    }
+
+    /// Await a packed (`set_output_pack`) readback and copy it into `out`.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn take_readback_packed<F: FnOnce(&[u8])>(&self, out: F) -> Option<()> {
+        let pending = self.pending_readback.lock().unwrap().take()?;
+        if !pending.packed {
+            return None;
+        }
+        pending.mapped.await.ok()?.ok()?;
+        out(&pending.buffer.slice(..).get_mapped_range());
+        pending.buffer.unmap();
+        Some(())
     }
 
     /// Await the readback left in flight by the last `run_film_chain` (wasm only).
     #[cfg(target_arch = "wasm32")]
     pub async fn take_readback(&self) -> Option<ImageBuf> {
         let pending = self.pending_readback.lock().unwrap().take()?;
+        if pending.packed {
+            return None;
+        }
         pending.mapped.await.ok()?.ok()?;
         let slice = pending.buffer.slice(..);
         let out: Vec<f32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
@@ -849,8 +1068,14 @@ impl WgpuBackend {
         // (~0.5 GB/s) blit on this unified-memory GPU. With
         // MAPPABLE_PRIMARY_BUFFERS we create buf_a already mapped (MAP_WRITE)
         // and memcpy the input straight into its (shared) memory — no staging.
+        let (input_req, pack_req) = {
+            let mut io = self.io.lock().unwrap();
+            (io.input.take(), io.pack.take())
+        };
         let input_f32 = scalars_to_f32(&image.data);
-        let buf_a = if mappable {
+        let buf_a = if input_req.is_some() {
+            make_img_buf("img_a")   // filled by the input pass
+        } else if mappable {
             let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("img_a"),
                 size: img_bytes as u64,
@@ -1393,10 +1618,11 @@ impl WgpuBackend {
         // Readback buffer (for the final image only) — only needed when we
         // can't map buf_b directly. Skipping it on the mappable path also
         // avoids allocating a second full-image buffer per frame.
-        let readback = (!mappable).then(|| {
+        let readback_bytes = if pack_req.is_some() { n_pixels as u64 * 4 } else { img_bytes as u64 };
+        let readback = (!mappable || pack_req.is_some()).then(|| {
             self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("readback"),
-                size: img_bytes as u64,
+                size: readback_bytes,
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })
@@ -1560,6 +1786,9 @@ impl WgpuBackend {
 
         // ── Single command buffer chaining everything ────────────────────
         let mut encoder = self.device.create_command_encoder(&Default::default());
+        if let Some(req) = input_req.as_ref() {
+            self.encode_input_pass(&mut encoder, req, &buf_a, image.width, image.height);
+        }
         let dispatch = |encoder: &mut wgpu::CommandEncoder,
                         pipe: &wgpu::ComputePipeline,
                         bg: &wgpu::BindGroup,
@@ -1677,8 +1906,10 @@ impl WgpuBackend {
 
         // Zero-copy path: when buf_b is mappable, skip the blit and map it
         // directly below. Otherwise stage it into the MAP_READ readback buffer.
+        // With an output pack, the packed RGBA8 is what gets staged.
+        let packed = pack_req.as_ref().map(|lut| self.encode_pack_pass(&mut encoder, lut, &buf_b, n_pixels));
         if let Some(rb) = readback.as_ref() {
-            encoder.copy_buffer_to_buffer(&buf_b, 0, rb, 0, img_bytes as u64);
+            encoder.copy_buffer_to_buffer(packed.as_ref().unwrap_or(&buf_b), 0, rb, 0, readback_bytes);
         }
         // Everything since function entry: CPU-side param prep, buffer
         // creation/uploads, and command encoding.
@@ -1701,6 +1932,7 @@ impl WgpuBackend {
                 width: image.width,
                 height: image.height,
                 mapped: rx,
+                packed: pack_req.is_some(),
             });
             let _ = cpu_setup_ms;
             return ImageBuf { width: image.width, height: image.height, data: Vec::new() };

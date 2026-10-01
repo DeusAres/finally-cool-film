@@ -32,6 +32,17 @@ pub fn init() {
     console_error_panic_hook::set_once();
 }
 
+fn gpu() -> Result<Rc<WgpuBackend>, JsError> {
+    GPU.with(|g| g.borrow().clone()).ok_or_else(|| JsError::new("GPU not initialised"))
+}
+
+/// Upload the photo (8-bit RGBA, sRGB / Display P3 encoded) for `process_frame`.
+#[wasm_bindgen]
+pub fn set_frame(rgba: &[u8], width: u32, height: u32) -> Result<(), JsError> {
+    gpu()?.set_frame(rgba, width, height);
+    Ok(())
+}
+
 /// Make a data file visible to the engine, e.g. `data/profiles/kodak_gold_200.json`.
 #[wasm_bindgen]
 pub fn register_file(path: &str, bytes: Vec<u8>) {
@@ -121,48 +132,42 @@ impl Engine {
         }))
     }
 
-    /// GPU-resident run straight to 8 bit: each sRGB-encoded output value v
-    /// becomes `lut[round(v * 4095)]` (4096 entries) and is written into `out`,
-    /// interleaved RGBA (alpha 255, e.g. an `ImageData` buffer) when `rgba`,
-    /// else RGB. Skips the float array on the JS side entirely (a third of the
-    /// bytes crossing the boundary, no per-pixel JS). Resolves to undefined.
-    pub fn process_gpu_8(
+    /// Whole frame-to-screen run on the GPU, nothing but 8-bit pixels crossing
+    /// to JS: the input region (width × height) is computed from the frame
+    /// last given to `set_frame` by the `input_wgsl` pass (lens, tone, colour
+    /// matrix; see `WgpuBackend::set_input_pass`), the film chain runs, and its
+    /// output is packed to RGBA through `lut` (4096 entries) into `out`
+    /// (width × height × 4 bytes). Resolves to undefined.
+    #[allow(clippy::too_many_arguments)]
+    pub fn process_frame(
         &self,
-        rgb: Vec<f32>,
+        input_wgsl: &str,
+        uniform: Vec<f32>,
+        tone: Vec<f32>,
         width: u32,
         height: u32,
-        lut: Vec<u8>,
+        lut: &[u8],
         out: js_sys::Uint8Array,
-        rgba: bool,
     ) -> Result<js_sys::Promise, JsError> {
         if lut.len() != 4096 {
             return Err(JsError::new("lut must have 4096 entries"));
         }
-        let ch = if rgba { 4 } else { 3 };
-        if out.length() as usize != width as usize * height as usize * ch {
+        if out.length() as usize != width as usize * height as usize * 4 {
             return Err(JsError::new("output buffer size mismatch"));
         }
-        let gpu = GPU
-            .with(|g| g.borrow().clone())
-            .ok_or_else(|| JsError::new("GPU not initialised"))?;
-        let image = ImageBuf::from_data(width, height, rgb);
-        self.pipeline()
-            .process_resident_borrowed(&image, gpu.as_ref())
-            .ok_or_else(|| JsError::new("GPU-resident path unavailable for these params"))?;
+        let gpu = gpu()?;
+        gpu.set_input_pass(input_wgsl, uniform, tone);
+        gpu.set_output_pack(lut);
+        // Dimensions only: the input pass fills the chain input on the GPU.
+        let image = ImageBuf { width, height, data: Vec::new() };
+        if self.pipeline().process_resident_borrowed(&image, gpu.as_ref()).is_none() {
+            gpu.cancel_io();
+            return Err(JsError::new("GPU-resident path unavailable for these params"));
+        }
         Ok(wasm_bindgen_futures::future_to_promise(async move {
-            let res = gpu
-                .take_readback()
+            gpu.take_readback_packed(|bytes| out.copy_from(bytes))
                 .await
                 .ok_or_else(|| JsValue::from_str("GPU readback failed"))?;
-            let q = |v: f32| lut[(v * 4095.0 + 0.5).clamp(0.0, 4095.0) as usize];
-            let src = res.data.as_slice();
-            let mut dst = vec![255u8; src.len() / 3 * ch];
-            for (o, i) in dst.chunks_exact_mut(ch).zip(src.chunks_exact(3)) {
-                o[0] = q(i[0]);
-                o[1] = q(i[1]);
-                o[2] = q(i[2]);
-            }
-            out.copy_from(&dst);
             Ok(JsValue::UNDEFINED)
         }))
     }

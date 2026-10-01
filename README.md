@@ -25,6 +25,9 @@ di pellicola → stampa → scansione, nel browser via WebAssembly + WebGPU. Foc
 - **Esporta**: piena risoluzione (max 12.5 MP) a tile 1024 px, una striscia alla volta passata in streaming a jpegli
   (worker, distance 1.0, 4:4:4, baseline sopra 6 MP perché il progressive tiene tutti i coefficienti DCT in heap),
   EXIF dell'originale preservati, download diretto.
+- **Pipeline GPU**: la foto va sulla GPU una volta, come texture 8-bit; lens + ricostruzione tono + matrice colore girano
+  come primo pass della catena del motore (shader in `lens-gpu.js`, `Engine.process_frame`) e l'uscita torna già RGBA 8-bit
+  tramite la LUT di stampa. Nessun frame float attraversa JS↔wasm: ~4 ms di CPU per frame invece di ~100.
 - Tocca la riga di stato per il **log**; se la scheda muore durante un export, al riavvio il log si apre da solo.
 
 ## Build locale

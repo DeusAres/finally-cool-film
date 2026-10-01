@@ -1,10 +1,10 @@
-import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, extractLinear, readPixels, toImageData, to8 } from './lib/common.js';
+import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, extractLinear, to8 } from './lib/common.js';
 import { transferChart, readTransfer, buildTone, autoTone } from './lib/tone.js';
 import { LIN8 } from './lib/color.js';
 import { log, logText, clearLog, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
-import { LensGPU } from './lib/lens-gpu.js';
+import { INPUT_WGSL, inputUniform } from './lib/lens-gpu.js';
 
 const PREVIEW_LONG_SIDE = 2000;   // display canvas cap (bigger canvases make iOS compositing crash when zoomed)
 const GRAIN_AREA_UM2 = 0.2;       // engine default AgX particle area
@@ -21,10 +21,9 @@ const stage = $('stage'), view = $('view');
 const ctx = view.getContext('2d', { colorSpace: 'display-p3' });
 
 let gpu = false;
-let lensGpu = null;          // WebGPU lens stage (CPU fallback in lens.js)
 let engine = null;          // sf.Engine for the current photo + calibration
 let engineCalib = '';       // JSON of the calibration params `engine` was built with
-let photo = null;           // { file, bitmap, preview, after, inputKey }
+let photo = null;           // { file, bitmap, preview, after }
 let transfer = null, transferKey = '';   // measured grey transfer of the pipeline (per calibration)
 let tone = null, toneKey = '';           // LUTs for the current transfer + look + ev
 let rendering = false, dirty = false, exporting = false;
@@ -91,32 +90,21 @@ async function ensureTone(u) {
 // Applied to the light reaching the film (engine input), in frame coordinates.
 
 /** Scene-light engine input for a region of the frame currently loaded in the lens stage. */
-// On the GPU even with the lens off (zero CA / vignette = tone + matrix only):
-// the per-pixel tone lookups are ~20x faster there than in JS. `target` is
-// reused between calls.
-async function lensInput(frame, x0, y0, w, h, lens, target) {
-  if (lensGpu) return lensGpu.extract(frame.p3, x0, y0, w, h, 1, lens, tone, target);
-  if (!lensActive(lens)) return extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, 1, tone);
-  return extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lensGeometry(frame.w, frame.h, lens), tone);
-}
+// GPU: the whole input stage (lens, tone, matrix) runs inside the engine's
+// chain from the frame texture (sf.set_frame), see lens-gpu.js. CPU fallback
+// below (no WebGPU): float input built here, float output converted here.
 
-/** Recompute the preview input only when the lens or tone changed. */
-async function updatePreviewInput(u) {
-  const key = JSON.stringify(lensOf(u)) + toneKey;
-  if (photo.inputKey === key) return;
-  const pv = photo.preview, t = performance.now();
-  pv.rgb = await lensInput(pv, 0, 0, pv.w, pv.h, lensOf(u), pv.rgb);
-  photo.inputKey = key;
-  return performance.now() - t;
-}
-
-/** Engine run on `img` → 8-bit `target` (RGBA ImageData or RGB Uint8Array) through tone.out8. */
-async function run8(img, target, rgba) {
-  const bytes = rgba ? new Uint8Array(target.data.buffer) : target;
-  if (gpu) return engine.process_gpu_8(img.rgb, img.w, img.h, tone.out8, bytes, rgba);
-  const out = engine.process(img.rgb, img.w, img.h);
-  if (rgba) return void toImageData(out, img.w, img.h, tone.out8, target);
-  for (let i = 0; i < out.length; i++) bytes[i] = to8(out[i], tone.out8);
+/** 8-bit render of a region of `frame` into `target` (RGBA, w×h×4 bytes). */
+async function renderRegion(frame, x0, y0, w, h, target, lens) {
+  if (gpu) {
+    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lens),
+      tone.packed, w, h, tone.out8, target);
+  }
+  const rgb = lensActive(lens)
+    ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lensGeometry(frame.w, frame.h, lens), tone)
+    : extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, 1, tone);
+  const out = engine.process(rgb, w, h), d32 = new Uint32Array(target.buffer, target.byteOffset, w * h);
+  for (let p = 0, j = 0; p < w * h; p++, j += 3) d32[p] = (to8(out[j], tone.out8) | (to8(out[j + 1], tone.out8) << 8) | (to8(out[j + 2], tone.out8) << 16) | 0xff000000) >>> 0;
 }
 
 // ---------- auto ----------
@@ -142,15 +130,13 @@ async function render() {
       const u = ui();
       const pv = photo.preview, t0 = performance.now();
       await ensureTone(u);
-      const tIn = (await updatePreviewInput(u)) || 0;
-      const t1 = performance.now();
       engine.update(JSON.stringify(renderParams(u)));
       if (photo.after?.width !== pv.w || photo.after?.height !== pv.h) photo.after = new ImageData(pv.w, pv.h);
-      await run8(pv, photo.after, true);
-      const t2 = performance.now();
+      await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), lensOf(u));
+      const t1 = performance.now();
       if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); }
-      const t3 = performance.now(), ms = (v) => Math.round(v);
-      status(`${pv.w}×${pv.h} · ${ms(t3 - t0)} ms (input ${ms(tIn)} · film ${ms(t2 - t1)} · display ${ms(t3 - t2)})${gpu ? '' : ' CPU'}`);
+      const t2 = performance.now(), ms = (v) => Math.round(v);
+      status(`${pv.w}×${pv.h} · ${ms(t2 - t0)} ms (render ${ms(t1 - t0)} · display ${ms(t2 - t1)})${gpu ? '' : ' CPU'}`);
     } while (dirty);
   } catch (e) {
     log('render error: ' + (e?.stack || e));
@@ -322,10 +308,11 @@ async function loadPhoto(file) {
   try {
     log(`photo: ${file.name} ${file.type} ${(file.size / 1e6).toFixed(1)} MB`);
     const bitmap = await createImageBitmap(file);
-    const preview = readPixels(bitmap, PREVIEW_LONG_SIDE);
+    const preview = decodeRGBA(bitmap, PREVIEW_LONG_SIDE);
+    preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
     log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
-    photo = { file, bitmap, preview, inputKey: '' };
-    lensGpu?.setFrame(preview.data, preview.w, preview.h);
+    photo = { file, bitmap, preview };
+    if (gpu) sf.set_frame(preview.data, preview.w, preview.h);
     engine?.free(); engine = null;
     view.width = preview.w; view.height = preview.h;
     view.style.width = preview.w + 'px'; view.style.height = preview.h + 'px';
@@ -390,11 +377,11 @@ async function exportFull() {
 
     await ensureTone(u);
     const frame = { data, w, h, p3 };
-    lensGpu?.setFrame(data, w, h);
+    if (gpu) sf.set_frame(data, w, h);
     const longSide = Math.max(w, h);
     const strips = Math.ceil(h / EXPORT_TILE), cols = Math.ceil(w / EXPORT_TILE);
 
-    let inBuf = null, tileBuf = null;   // reused across tiles
+    let tileBuf = null;   // reused across tiles
     encoderError = null;
     const done = new Promise((resolve, reject) => { encoderDone = { resolve, reject }; });
     done.catch(() => {});
@@ -412,13 +399,12 @@ async function exportFull() {
         engine.update(JSON.stringify(deepMerge(renderParams(u), {
           camera: { film_format_mm: FILM_FORMAT_MM * Math.max(tw, th) / longSide },
         })));
-        inBuf = await lensInput(frame, x0, y0, tw, th, lensOf(u), inBuf);
-        const tile = (tileBuf = tileBuf?.length >= tw * th * 3 ? tileBuf : new Uint8Array(tw * th * 3)).subarray(0, tw * th * 3);
-        await run8({ rgb: inBuf, w: tw, h: th }, tile, false);
+        const tile = (tileBuf = tileBuf?.length >= tw * th * 4 ? tileBuf : new Uint8Array(tw * th * 4)).subarray(0, tw * th * 4);
+        await renderRegion(frame, x0, y0, tw, th, tile, lensOf(u));
         const cw = Math.min(EXPORT_TILE, w - tx);
-        for (let y = 0; y < ch; y++) {
-          const src = ((ty - y0 + y) * tw + (tx - x0)) * 3;
-          strip.set(tile.subarray(src, src + cw * 3), (y * w + tx) * 3);
+        for (let y = 0; y < ch; y++) {   // RGBA tile → RGB strip
+          let src = ((ty - y0 + y) * tw + (tx - x0)) * 4, dst = (y * w + tx) * 3;
+          for (let x = 0; x < cw; x++, src += 4) { strip[dst++] = tile[src]; strip[dst++] = tile[src + 1]; strip[dst++] = tile[src + 2]; }
         }
       }
       encoder.postMessage({ cmd: 'rows', rgb: strip.buffer }, [strip.buffer]);
@@ -445,8 +431,7 @@ async function exportFull() {
   } finally {
     setBusy(null);
     exporting = false;
-    lensGpu?.trim();   // drop the tile-sized GPU buffers
-    lensGpu?.setFrame(photo.preview.data, photo.preview.w, photo.preview.h);   // back to the preview frame
+    if (gpu) sf.set_frame(photo.preview.data, photo.preview.w, photo.preview.h);   // back to the preview frame
     $('export').disabled = false;
     engine?.update(JSON.stringify(renderParams(ui())));   // back to preview params
   }
@@ -504,7 +489,6 @@ log(`boot ${navigator.userAgent}`);
 
 bootEngine().then(async (ok) => {
   gpu = ok;
-  try { lensGpu = await LensGPU.create(); } catch (e) { log('lens gpu unavailable: ' + (e?.message || e)); }
-  log(`engine ready, gpu=${gpu}, lens=${lensGpu ? 'gpu' : 'cpu'}`);
+  log(`engine ready, gpu=${gpu}`);
   status(gpu ? 'Pronto. Scegli una foto.' : 'WebGPU non disponibile: userò la CPU (lento).');
 }).catch((e) => { log('boot error: ' + (e?.stack || e)); status('Errore avvio: ' + (e?.message || e)); });

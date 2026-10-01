@@ -1,7 +1,9 @@
-// WebGPU implementation of the lens stage (lens.js has the model and the CPU
-// reference). The frame is uploaded once as an rgba8unorm-srgb texture: the
-// hardware sampler decodes to LINEAR light before filtering, so every bilinear
-// tap is interpolated in linear light, as in the CPU path, at a fraction of the cost.
+// WebGPU input stage: lens (lens.js has the model and the CPU reference) + tone
+// + colour matrix, run by the engine as the first pass of its GPU chain
+// (spektrafilm-wasm `process_frame`), so the photo crosses to the GPU once, as
+// an 8-bit texture, and no float frame ever crosses JS↔wasm. The texture is
+// rgba8unorm-srgb: the sampler decodes to LINEAR light before filtering, so
+// every bilinear tap is interpolated in linear light, as in the CPU path.
 // Output: linear Rec.2020 (p3) or linear sRGB floats, interleaved RGB, for the region.
 import { LENS_CONST, lensGeometry } from './lens.js';
 import { P3_TO_REC2020 } from './color.js';
@@ -9,7 +11,7 @@ import { TONE_SQRT_N } from './tone.js';
 
 const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
 
-const WGSL = /* wgsl */`
+export const INPUT_WGSL = /* wgsl */`
 struct P {
   frame: vec2<f32>, origin: vec2<f32>,      // frame size, region origin (frame px)
   axis: vec2<f32>, rMax: f32, falloff: f32,
@@ -84,106 +86,17 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   outBuf[i] = c.r * gainOut; outBuf[i + 1u] = c.g * gainOut; outBuf[i + 2u] = c.b * gainOut;
 }`;
 
-export class LensGPU {
-  static async create() {
-    const adapter = await navigator.gpu?.requestAdapter();
-    if (!adapter) return null;
-    const device = await adapter.requestDevice({
-      requiredLimits: { maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize, maxBufferSize: adapter.limits.maxBufferSize },
-    });
-    return new LensGPU(device);
-  }
-
-  constructor(device) {
-    this.device = device;
-    this.pipeline = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: WGSL }), entryPoint: 'main' } });
-    this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
-    this.uniform = device.createBuffer({ size: 32 * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    this.frame = null;
-  }
-
-  // Tone LUT buffer (tone.js `packed`), re-uploaded only when it changes.
-  toneBuffer(packed) {
-    if (!packed) {
-      const n = TONE_SQRT_N + 1;
-      packed = this.identity ||= Float32Array.from({ length: 2 * n }, (_, i) => (i < n ? 1 : ((i - n) / TONE_SQRT_N) ** 2));
-    }
-    if (this.toneLut !== packed) {
-      this.toneBuf ||= this.device.createBuffer({ size: 2 * (TONE_SQRT_N + 1) * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-      this.device.queue.writeBuffer(this.toneBuf, 0, packed);
-      this.toneLut = packed;
-    }
-    return this.toneBuf;
-  }
-
-  /** Upload the whole frame (8-bit RGBA, sRGB or Display P3 encoded — same transfer curve). */
-  setFrame(data, W, H) {
-    this.frame?.texture.destroy();
-    const texture = this.device.createTexture({
-      size: [W, H], format: 'rgba8unorm-srgb', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-    });
-    this.device.queue.writeTexture({ texture }, data, { bytesPerRow: W * 4 }, [W, H]);
-    this.frame = { texture, W, H };
-  }
-
-  /** Same contract as lens.js extractLens, for the frame last passed to setFrame. */
-  /** `tone` (tone.js) turns display-linear samples into scene light; null = identity. */
-  /** Writes into `target` when it is big enough (returns a view of exactly w*h*3). */
-  async extract(p3, x0, y0, w, h, scale, lens, tone = null, target = null) {
-    const { device, frame } = this;
-    const geo = lensGeometry(frame.W, frame.H, lens);
-    const M = P3_TO_REC2020;
-    device.queue.writeBuffer(this.uniform, 0, new Float32Array([
-      frame.W, frame.H, x0, y0,
-      geo.cx, geo.cy, geo.rMax, geo.falloff,
-      geo.dR, geo.dB, geo.blur, geo.depth,
-      scale, p3 ? 1 : 0, w, h,
-      ...M[0], 0, ...M[1], 0, ...M[2], 0,
-    ]));
-    const bytes = w * h * 3 * 4;
-    const { out, read } = this.buffers(bytes);
-    const bind = device.createBindGroup({
-      layout: this.pipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 4, resource: { buffer: this.toneBuffer(tone?.packed) } },
-        { binding: 0, resource: frame.texture.createView() },
-        { binding: 1, resource: this.sampler },
-        { binding: 2, resource: { buffer: this.uniform } },
-        { binding: 3, resource: { buffer: out } },
-      ],
-    });
-    const enc = device.createCommandEncoder();
-    const pass = enc.beginComputePass();
-    pass.setPipeline(this.pipeline);
-    pass.setBindGroup(0, bind);
-    pass.dispatchWorkgroups(Math.ceil(w / 16), Math.ceil(h / 16));
-    pass.end();
-    enc.copyBufferToBuffer(out, 0, read, 0, bytes);
-    device.queue.submit([enc.finish()]);
-    await read.mapAsync(GPUMapMode.READ, 0, bytes);
-    const n = w * h * 3;
-    if (!target || target.length < n) target = new Float32Array(n);
-    const rgb = target.length === n ? target : target.subarray(0, n);
-    rgb.set(new Float32Array(read.getMappedRange(0, bytes)));
-    read.unmap();
-    return rgb;
-  }
-
-  // Storage + readback buffers, kept between calls (allocating ~36 MB per
-  // call costs more than the shader itself); grown when a bigger region comes.
-  buffers(bytes) {
-    if (!this.bufs || this.bufs.size < bytes) {
-      this.bufs?.out.destroy(); this.bufs?.read.destroy();
-      const size = Math.ceil(bytes / 4096) * 4096;
-      this.bufs = {
-        size,
-        out: this.device.createBuffer({ size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC }),
-        read: this.device.createBuffer({ size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
-      };
-    }
-    return this.bufs;
-  }
-
-  /** Free the cached buffers (e.g. after an export at full resolution). */
-  trim() { this.bufs?.out.destroy(); this.bufs?.read.destroy(); this.bufs = null; }
+/**
+ * Uniforms of INPUT_WGSL for the region (x0, y0, w, h) of a W×H frame, scaled
+ * by `scale`; same contract as lens.js extractLens.
+ */
+export function inputUniform(W, H, p3, x0, y0, w, h, scale, lens) {
+  const geo = lensGeometry(W, H, lens), M = P3_TO_REC2020;
+  return new Float32Array([
+    W, H, x0, y0,
+    geo.cx, geo.cy, geo.rMax, geo.falloff,
+    geo.dR, geo.dB, geo.blur, geo.depth,
+    scale, p3 ? 1 : 0, w, h,
+    ...M[0], 0, ...M[1], 0, ...M[2], 0,
+  ]);
 }

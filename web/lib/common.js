@@ -99,23 +99,3 @@ export function readPixels(bitmap, longSide = Infinity) {
 
 /** Engine output → 8-bit: through `out8` (tone.js, 4096 entries over 0..1) or a plain scale. */
 export const to8 = (v, out8) => (out8 ? out8[v <= 0 ? 0 : v >= 1 ? 4095 : (v * 4095 + 0.5) | 0] : v * 255);
-
-const LINEAR8 = Uint8ClampedArray.from({ length: 4096 }, (_, i) => Math.round(i * 255 / 4095));
-
-/**
- * Engine output (sRGB-encoded floats, interleaved RGB) → RGBA ImageData, through
- * `out8` (or a plain scale). One 32-bit store per pixel (little-endian RGBA);
- * pass `target` to reuse an ImageData of the same size instead of allocating.
- */
-export function toImageData(out, w, h, out8, target) {
-  const img = target && target.width === w && target.height === h ? target : new ImageData(w, h);
-  const d32 = new Uint32Array(img.data.buffer), L = out8 || LINEAR8;
-  for (let p = 0, j = 0, n = w * h; p < n; p++, j += 3) {
-    let r = out[j] * 4095 + 0.5, g = out[j + 1] * 4095 + 0.5, b = out[j + 2] * 4095 + 0.5;
-    r = r < 0 ? 0 : r > 4095 ? 4095 : r | 0;
-    g = g < 0 ? 0 : g > 4095 ? 4095 : g | 0;
-    b = b < 0 ? 0 : b > 4095 ? 4095 : b | 0;
-    d32[p] = (L[r] | (L[g] << 8) | (L[b] << 16) | 0xff000000) >>> 0;
-  }
-  return img;
-}
