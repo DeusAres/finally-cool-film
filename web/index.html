@@ -42,7 +42,11 @@
   #zoomLabel { bottom: 16px; right: 14px; font: 12px ui-monospace, Menlo, monospace; color: var(--muted); }
 
   /* Compact scrollable strip: the photo gets most of the screen. */
-  #controls { flex: none; height: 26vh; min-height: 150px; padding: 2px 16px 4px; border-top: 1px solid var(--line);
+  #grip { flex: none; height: 22px; display: flex; align-items: center; justify-content: center; background: var(--card);
+         border-top: 1px solid var(--line); touch-action: none; cursor: ns-resize; user-select: none; -webkit-user-select: none; }
+  #grip span { width: 40px; height: 5px; border-radius: 3px; background: #5a534b; }
+  #grip.drag span { background: var(--accent); }
+  #controls { flex: none; height: 18vh; min-height: 0; padding: 0 16px 4px;
          background: var(--card); overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
          touch-action: pan-y; }
   .row { display: grid; grid-template-columns: 92px 1fr 44px; align-items: center; gap: 8px; min-height: 34px; }
@@ -91,6 +95,7 @@
   <div class="overlay" id="zoomLabel"></div>
 </div>
 
+<div id="grip" title="Trascina per ridimensionare"><span></span></div>
 <div id="controls">
   <div class="section">Stampa</div>
   <div class="row"><label for="ev">Esposizione</label><input type="range" id="ev" min="-2" max="2" step="0.1" value="0"><output for="ev"></output></div>

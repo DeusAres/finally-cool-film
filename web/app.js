@@ -299,6 +299,38 @@ window.addEventListener('mouseup', () => { dragging = false; });
 stage.addEventListener('dblclick', (e) => { if (photo) fitted ? setZoom(1 / devicePixelRatio, e.clientX, e.clientY) : fitToScreen(); });
 $('fit').addEventListener('click', fitToScreen);
 window.addEventListener('resize', () => { if (fitted) fitToScreen(); });
+// The stage also changes size when the slider panel is resized.
+new ResizeObserver(() => { if (fitted) fitToScreen(); }).observe(stage);
+
+// ---------- resizable slider panel ----------
+// Drag the grip to trade photo area for sliders; the height is remembered.
+const controls = $('controls'), grip = $('grip');
+const PANEL_MIN = 0, PANEL_MAX_VH = 0.6;
+const setPanel = (px) => {
+  const h = Math.round(Math.max(PANEL_MIN, Math.min(innerHeight * PANEL_MAX_VH, px)));
+  controls.style.height = h + 'px';
+  return h;
+};
+try { const saved = +localStorage.getItem('fcf_panel'); if (saved > 0) setPanel(saved); } catch {}
+let gripY = 0, gripH = 0;
+grip.addEventListener('pointerdown', (e) => {
+  gripY = e.clientY; gripH = controls.getBoundingClientRect().height;
+  grip.setPointerCapture(e.pointerId); grip.classList.add('drag');
+});
+grip.addEventListener('pointermove', (e) => { if (grip.hasPointerCapture(e.pointerId)) setPanel(gripH + gripY - e.clientY); });
+const endGrip = (e) => {
+  if (!grip.hasPointerCapture?.(e.pointerId)) return;
+  grip.releasePointerCapture(e.pointerId); grip.classList.remove('drag');
+  try { localStorage.setItem('fcf_panel', String(Math.round(controls.getBoundingClientRect().height))); } catch {}
+};
+grip.addEventListener('pointerup', endGrip);
+grip.addEventListener('pointercancel', endGrip);
+// Double tap the grip: collapse ↔ default.
+grip.addEventListener('dblclick', () => {
+  const h = controls.getBoundingClientRect().height;
+  const next = h > 8 ? setPanel(0) : setPanel(innerHeight * 0.18);
+  try { localStorage.setItem('fcf_panel', String(next || 1)); } catch {}
+});
 
 // ---------- photo ----------
 

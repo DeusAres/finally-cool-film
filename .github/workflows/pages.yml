@@ -33,6 +33,8 @@ jobs:
         run: command -v wasm-bindgen || cargo install wasm-bindgen-cli --version 0.2.100 --locked
       - name: Build
         run: ./scripts/build-web.sh
+      - name: Cache-busting version stamp
+        run: ./scripts/stamp-version.sh web "${GITHUB_SHA::8}"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web
