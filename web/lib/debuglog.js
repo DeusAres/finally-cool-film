@@ -1,13 +1,18 @@
 // Crash-survivable log: every line is written through to localStorage, so if
-// iOS kills the tab (out of memory) the trail up to that instant is readable
-// on the next load. A "busy" marker set around risky work tells the next load
-// that the previous session died in the middle of it.
-const KEY = 'fcf_log', BUSY = 'fcf_busy', MAX_LINES = 300;
+// iOS kills the tab (out of memory: no JS event fires, nothing can be caught)
+// the trail up to that instant is readable on the next load. A "busy" marker
+// set around risky work (each render, the export) tells the next load that
+// the previous session died in the middle of it. Each load starts a fresh log
+// and keeps the previous session's as `prevLogText`.
+const KEY = 'fcf_log', PREV = 'fcf_log_prev', BUSY = 'fcf_busy', MAX_LINES = 300;
 
 const read = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
 const write = (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} };
 
-let lines = (read(KEY) || '').split('\n').filter(Boolean);
+const prev = read(KEY) || '';
+write(PREV, prev);
+write(KEY, null);
+let lines = [];
 
 export function log(msg) {
   const line = `${new Date().toISOString().slice(11, 23)} ${msg}`;
@@ -18,7 +23,7 @@ export function log(msg) {
 }
 
 export const logText = () => lines.join('\n');
-export function clearLog() { lines = []; write(KEY, null); }
+export const prevLogText = () => prev;
 
 /** Mark risky work in progress (e.g. 'export'); pass null when it finished. */
 export const setBusy = (what) => write(BUSY, what);

@@ -1,7 +1,7 @@
 import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, extractLinear, to8 } from './lib/common.js';
 import { transferChart, readTransfer, buildTone, autoTone } from './lib/tone.js';
 import { LIN8 } from './lib/color.js';
-import { log, logText, clearLog, setBusy, takeCrashMarker } from './lib/debuglog.js';
+import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, inputUniform } from './lib/lens-gpu.js';
@@ -26,7 +26,7 @@ let engineCalib = '';       // JSON of the calibration params `engine` was built
 let photo = null;           // { file, bitmap, preview, after }
 let transfer = null, transferKey = '';   // measured grey transfer of the pipeline (per calibration)
 let tone = null, toneKey = '';           // LUTs for the current transfer + look + ev
-let rendering = false, dirty = false, exporting = false;
+let rendering = false, dirty = false, exporting = false, renderCount = 0;
 
 // ---------- params ----------
 
@@ -128,7 +128,9 @@ async function render() {
     do {
       dirty = false;
       const u = ui();
-      const pv = photo.preview, t0 = performance.now();
+      const pv = photo.preview, t0 = performance.now(), n = ++renderCount;
+      // Breadcrumb: if iOS kills the tab mid-render, the next load says so.
+      setBusy(`anteprima #${n} ${pv.w}x${pv.h} ${JSON.stringify(u)}`);
       await ensureTone(u);
       engine.update(JSON.stringify(renderParams(u)));
       if (photo.after?.width !== pv.w || photo.after?.height !== pv.h) photo.after = new ImageData(pv.w, pv.h);
@@ -137,12 +139,14 @@ async function render() {
       if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); }
       const t2 = performance.now(), ms = (v) => Math.round(v);
       status(`${pv.w}×${pv.h} · ${ms(t2 - t0)} ms (render ${ms(t1 - t0)} · display ${ms(t2 - t1)})${gpu ? '' : ' CPU'}`);
+      log(`render #${n} ${ms(t1 - t0)}+${ms(t2 - t1)} ms`);
     } while (dirty);
   } catch (e) {
     log('render error: ' + (e?.stack || e));
     status('Errore: ' + (e?.message || e));
   } finally {
     rendering = false;
+    if (!exporting) setBusy(null);
   }
 }
 
@@ -439,15 +443,17 @@ async function exportFull() {
 
 // ---------- log panel ----------
 
+// Current session first, then the previous one (where a crash's trail ends).
+const fullLog = () => `── sessione attuale ──\n${logText() || '(vuoto)'}\n\n── sessione precedente ──\n${prevLogText() || '(vuoto)'}`;
 function openLog(title) {
   $('logTitle').textContent = title;
-  $('logText').textContent = logText() || '(vuoto)';
+  $('logText').textContent = fullLog();
   $('logPanel').style.display = 'flex';
 }
 $('status').addEventListener('click', () => openLog('Log'));
 $('logClose').addEventListener('click', () => { $('logPanel').style.display = 'none'; });
 $('logCopy').addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText(logText()); $('logCopy').textContent = 'Copiato ✓'; } catch { $('logCopy').textContent = 'Seleziona il testo'; }
+  try { await navigator.clipboard.writeText(fullLog()); $('logCopy').textContent = 'Copiato ✓'; } catch { $('logCopy').textContent = 'Seleziona il testo'; }
 });
 
 // ---------- wiring ----------
@@ -483,8 +489,7 @@ $('border').addEventListener('change', () => { try { localStorage.setItem('fcf_b
 syncOutputs();
 
 const crashed = takeCrashMarker();
-if (crashed) openLog(`La sessione precedente si è interrotta durante: ${crashed}. Copia il log e mandamelo.`);
-else clearLog();
+if (crashed) openLog(`La sessione precedente si è interrotta durante: ${crashed}. Copia il log e mandamelo.`, true);
 log(`boot ${navigator.userAgent}`);
 
 bootEngine().then(async (ok) => {
