@@ -23,6 +23,51 @@ fn wgsl_for_target(src: &'static str) -> Cow<'static, str> {
     }
 }
 
+/// Every buffer a frame creates goes through these. On native, dropping a
+/// `wgpu::Buffer` frees it; on the web (wgpu 24 webgpu backend) `Drop` is a
+/// no-op and the memory is only reclaimed when the JS GC collects the
+/// GPUBuffer, so ~10 full-frame buffers per render pile up (hundreds of MB
+/// while a slider moves) until iOS kills the tab. On wasm the buffers are
+/// recorded and explicitly destroyed once the frame has been read back
+/// (`release_frame_buffers`). No buffer outlives its frame.
+#[cfg(feature = "wgpu-backend")]
+trait TrackedCreate {
+    fn create_buffer_t(&self, desc: &wgpu::BufferDescriptor<'_>) -> wgpu::Buffer;
+    fn create_buffer_init_t(&self, desc: &wgpu::util::BufferInitDescriptor<'_>) -> wgpu::Buffer;
+}
+
+#[cfg(all(feature = "wgpu-backend", target_arch = "wasm32"))]
+thread_local! {
+    static FRAME_BUFFERS: std::cell::RefCell<Vec<wgpu::Buffer>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(feature = "wgpu-backend")]
+#[inline]
+fn track(buf: wgpu::Buffer) -> wgpu::Buffer {
+    #[cfg(target_arch = "wasm32")]
+    FRAME_BUFFERS.with(|b| b.borrow_mut().push(buf.clone()));
+    buf
+}
+
+#[cfg(feature = "wgpu-backend")]
+impl TrackedCreate for wgpu::Device {
+    fn create_buffer_t(&self, desc: &wgpu::BufferDescriptor<'_>) -> wgpu::Buffer {
+        track(self.create_buffer(desc))
+    }
+    fn create_buffer_init_t(&self, desc: &wgpu::util::BufferInitDescriptor<'_>) -> wgpu::Buffer {
+        use wgpu::util::DeviceExt;
+        track(self.create_buffer_init(desc))
+    }
+}
+
+/// Destroy every buffer created since the last call (wasm; see `TrackedCreate`).
+#[cfg(all(feature = "wgpu-backend", target_arch = "wasm32"))]
+fn release_frame_buffers() {
+    for b in FRAME_BUFFERS.with(|b| std::mem::take(&mut *b.borrow_mut())) {
+        b.destroy();
+    }
+}
+
 /// Readback left in flight by `run_film_chain` on wasm, where the GPU cannot
 /// be waited on synchronously. Collected with `WgpuBackend::take_readback`.
 #[cfg(all(feature = "wgpu-backend", target_arch = "wasm32"))]
@@ -308,7 +353,6 @@ impl WgpuBackend {
     }
 
     fn encode_input_pass(&self, encoder: &mut wgpu::CommandEncoder, req: &InputPass, out: &wgpu::Buffer, w: u32, h: u32) {
-        use wgpu::util::DeviceExt;
         let mut io = self.io.lock().unwrap();
         if io.input_pipe.as_ref().is_none_or(|(src, _)| *src != req.wgsl) {
             let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -333,12 +377,12 @@ impl WgpuBackend {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let uni = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let uni = self.device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some("input_uniform"),
             contents: bytemuck::cast_slice(&req.uniform),
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let tone = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let tone = self.device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some("input_tone"),
             contents: bytemuck::cast_slice(&req.tone),
             usage: wgpu::BufferUsages::STORAGE,
@@ -362,7 +406,6 @@ impl WgpuBackend {
 
     /// Encode the RGBA8 pack of `src` (n pixels); returns the packed buffer.
     fn encode_pack_pass(&self, encoder: &mut wgpu::CommandEncoder, lut: &[u32], src: &wgpu::Buffer, n: u32) -> wgpu::Buffer {
-        use wgpu::util::DeviceExt;
         let mut io = self.io.lock().unwrap();
         let pipe = io.pack_pipe.get_or_insert_with(|| {
             let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -381,18 +424,18 @@ impl WgpuBackend {
         let groups = n.div_ceil(256);
         let gx = groups.min(65535);
         let gy = groups.div_ceil(gx);
-        let dst = self.device.create_buffer(&wgpu::BufferDescriptor {
+        let dst = self.device.create_buffer_t(&wgpu::BufferDescriptor {
             label: Some("packed"),
             size: n as u64 * 4,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        let lut_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let lut_buf = self.device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some("pack_lut"),
             contents: bytemuck::cast_slice(lut),
             usage: wgpu::BufferUsages::STORAGE,
         });
-        let dims = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let dims = self.device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some("pack_dims"),
             contents: bytemuck::cast_slice(&[n, gx * 256, 0u32, 0u32]),
             usage: wgpu::BufferUsages::UNIFORM,
@@ -422,9 +465,13 @@ impl WgpuBackend {
         if !pending.packed {
             return None;
         }
-        pending.mapped.await.ok()?.ok()?;
+        if !matches!(pending.mapped.await, Ok(Ok(()))) {
+            release_frame_buffers();
+            return None;
+        }
         out(&pending.buffer.slice(..).get_mapped_range());
         pending.buffer.unmap();
+        release_frame_buffers();
         Some(())
     }
 
@@ -435,10 +482,14 @@ impl WgpuBackend {
         if pending.packed {
             return None;
         }
-        pending.mapped.await.ok()?.ok()?;
+        if !matches!(pending.mapped.await, Ok(Ok(()))) {
+            release_frame_buffers();
+            return None;
+        }
         let slice = pending.buffer.slice(..);
         let out: Vec<f32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
         pending.buffer.unmap();
+        release_frame_buffers();
         Some(ImageBuf::from_data(pending.width, pending.height, out))
     }
 
@@ -534,9 +585,8 @@ impl WgpuBackend {
         let gpu_buffers: Vec<wgpu::Buffer> = bindings
             .iter()
             .map(|b| {
-                use wgpu::util::DeviceExt;
                 self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    .create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
                         label: Some("buffer"),
                         contents: &b.data,
                         usage: b.usage,
@@ -561,7 +611,7 @@ impl WgpuBackend {
 
         // Readback buffer
         let output_size = bindings[output_idx].data.len() as u64;
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+        let readback = self.device.create_buffer_t(&wgpu::BufferDescriptor {
             label: Some("readback"),
             size: output_size,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
@@ -607,7 +657,6 @@ impl WgpuBackend {
     /// Kernel weights are computed on CPU and uploaded as a storage buffer.
     /// Two ping-pong image buffers minimize allocations.
     pub fn gaussian_blur_gpu(&self, img: &ImageBuf, sigma: f32) -> ImageBuf {
-        use wgpu::util::DeviceExt;
         let radius = fir_blur_radius(sigma);
         let kernel_size = (2 * radius + 1) as usize;
 
@@ -629,7 +678,7 @@ impl WgpuBackend {
         let img_bytes = n_pixels * 3 * 4;
 
         let make_buf = |label: &str| {
-            self.device.create_buffer(&wgpu::BufferDescriptor {
+            self.device.create_buffer_t(&wgpu::BufferDescriptor {
                 label: Some(label),
                 size: img_bytes as u64,
                 usage: wgpu::BufferUsages::STORAGE
@@ -648,7 +697,7 @@ impl WgpuBackend {
 
         let kernel_buf = self
             .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            .create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
                 label: Some("gaussian_kernel"),
                 contents: bytemuck::cast_slice(&kernel_f32),
                 usage: wgpu::BufferUsages::STORAGE,
@@ -670,7 +719,7 @@ impl WgpuBackend {
         };
         let params_buf = self
             .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            .create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
                 label: Some("gaussian_params"),
                 contents: bytemuck::bytes_of(&params),
                 usage: wgpu::BufferUsages::UNIFORM,
@@ -736,7 +785,7 @@ impl WgpuBackend {
             ],
         });
 
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+        let readback = self.device.create_buffer_t(&wgpu::BufferDescriptor {
             label: Some("blur_readback"),
             size: img_bytes as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
@@ -789,7 +838,6 @@ impl WgpuBackend {
     /// Used by halation (multi-bounce blurs of the same source) and any
     /// caller that needs the same input at several radii.
     pub fn gaussian_blur_multi_gpu(&self, img: &ImageBuf, sigmas: &[f32]) -> Vec<ImageBuf> {
-        use wgpu::util::DeviceExt;
         assert!(!sigmas.is_empty(), "gaussian_blur_multi_gpu: empty sigmas");
 
         let w = img.width;
@@ -798,7 +846,7 @@ impl WgpuBackend {
         let img_bytes = n_pixels * 3 * 4;
 
         let make_buf = |label: &str| {
-            self.device.create_buffer(&wgpu::BufferDescriptor {
+            self.device.create_buffer_t(&wgpu::BufferDescriptor {
                 label: Some(label),
                 size: img_bytes as u64,
                 usage: wgpu::BufferUsages::STORAGE
@@ -877,7 +925,7 @@ impl WgpuBackend {
 
                 let kernel_buf =
                     self.device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        .create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
                             label: Some(&format!("blur_multi_kernel_{i}")),
                             contents: bytemuck::cast_slice(&kernel_f32),
                             usage: wgpu::BufferUsages::STORAGE,
@@ -891,7 +939,7 @@ impl WgpuBackend {
                 };
                 let params_buf =
                     self.device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        .create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
                             label: Some(&format!("blur_multi_params_{i}")),
                             contents: bytemuck::bytes_of(&params),
                             usage: wgpu::BufferUsages::UNIFORM,
@@ -956,7 +1004,7 @@ impl WgpuBackend {
         // Per-sigma buffers stay well under the cap (72 MB at 6 MP).
         let readbacks: Vec<_> = (0..sigmas.len())
             .map(|i| {
-                self.device.create_buffer(&wgpu::BufferDescriptor {
+                self.device.create_buffer_t(&wgpu::BufferDescriptor {
                     label: Some(&format!("blur_multi_readback_{i}")),
                     size: img_bytes as u64,
                     usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
@@ -1021,7 +1069,6 @@ impl WgpuBackend {
     /// and unsharp as a single command buffer with ping-pong image storage.
     /// Only one upload at the start and one readback at the end.
     pub fn run_film_chain(&self, p: &crate::FilmChainParams<'_>) -> ImageBuf {
-        use wgpu::util::DeviceExt;
         let t_start = web_time::Instant::now();
         // Pull all references into locals so the existing body below
         // doesn't need a rewrite — only the param sources change.
@@ -1049,7 +1096,7 @@ impl WgpuBackend {
 
         // Ping-pong image buffers (each holds H*W*3 f32 values).
         let make_img_buf = |label: &str| {
-            self.device.create_buffer(&wgpu::BufferDescriptor {
+            self.device.create_buffer_t(&wgpu::BufferDescriptor {
                 label: Some(label),
                 size: img_bytes as u64,
                 usage: wgpu::BufferUsages::STORAGE
@@ -1076,7 +1123,7 @@ impl WgpuBackend {
         let buf_a = if input_req.is_some() {
             make_img_buf("img_a")   // filled by the input pass
         } else if mappable {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            let buf = self.device.create_buffer_t(&wgpu::BufferDescriptor {
                 label: Some("img_a"),
                 size: img_bytes as u64,
                 usage: wgpu::BufferUsages::STORAGE
@@ -1107,7 +1154,7 @@ impl WgpuBackend {
             if mappable {
                 usage |= wgpu::BufferUsages::MAP_READ;
             }
-            self.device.create_buffer(&wgpu::BufferDescriptor {
+            self.device.create_buffer_t(&wgpu::BufferDescriptor {
                 label: Some("img_b"),
                 size: img_bytes as u64,
                 usage,
@@ -1118,7 +1165,7 @@ impl WgpuBackend {
         // Static (LUT) buffers — uploaded once.
         let mk_storage = |label: &str, bytes: &[u8]| {
             self.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                .create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
                     label: Some(label),
                     contents: bytes,
                     usage: wgpu::BufferUsages::STORAGE,
@@ -1126,7 +1173,7 @@ impl WgpuBackend {
         };
         let mk_uniform = |label: &str, bytes: &[u8]| {
             self.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                .create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
                     label: Some(label),
                     contents: bytes,
                     usage: wgpu::BufferUsages::UNIFORM,
@@ -1620,7 +1667,7 @@ impl WgpuBackend {
         // avoids allocating a second full-image buffer per frame.
         let readback_bytes = if pack_req.is_some() { n_pixels as u64 * 4 } else { img_bytes as u64 };
         let readback = (!mappable || pack_req.is_some()).then(|| {
-            self.device.create_buffer(&wgpu::BufferDescriptor {
+            self.device.create_buffer_t(&wgpu::BufferDescriptor {
                 label: Some("readback"),
                 size: readback_bytes,
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
@@ -2479,12 +2526,11 @@ fn build_halation_state(
     buf_b: &wgpu::Buffer,
     backend: &WgpuBackend,
 ) -> HalationState {
-    use wgpu::util::DeviceExt;
     let n_pixels = (width as usize) * (height as usize);
     let img_bytes = (n_pixels * 3 * 4) as u64;
 
     let mk_buf = |label: &str| {
-        device.create_buffer(&wgpu::BufferDescriptor {
+        device.create_buffer_t(&wgpu::BufferDescriptor {
             label: Some(label),
             size: img_bytes,
             usage: wgpu::BufferUsages::STORAGE
@@ -2529,7 +2575,7 @@ fn build_halation_state(
             let sum: f64 = kernel.iter().sum();
             let kernel_f32: Vec<f32> = kernel.into_iter().map(|v| (v / sum) as f32).collect();
 
-            let kernel_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            let kernel_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("halation_blur_kernel_{label}")),
                 contents: bytemuck::cast_slice(&kernel_f32),
                 usage: wgpu::BufferUsages::STORAGE,
@@ -2548,7 +2594,7 @@ fn build_halation_state(
                 radius,
                 _pad: 0,
             };
-            let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("halation_blur_params_{label}")),
                 contents: bytemuck::bytes_of(&params),
                 usage: wgpu::BufferUsages::UNIFORM,
@@ -2631,7 +2677,7 @@ fn build_halation_state(
         // vec4<f32>: per-channel tail weights, .w padding for 16-byte alignment
         tail_weight: [f32; 4],
     }
-    let scatter_mix_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let scatter_mix_params = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("halation_scatter_mix_params"),
         contents: bytemuck::bytes_of(&ScatterMixParams {
             n_pixels: n_pixels as u32,
@@ -2720,7 +2766,7 @@ fn build_halation_state(
             &format!("bounce_{k}"),
         ));
 
-        let acc_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let acc_params = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some(&format!("halation_acc_params_{k}")),
             contents: bytemuck::bytes_of(&AddScaledParams {
                 n_pixels: n_pixels as u32,
@@ -2776,7 +2822,7 @@ fn build_halation_state(
         _pad2: u32,
         scale: [f32; 4],
     }
-    let final_add_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let final_add_params = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("halation_final_add_params"),
         contents: bytemuck::bytes_of(&AddScaledPerChannelParams {
             n_pixels: n_pixels as u32,
@@ -2843,7 +2889,7 @@ fn build_halation_state(
             1.0 / (1.0 + hp.halation_a_tot[2]),
             0.0,
         ];
-        let renorm_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let renorm_params = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some("halation_renorm_params"),
             contents: bytemuck::bytes_of(&RenormParams {
                 n_pixels: n_pixels as u32,
@@ -3004,7 +3050,6 @@ fn build_diffusion_state(
     buf_b: &wgpu::Buffer,
     backend: &WgpuBackend,
 ) -> DiffusionState {
-    use wgpu::util::DeviceExt;
     let small_w = plan.small_w;
     let small_h = plan.small_h;
     let n_full = (width as usize) * (height as usize);
@@ -3013,7 +3058,7 @@ fn build_diffusion_state(
     let small_bytes = (n_small * 3 * 4) as u64;
 
     let mk = |label: &str, bytes: u64| {
-        device.create_buffer(&wgpu::BufferDescriptor {
+        device.create_buffer_t(&wgpu::BufferDescriptor {
             label: Some(label),
             size: bytes,
             usage: wgpu::BufferUsages::STORAGE
@@ -3063,7 +3108,7 @@ fn build_diffusion_state(
         include_str!("../../spektrafilm-shaders/wgsl/downsample_area.wgsl"),
         grid_layout,
     );
-    let down_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let down_params = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("diff_down_params"),
         contents: bytemuck::bytes_of(&DownParams {
             in_w: width,
@@ -3158,12 +3203,12 @@ fn build_diffusion_state(
         }
         let ksum: f64 = kernel.iter().sum();
         let kernel_f32: Vec<f32> = kernel.into_iter().map(|v| (v / ksum) as f32).collect();
-        let kernel_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let kernel_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some(&format!("diff_kernel_{i}")),
             contents: bytemuck::cast_slice(&kernel_f32),
             usage: wgpu::BufferUsages::STORAGE,
         });
-        let bp = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let bp = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some(&format!("diff_blur_params_{i}")),
             contents: bytemuck::bytes_of(&BlurParams {
                 width: small_w,
@@ -3225,7 +3270,7 @@ fn build_diffusion_state(
         });
 
         // Accumulate small_out (per-channel coeff) → small_acc.
-        let ap = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let ap = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some(&format!("diff_acc_params_{i}")),
             contents: bytemuck::bytes_of(&AddPcParams {
                 n_pixels: n_small as u32,
@@ -3266,7 +3311,7 @@ fn build_diffusion_state(
         include_str!("../../spektrafilm-shaders/wgsl/upsample_bilinear.wgsl"),
         grid_layout,
     );
-    let up_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let up_params = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("diff_up_params"),
         contents: bytemuck::bytes_of(&UpParams {
             in_w: small_w,
@@ -3323,7 +3368,7 @@ fn build_diffusion_state(
         _pad: u32,
     }
     let mk_add = |label: &str, src: &wgpu::Buffer, scale: f32, clear: u32| -> DispatchJob {
-        let pb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let pb = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some(label),
             contents: bytemuck::bytes_of(&AddScaledParams {
                 n_pixels: n_full as u32,
@@ -3460,9 +3505,8 @@ fn build_simple_blur_state(
     label: &str,
     backend: &WgpuBackend,
 ) -> SimpleBlurState {
-    use wgpu::util::DeviceExt;
     let n_bytes = (width as u64) * (height as u64) * 3 * 4;
-    let dst = device.create_buffer(&wgpu::BufferDescriptor {
+    let dst = device.create_buffer_t(&wgpu::BufferDescriptor {
         label: Some(&format!("{label}_blur_dst")),
         size: n_bytes,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
@@ -3504,12 +3548,12 @@ fn build_simple_blur_state(
     }
     let ksum: f64 = kernel.iter().sum();
     let kernel_f32: Vec<f32> = kernel.into_iter().map(|v| (v / ksum) as f32).collect();
-    let kernel_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let kernel_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some(&format!("{label}_blur_kernel")),
         contents: bytemuck::cast_slice(&kernel_f32),
         usage: wgpu::BufferUsages::STORAGE,
     });
-    let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some(&format!("{label}_blur_params")),
         contents: bytemuck::bytes_of(&BlurParams {
             width,
@@ -3624,7 +3668,6 @@ fn build_highlight_boost_state(
     img: &wgpu::Buffer,
     backend: &WgpuBackend,
 ) -> HighlightBoostState {
-    use wgpu::util::DeviceExt;
     let n_values = n_pixels * 3;
     let mut counts = Vec::new();
     let mut values = n_values;
@@ -3658,7 +3701,7 @@ fn build_highlight_boost_state(
         .iter()
         .enumerate()
         .map(|(i, &c)| {
-            device.create_buffer(&wgpu::BufferDescriptor {
+            device.create_buffer_t(&wgpu::BufferDescriptor {
                 label: Some(&format!("highlight_reduce_{i}")),
                 size: (c as u64) * 4,
                 usage: wgpu::BufferUsages::STORAGE,
@@ -3677,7 +3720,7 @@ fn build_highlight_boost_state(
     let mut reductions = Vec::with_capacity(counts.len());
     for (i, &blocks) in counts.iter().enumerate() {
         let pass_values = if i == 0 { n_values } else { counts[i - 1] };
-        let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some(&format!("highlight_reduce_params_{i}")),
             contents: bytemuck::bytes_of(&ReduceParams {
                 n_values: pass_values,
@@ -3723,7 +3766,7 @@ fn build_highlight_boost_state(
         boost_range: f32,
         protect_ev: f32,
     }
-    let boost_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let boost_params = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("highlight_boost_params"),
         contents: bytemuck::bytes_of(&BoostParams {
             n_values,
@@ -3813,7 +3856,6 @@ fn build_log_to_linear_state(
     img: &wgpu::Buffer,
     backend: &WgpuBackend,
 ) -> InplaceUnaryState {
-    use wgpu::util::DeviceExt;
     #[repr(C)]
     #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
     struct Params {
@@ -3828,7 +3870,7 @@ fn build_log_to_linear_state(
             wgpu::BufferBindingType::Storage { read_only: false },
         ],
     );
-    let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("print_log_to_linear_params"),
         contents: bytemuck::bytes_of(&Params {
             n_pixels,
@@ -3867,7 +3909,6 @@ fn build_linear_to_log_state(
     img: &wgpu::Buffer,
     backend: &WgpuBackend,
 ) -> InplaceUnaryState {
-    use wgpu::util::DeviceExt;
     #[repr(C)]
     #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
     struct Params {
@@ -3881,7 +3922,7 @@ fn build_linear_to_log_state(
             wgpu::BufferBindingType::Storage { read_only: false },
         ],
     );
-    let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("print_linear_to_log_params"),
         contents: bytemuck::bytes_of(&Params {
             n_pixels,
@@ -3920,7 +3961,6 @@ fn build_post_scan_state(
     img: &wgpu::Buffer,
     backend: &WgpuBackend,
 ) -> InplaceUnaryState {
-    use wgpu::util::DeviceExt;
     #[repr(C)]
     #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
     struct Params {
@@ -3935,7 +3975,7 @@ fn build_post_scan_state(
             wgpu::BufferBindingType::Storage { read_only: false },
         ],
     );
-    let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("post_scan_params"),
         contents: bytemuck::bytes_of(&Params {
             n_pixels,
@@ -4003,12 +4043,11 @@ fn build_dir_state(
     buf_b: &wgpu::Buffer,
     backend: &WgpuBackend,
 ) -> DirState {
-    use wgpu::util::DeviceExt;
     let n_pixels = (width as usize) * (height as usize);
     let img_bytes = (n_pixels * 3 * 4) as u64;
 
     let mk_buf = |label: &str| {
-        device.create_buffer(&wgpu::BufferDescriptor {
+        device.create_buffer_t(&wgpu::BufferDescriptor {
             label: Some(label),
             size: img_bytes,
             usage: wgpu::BufferUsages::STORAGE
@@ -4059,7 +4098,7 @@ fn build_dir_state(
         m_row1: [m[1][0], m[1][1], m[1][2], 0.0],
         m_row2: [m[2][0], m[2][1], m[2][2], 0.0],
     };
-    let matmul_params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let matmul_params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("dir_matmul_params"),
         contents: bytemuck::bytes_of(&matmul_params),
         usage: wgpu::BufferUsages::UNIFORM,
@@ -4137,7 +4176,7 @@ fn build_dir_state(
             let sum: f64 = kernel.iter().sum();
             let kernel_f32: Vec<f32> = kernel.into_iter().map(|v| (v / sum) as f32).collect();
 
-            let kernel_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            let kernel_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("dir_blur_kernel_{label}")),
                 contents: bytemuck::cast_slice(&kernel_f32),
                 usage: wgpu::BufferUsages::STORAGE,
@@ -4156,7 +4195,7 @@ fn build_dir_state(
                 radius,
                 _pad: 0,
             };
-            let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("dir_blur_params_{label}")),
                 contents: bytemuck::bytes_of(&params),
                 usage: wgpu::BufferUsages::UNIFORM,
@@ -4249,7 +4288,7 @@ fn build_dir_state(
         _pad: u32,
     }
     let w = dp.diffusion_tail_weight;
-    let lerp_clear_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let lerp_clear_params = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("dir_lerp_clear_params"),
         contents: bytemuck::bytes_of(&AddScaledParams {
             n_pixels: n_pixels as u32,
@@ -4286,7 +4325,7 @@ fn build_dir_state(
         bg: lerp_clear_bg,
     };
 
-    let lerp_acc_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let lerp_acc_params = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("dir_lerp_acc_params"),
         contents: bytemuck::bytes_of(&AddScaledParams {
             n_pixels: n_pixels as u32,
@@ -4321,7 +4360,7 @@ fn build_dir_state(
     };
 
     // ── 4. Subtract: buf_b -= buf_mix ────────────────────────────────
-    let subtract_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let subtract_params = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("dir_subtract_params"),
         contents: bytemuck::bytes_of(&AddScaledParams {
             n_pixels: n_pixels as u32,
@@ -4372,12 +4411,12 @@ fn build_dir_state(
         .iter()
         .flat_map(|r| r.iter().map(|&v| if v.is_nan() { 0.0 } else { v as f32 }))
         .collect();
-    let log_exp_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let log_exp_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("dir_density_log_exp"),
         contents: bytemuck::cast_slice(&log_exp_f32),
         usage: wgpu::BufferUsages::STORAGE,
     });
-    let curves_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let curves_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("dir_density_curves_0"),
         contents: bytemuck::cast_slice(&curves_f32),
         usage: wgpu::BufferUsages::STORAGE,
@@ -4400,7 +4439,7 @@ fn build_dir_state(
         gamma_inv: [(1.0 / dp.gamma_factor) as f32; 3],
         _pad: 0.0,
     };
-    let density_params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let density_params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("dir_density_params"),
         contents: bytemuck::bytes_of(&density_params),
         usage: wgpu::BufferUsages::UNIFORM,
@@ -4534,13 +4573,12 @@ fn build_unsharp_state(
     buf_b: &wgpu::Buffer,
     backend: &WgpuBackend,
 ) -> UnsharpState {
-    use wgpu::util::DeviceExt;
     let n_pixels = (width as usize) * (height as usize);
     let img_bytes = (n_pixels * 3 * 4) as u64;
 
     // Output buffer for the combine pass. Cleared each render — fine,
     // it's only used between the combine dispatch and the copy_buffer.
-    let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
+    let out_buf = device.create_buffer_t(&wgpu::BufferDescriptor {
         label: Some("unsharp_out"),
         size: img_bytes,
         usage: wgpu::BufferUsages::STORAGE
@@ -4582,7 +4620,7 @@ fn build_unsharp_state(
     let sum: f64 = kernel.iter().sum();
     let kernel_f32: Vec<f32> = kernel.into_iter().map(|v| (v / sum) as f32).collect();
 
-    let kernel_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let kernel_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("unsharp_blur_kernel"),
         contents: bytemuck::cast_slice(&kernel_f32),
         usage: wgpu::BufferUsages::STORAGE,
@@ -4601,14 +4639,14 @@ fn build_unsharp_state(
         radius,
         _pad: 0,
     };
-    let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("unsharp_blur_params"),
         contents: bytemuck::bytes_of(&params),
         usage: wgpu::BufferUsages::UNIFORM,
     });
     // Need a separate buffer for blur output since out_buf is the
     // combine destination. Use a small fresh allocation.
-    let blur_dst = device.create_buffer(&wgpu::BufferDescriptor {
+    let blur_dst = device.create_buffer_t(&wgpu::BufferDescriptor {
         label: Some("unsharp_blur_dst"),
         size: img_bytes,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
@@ -4683,7 +4721,7 @@ fn build_unsharp_state(
         _pad0: u32,
         _pad1: u32,
     }
-    let combine_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let combine_params = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("unsharp_combine_params"),
         contents: bytemuck::bytes_of(&CombineParams {
             n_pixels: n_pixels as u32,
@@ -4818,11 +4856,10 @@ fn build_glare_state(
     buf_b: &wgpu::Buffer,
     backend: &WgpuBackend,
 ) -> GlareState {
-    use wgpu::util::DeviceExt;
     let n_pixels = (width as usize) * (height as usize);
     let img_bytes = (n_pixels * 3 * 4) as u64;
 
-    let scratch = device.create_buffer(&wgpu::BufferDescriptor {
+    let scratch = device.create_buffer_t(&wgpu::BufferDescriptor {
         label: Some("glare_scratch"),
         size: img_bytes,
         usage: wgpu::BufferUsages::STORAGE
@@ -4847,7 +4884,7 @@ fn build_glare_state(
         mu: f32,
         sigma: f32,
     }
-    let gen_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let gen_params = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("glare_gen_params"),
         contents: bytemuck::bytes_of(&GenParams {
             n_pixels: n_pixels as u32,
@@ -4907,7 +4944,7 @@ fn build_glare_state(
         let sum: f64 = kernel.iter().sum();
         let kernel_f32: Vec<f32> = kernel.into_iter().map(|v| (v / sum) as f32).collect();
 
-        let kernel_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let kernel_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some("glare_blur_kernel"),
             contents: bytemuck::cast_slice(&kernel_f32),
             usage: wgpu::BufferUsages::STORAGE,
@@ -4926,7 +4963,7 @@ fn build_glare_state(
             radius,
             _pad: 0,
         };
-        let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some("glare_blur_params"),
             contents: bytemuck::bytes_of(&params),
             usage: wgpu::BufferUsages::UNIFORM,
@@ -5003,7 +5040,7 @@ fn build_glare_state(
         _pad2: u32,
         offset: [f32; 4],
     }
-    let apply_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let apply_params = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("glare_apply_params"),
         contents: bytemuck::bytes_of(&ApplyParams {
             n_pixels: n_pixels as u32,
@@ -5121,7 +5158,6 @@ fn build_gamut_state(
     n_pixels: u32,
     backend: &WgpuBackend,
 ) -> GamutState {
-    use wgpu::util::DeviceExt;
     let pipe = backend.cached_pipeline(
         include_str!("../../spektrafilm-shaders/wgsl/gamut_compress.wgsl"),
         &[
@@ -5145,7 +5181,7 @@ fn build_gamut_state(
         Some([t, l, p]) => [t, l, p, 1.0],
         None => [0.0, 1.0, 1.0, 0.0],
     };
-    let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("gamut_params"),
         contents: bytemuck::bytes_of(&GamutParams {
             n_pixels,
@@ -5165,7 +5201,7 @@ fn build_gamut_state(
     } else {
         gp.cmax.iter().map(|&v| v as f32).collect()
     };
-    let cmax_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let cmax_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("gamut_cmax"),
         contents: bytemuck::cast_slice(&cmax_f32),
         usage: wgpu::BufferUsages::STORAGE,
@@ -5242,7 +5278,6 @@ fn build_grain_state(
     buf_b: &wgpu::Buffer,
     backend: &WgpuBackend,
 ) -> GrainState {
-    use wgpu::util::DeviceExt;
     let n_pixels = (width as usize) * (height as usize);
 
     let grain_pipe = backend.cached_pipeline(
@@ -5284,7 +5319,7 @@ fn build_grain_state(
             0.0,
         ],
     };
-    let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("grain_params"),
         contents: bytemuck::bytes_of(&params),
         usage: wgpu::BufferUsages::UNIFORM,
@@ -5340,7 +5375,7 @@ fn build_grain_state(
         let sum: f64 = kernel.iter().sum();
         let kernel_f32: Vec<f32> = kernel.into_iter().map(|v| (v / sum) as f32).collect();
 
-        let kernel_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let kernel_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some("grain_blur_kernel"),
             contents: bytemuck::cast_slice(&kernel_f32),
             usage: wgpu::BufferUsages::STORAGE,
@@ -5359,7 +5394,7 @@ fn build_grain_state(
             radius,
             _pad: 0,
         };
-        let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some("grain_blur_params"),
             contents: bytemuck::bytes_of(&params),
             usage: wgpu::BufferUsages::UNIFORM,
