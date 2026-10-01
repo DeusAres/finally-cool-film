@@ -31,6 +31,8 @@ jobs:
           key: cargo-${{ hashFiles('engine/Cargo.lock', 'rust-toolchain.toml') }}
       - name: wasm-bindgen CLI (must match the crate version)
         run: command -v wasm-bindgen || cargo install wasm-bindgen-cli --version 0.2.100 --locked
+      - name: Syntax check (ES modules)
+        run: for f in web/*.js web/lib/*.js; do node --input-type=module --check < "$f" || { echo "::error file=$f::syntax error"; exit 1; }; done
       - name: Build
         run: ./scripts/build-web.sh
       - name: Cache-busting version stamp

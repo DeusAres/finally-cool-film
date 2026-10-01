@@ -21,17 +21,13 @@ struct P {
 @group(0) @binding(1) var smp: sampler;
 @group(0) @binding(2) var<uniform> p: P;
 @group(0) @binding(3) var<storage, read_write> outBuf: array<f32>;
-@group(0) @binding(4) var<storage, read> tone: array<f32>;   // tone.js `packed`: gain ++ scene, over sqrt(display linear)
+@group(0) @binding(4) var<storage, read> tone: array<f32>;   // tone.js 'packed': gain ++ scene, over sqrt(display linear)
 
 fn lut(base: u32, v: f32) -> f32 {             // same lookup as tone.js
   let f = sqrt(clamp(v, 0.0, 1.0)) * ${TONE_SQRT_N}.0;
   let i = u32(f);
   if (i >= ${TONE_SQRT_N}u) { return tone[base + ${TONE_SQRT_N}u]; }
   return mix(tone[base + i], tone[base + i + 1u], f - f32(i));
-}.0;
-  let i = u32(f);
-  if (i >= ${TONE_SQRT_N}u) { return tone[${TONE_SQRT_N}u]; }
-  return mix(tone[i], tone[i + 1u], f - f32(i));
 }
 
 fn at(pos: vec2<f32>) -> vec4<f32> {           // pos in frame pixel coords (pixel centres at integers)
