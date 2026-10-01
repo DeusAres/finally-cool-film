@@ -5,6 +5,7 @@ import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debug
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, inputUniform } from './lib/lens-gpu.js';
+import { dustField, drawDust, compositeDust } from './lib/dust.js';
 
 const PREVIEW_LONG_SIDE = 2000;   // display canvas cap (bigger canvases make iOS compositing crash when zoomed)
 const GRAIN_AREA_UM2 = 0.2;       // engine default AgX particle area
@@ -186,10 +187,48 @@ function drawHistogram(img) {
   histo.style.display = 'block';
 }
 
+// ---------- dust & scratches (separate layer, dust.js) ----------
+// Drawn over the preview by the compositor and into the export strips; never
+// touches the engine render, so moving the slider or reseeding is instant.
+
+const dustLayer = $('dustLayer'), dctx = dustLayer.getContext('2d');
+const dustAmount = () => +$('dust').value;
+function dustMarks() {
+  const { w, h } = photo.preview, key = `${photo.dustSeed}|${w}x${h}`;
+  if (photo.dustKey !== key) { photo.dust = dustField(photo.dustSeed, Math.max(w, h) / Math.min(w, h)); photo.dustKey = key; }
+  return photo.dust;
+}
+function drawDustLayer() {
+  if (!photo) return;
+  const { w, h } = photo.preview;
+  if (dustLayer.width !== w || dustLayer.height !== h) {
+    dustLayer.width = w; dustLayer.height = h;
+    dustLayer.style.width = w + 'px'; dustLayer.style.height = h + 'px';
+  }
+  dctx.clearRect(0, 0, w, h);
+  const a = dustAmount();
+  dustLayer.style.display = a > 0 && !showingBefore ? 'block' : 'none';
+  if (a > 0) drawDust(dctx, dustMarks(), a, w, h);
+}
+const newDustSeed = () => (Math.random() * 2 ** 32) >>> 0;
+
+/** Composite the dust layer into an RGB strip (rows y0.. of a w×h export). */
+function dustIntoStrip(strip, w, h, y0, rows) {
+  const a = dustAmount();
+  if (!a) return;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = rows;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  drawDust(x, dustMarks(), a, w, h, 0, y0);
+  compositeDust(strip, x.getImageData(0, 0, w, rows).data);
+  c.width = c.height = 0;
+}
+
 let showingBefore = false;
 function showBefore(on) {
   if (!photo?.after) return;
   showingBefore = on;
+  drawDustLayer();
   const img = on ? photo.preview.before : photo.after;
   ctx.putImageData(img, 0, 0);
   drawHistogram(img);
@@ -206,7 +245,7 @@ const MIN_ZOOM = 0.05, MAX_ZOOM = 6;
 let zoom = 1, panX = 0, panY = 0, fitted = true;
 
 function applyTransform() {
-  view.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+  view.style.transform = dustLayer.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
   // 100% = one image pixel per device pixel.
   $('zoomLabel').textContent = photo ? `${Math.round(zoom * devicePixelRatio * 100)}%` : '';
 }
@@ -315,7 +354,7 @@ async function loadPhoto(file) {
     const preview = decodeRGBA(bitmap, PREVIEW_LONG_SIDE);
     preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
     log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
-    photo = { file, bitmap, preview };
+    photo = { file, bitmap, preview, dustSeed: newDustSeed() };
     if (gpu) {
       preview.clip = clipMask(bitmap, preview.w, preview.h);   // full-res clipping, see common.js
       sf.set_frame(withAlpha(preview.data, preview.clip), preview.w, preview.h);
@@ -324,6 +363,7 @@ async function loadPhoto(file) {
     view.width = preview.w; view.height = preview.h;
     view.style.width = preview.w + 'px'; view.style.height = preview.h + 'px';
     view.style.display = 'block'; $('empty').style.display = 'none'; $('tools').hidden = false;
+    drawDustLayer();
     ctx.putImageData(preview.before, 0, 0);
     drawHistogram(preview.before);
     fitToScreen();
@@ -414,6 +454,7 @@ async function exportFull() {
           for (let x = 0; x < cw; x++, src += 4) { strip[dst++] = tile[src]; strip[dst++] = tile[src + 1]; strip[dst++] = tile[src + 2]; }
         }
       }
+      dustIntoStrip(strip, w, h, ty, ch);
       encoder.postMessage({ cmd: 'rows', rgb: strip.buffer }, [strip.buffer]);
       log(`strip ${s + 1}/${strips} sent`);
     }
@@ -474,15 +515,24 @@ const FORMAT = {
   ca: (v) => (v === 0 ? 'off' : `${Math.round(v * 100)}`),
   vignette: (v) => (v === 0 ? 'off' : `${Math.round(v * 100)}`),
   falloff: (v) => `${Math.round(v * 100)}`,
+  dust: (v) => (v === 0 ? 'off' : `${Math.round(v * 100)}`),
 };
-const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 1, halation: 1, ca: 0, vignette: 0, falloff: 0.4 };
+const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 1, halation: 1, ca: 0, vignette: 0, falloff: 0.4, dust: 0 };
+const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }
 
 for (const id of Object.keys(FORMAT)) {
-  $(id).addEventListener('input', () => { syncOutputs(); render(); });
+  const update = () => { syncOutputs(); if (OVERLAY_ONLY.has(id)) drawDustLayer(); else render(); };
+  $(id).addEventListener('input', update);
   // Double-tap the label to reset a slider.
-  $(id).previousElementSibling.addEventListener('dblclick', () => { $(id).value = DEFAULTS[id]; syncOutputs(); render(); });
+  $(id).previousElementSibling.addEventListener('dblclick', () => { $(id).value = DEFAULTS[id]; update(); });
 }
+$('reseed').addEventListener('click', () => {
+  if (!photo) return;
+  photo.dustSeed = newDustSeed();
+  if (!dustAmount()) { $('dust').value = 0.5; syncOutputs(); }
+  drawDustLayer();
+});
 $('pick').addEventListener('change', (e) => loadPhoto(e.target.files[0]));
 $('newPhoto').addEventListener('click', () => $('pick').click());
 $('auto').addEventListener('click', () => runAuto());

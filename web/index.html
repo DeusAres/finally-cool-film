@@ -29,6 +29,8 @@
   #stage { flex: 1; min-height: 0; position: relative; overflow: hidden; touch-action: none; }
   #wrap { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
   #view { display: none; flex: none; transform-origin: center center; will-change: transform; }
+  /* Dust layer: same size and transform as #view; an abs-pos flex child is centred like it. */
+  #dustLayer { position: absolute; display: none; transform-origin: center center; will-change: transform; pointer-events: none; }
   #empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
          justify-content: center; gap: 12px; color: var(--muted); text-align: center; padding: 16px; }
   #empty .btn { font-size: 17px; padding: 14px 24px; }
@@ -81,7 +83,7 @@
 </header>
 
 <div id="stage">
-  <div id="wrap"><canvas id="view"></canvas></div>
+  <div id="wrap"><canvas id="view"></canvas><canvas id="dustLayer"></canvas></div>
   <div id="empty">
     <label class="btn">Scegli foto<input type="file" id="pick" accept="image/*"></label>
     <div>Pizzica per zoomare · trascina per spostarti<br>tieni premuto “A/B” per l’originale</div>
@@ -110,6 +112,9 @@
   <div class="row"><label for="ca">Aberrazione</label><input type="range" id="ca" min="0" max="1" step="0.01" value="0"><output for="ca"></output></div>
   <div class="row"><label for="vignette">Vignettatura</label><input type="range" id="vignette" min="0" max="1" step="0.01" value="0"><output for="vignette"></output></div>
   <div class="row"><label for="falloff">Falloff</label><input type="range" id="falloff" min="0" max="1" step="0.01" value="0.4"><output for="falloff"></output></div>
+  <div class="section">Polvere e graffi</div>
+  <div class="row"><label for="dust">Quantità</label><input type="range" id="dust" min="0" max="1" step="0.01" value="0"><output for="dust"></output></div>
+  <div class="row check"><label><span class="chip" id="reseed">Rimescola</span></label></div>
   <div class="section">Export</div>
   <div class="row check"><label><input type="checkbox" id="border"> Bordo bianco (1% del lato lungo)</label></div>
 </div>
