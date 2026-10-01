@@ -69,21 +69,21 @@ export function decodeRGBA(bitmap, longSide = Infinity) {
  * values are turned into scene light first; without it they are just decoded.
  */
 export function extractLinear(data, W, p3, x0 = 0, y0 = 0, w = W, h = data.length / 4 / W, scale = 1, tone = null) {
+  // CPU path (the app normally does this on the GPU, lens-gpu.js). Matrix as
+  // scalars (identity when not P3) so the hot loop has no nested-array lookups.
   const rgb = new Float32Array(w * h * 3), px = new Float32Array(3);
-  const M = P3_TO_REC2020;
+  const M = p3 ? P3_TO_REC2020 : [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  const a0 = M[0][0] * scale, a1 = M[0][1] * scale, a2 = M[0][2] * scale;
+  const b0 = M[1][0] * scale, b1 = M[1][1] * scale, b2 = M[1][2] * scale;
+  const c0 = M[2][0] * scale, c1 = M[2][1] * scale, c2 = M[2][2] * scale;
   let j = 0;
   for (let y = y0; y < y0 + h; y++) {
     for (let i = (y * W + x0) * 4, end = i + w * 4; i < end; i += 4, j += 3) {
       let r = LIN8[data[i]], g = LIN8[data[i + 1]], b = LIN8[data[i + 2]];
       if (tone) { applyTone(tone, r, g, b, px, 0); r = px[0]; g = px[1]; b = px[2]; }
-      r *= scale; g *= scale; b *= scale;
-      if (p3) {
-        rgb[j] = M[0][0] * r + M[0][1] * g + M[0][2] * b;
-        rgb[j + 1] = M[1][0] * r + M[1][1] * g + M[1][2] * b;
-        rgb[j + 2] = M[2][0] * r + M[2][1] * g + M[2][2] * b;
-      } else {
-        rgb[j] = r; rgb[j + 1] = g; rgb[j + 2] = b;
-      }
+      rgb[j] = a0 * r + a1 * g + a2 * b;
+      rgb[j + 1] = b0 * r + b1 * g + b2 * b;
+      rgb[j + 2] = c0 * r + c1 * g + c2 * b;
     }
   }
   return rgb;
@@ -100,12 +100,22 @@ export function readPixels(bitmap, longSide = Infinity) {
 /** Engine output → 8-bit: through `out8` (tone.js, 4096 entries over 0..1) or a plain scale. */
 export const to8 = (v, out8) => (out8 ? out8[v <= 0 ? 0 : v >= 1 ? 4095 : (v * 4095 + 0.5) | 0] : v * 255);
 
-/** Engine output (sRGB-encoded floats, interleaved RGB) → RGBA ImageData. */
-export function toImageData(out, w, h, out8) {
-  const img = new ImageData(w, h);
-  const d = img.data;
-  for (let i = 0, j = 0; i < d.length; i += 4, j += 3) {
-    d[i] = to8(out[j], out8); d[i + 1] = to8(out[j + 1], out8); d[i + 2] = to8(out[j + 2], out8); d[i + 3] = 255;
+const LINEAR8 = Uint8ClampedArray.from({ length: 4096 }, (_, i) => Math.round(i * 255 / 4095));
+
+/**
+ * Engine output (sRGB-encoded floats, interleaved RGB) → RGBA ImageData, through
+ * `out8` (or a plain scale). One 32-bit store per pixel (little-endian RGBA);
+ * pass `target` to reuse an ImageData of the same size instead of allocating.
+ */
+export function toImageData(out, w, h, out8, target) {
+  const img = target && target.width === w && target.height === h ? target : new ImageData(w, h);
+  const d32 = new Uint32Array(img.data.buffer), L = out8 || LINEAR8;
+  for (let p = 0, j = 0, n = w * h; p < n; p++, j += 3) {
+    let r = out[j] * 4095 + 0.5, g = out[j + 1] * 4095 + 0.5, b = out[j + 2] * 4095 + 0.5;
+    r = r < 0 ? 0 : r > 4095 ? 4095 : r | 0;
+    g = g < 0 ? 0 : g > 4095 ? 4095 : g | 0;
+    b = b < 0 ? 0 : b > 4095 ? 4095 : b | 0;
+    d32[p] = (L[r] | (L[g] << 8) | (L[b] << 16) | 0xff000000) >>> 0;
   }
   return img;
 }

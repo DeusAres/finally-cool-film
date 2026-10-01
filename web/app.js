@@ -91,9 +91,12 @@ async function ensureTone(u) {
 // Applied to the light reaching the film (engine input), in frame coordinates.
 
 /** Scene-light engine input for a region of the frame currently loaded in the lens stage. */
-async function lensInput(frame, x0, y0, w, h, lens) {
+// On the GPU even with the lens off (zero CA / vignette = tone + matrix only):
+// the per-pixel tone lookups are ~20x faster there than in JS. `target` is
+// reused between calls.
+async function lensInput(frame, x0, y0, w, h, lens, target) {
+  if (lensGpu) return lensGpu.extract(frame.p3, x0, y0, w, h, 1, lens, tone, target);
   if (!lensActive(lens)) return extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, 1, tone);
-  if (lensGpu) return lensGpu.extract(frame.p3, x0, y0, w, h, 1, lens, tone);
   return extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lensGeometry(frame.w, frame.h, lens), tone);
 }
 
@@ -102,9 +105,18 @@ async function updatePreviewInput(u) {
   const key = JSON.stringify(lensOf(u)) + toneKey;
   if (photo.inputKey === key) return;
   const pv = photo.preview, t = performance.now();
-  pv.rgb = await lensInput(pv, 0, 0, pv.w, pv.h, lensOf(u));
+  pv.rgb = await lensInput(pv, 0, 0, pv.w, pv.h, lensOf(u), pv.rgb);
   photo.inputKey = key;
-  if (lensActive(lensOf(u))) log(`lens ${JSON.stringify(lensOf(u))} ${Math.round(performance.now() - t)} ms (${lensGpu ? 'gpu' : 'cpu'})`);
+  return performance.now() - t;
+}
+
+/** Engine run on `img` → 8-bit `target` (RGBA ImageData or RGB Uint8Array) through tone.out8. */
+async function run8(img, target, rgba) {
+  const bytes = rgba ? new Uint8Array(target.data.buffer) : target;
+  if (gpu) return engine.process_gpu_8(img.rgb, img.w, img.h, tone.out8, bytes, rgba);
+  const out = engine.process(img.rgb, img.w, img.h);
+  if (rgba) return void toImageData(out, img.w, img.h, tone.out8, target);
+  for (let i = 0; i < out.length; i++) bytes[i] = to8(out[i], tone.out8);
 }
 
 // ---------- auto ----------
@@ -128,14 +140,17 @@ async function render() {
     do {
       dirty = false;
       const u = ui();
-      const t = performance.now();
+      const pv = photo.preview, t0 = performance.now();
       await ensureTone(u);
-      await updatePreviewInput(u);
+      const tIn = (await updatePreviewInput(u)) || 0;
+      const t1 = performance.now();
       engine.update(JSON.stringify(renderParams(u)));
-      const out = await run(photo.preview);
-      photo.after = toImageData(out, photo.preview.w, photo.preview.h, tone.out8);
+      if (photo.after?.width !== pv.w || photo.after?.height !== pv.h) photo.after = new ImageData(pv.w, pv.h);
+      await run8(pv, photo.after, true);
+      const t2 = performance.now();
       if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); }
-      status(`${photo.preview.w}×${photo.preview.h} · ${Math.round(performance.now() - t)} ms${gpu ? '' : ' (CPU)'}`);
+      const t3 = performance.now(), ms = (v) => Math.round(v);
+      status(`${pv.w}×${pv.h} · ${ms(t3 - t0)} ms (input ${ms(tIn)} · film ${ms(t2 - t1)} · display ${ms(t3 - t2)})${gpu ? '' : ' CPU'}`);
     } while (dirty);
   } catch (e) {
     log('render error: ' + (e?.stack || e));
@@ -379,6 +394,7 @@ async function exportFull() {
     const longSide = Math.max(w, h);
     const strips = Math.ceil(h / EXPORT_TILE), cols = Math.ceil(w / EXPORT_TILE);
 
+    let inBuf = null, tileBuf = null;   // reused across tiles
     encoderError = null;
     const done = new Promise((resolve, reject) => { encoderDone = { resolve, reject }; });
     done.catch(() => {});
@@ -396,11 +412,13 @@ async function exportFull() {
         engine.update(JSON.stringify(deepMerge(renderParams(u), {
           camera: { film_format_mm: FILM_FORMAT_MM * Math.max(tw, th) / longSide },
         })));
-        const out = await run({ rgb: await lensInput(frame, x0, y0, tw, th, lensOf(u)), w: tw, h: th });
+        inBuf = await lensInput(frame, x0, y0, tw, th, lensOf(u), inBuf);
+        const tile = (tileBuf = tileBuf?.length >= tw * th * 3 ? tileBuf : new Uint8Array(tw * th * 3)).subarray(0, tw * th * 3);
+        await run8({ rgb: inBuf, w: tw, h: th }, tile, false);
         const cw = Math.min(EXPORT_TILE, w - tx);
         for (let y = 0; y < ch; y++) {
-          let src = ((ty - y0 + y) * tw + (tx - x0)) * 3, dst = (y * w + tx) * 3;
-          for (let i = 0; i < cw * 3; i++) strip[dst++] = to8(out[src++], tone.out8);
+          const src = ((ty - y0 + y) * tw + (tx - x0)) * 3;
+          strip.set(tile.subarray(src, src + cw * 3), (y * w + tx) * 3);
         }
       }
       encoder.postMessage({ cmd: 'rows', rgb: strip.buffer }, [strip.buffer]);
@@ -427,6 +445,7 @@ async function exportFull() {
   } finally {
     setBusy(null);
     exporting = false;
+    lensGpu?.trim();   // drop the tile-sized GPU buffers
     lensGpu?.setFrame(photo.preview.data, photo.preview.w, photo.preview.h);   // back to the preview frame
     $('export').disabled = false;
     engine?.update(JSON.stringify(renderParams(ui())));   // back to preview params

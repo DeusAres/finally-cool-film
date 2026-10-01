@@ -120,6 +120,52 @@ impl Engine {
             Ok(js_sys::Float32Array::from(out.data.as_slice()).into())
         }))
     }
+
+    /// GPU-resident run straight to 8 bit: each sRGB-encoded output value v
+    /// becomes `lut[round(v * 4095)]` (4096 entries) and is written into `out`,
+    /// interleaved RGBA (alpha 255, e.g. an `ImageData` buffer) when `rgba`,
+    /// else RGB. Skips the float array on the JS side entirely (a third of the
+    /// bytes crossing the boundary, no per-pixel JS). Resolves to undefined.
+    pub fn process_gpu_8(
+        &self,
+        rgb: Vec<f32>,
+        width: u32,
+        height: u32,
+        lut: Vec<u8>,
+        out: js_sys::Uint8Array,
+        rgba: bool,
+    ) -> Result<js_sys::Promise, JsError> {
+        if lut.len() != 4096 {
+            return Err(JsError::new("lut must have 4096 entries"));
+        }
+        let ch = if rgba { 4 } else { 3 };
+        if out.length() as usize != width as usize * height as usize * ch {
+            return Err(JsError::new("output buffer size mismatch"));
+        }
+        let gpu = GPU
+            .with(|g| g.borrow().clone())
+            .ok_or_else(|| JsError::new("GPU not initialised"))?;
+        let image = ImageBuf::from_data(width, height, rgb);
+        self.pipeline()
+            .process_resident_borrowed(&image, gpu.as_ref())
+            .ok_or_else(|| JsError::new("GPU-resident path unavailable for these params"))?;
+        Ok(wasm_bindgen_futures::future_to_promise(async move {
+            let res = gpu
+                .take_readback()
+                .await
+                .ok_or_else(|| JsValue::from_str("GPU readback failed"))?;
+            let q = |v: f32| lut[(v * 4095.0 + 0.5).clamp(0.0, 4095.0) as usize];
+            let src = res.data.as_slice();
+            let mut dst = vec![255u8; src.len() / 3 * ch];
+            for (o, i) in dst.chunks_exact_mut(ch).zip(src.chunks_exact(3)) {
+                o[0] = q(i[0]);
+                o[1] = q(i[1]);
+                o[2] = q(i[2]);
+            }
+            out.copy_from(&dst);
+            Ok(JsValue::UNDEFINED)
+        }))
+    }
 }
 
 fn merge(dst: &mut serde_json::Value, src: serde_json::Value) {

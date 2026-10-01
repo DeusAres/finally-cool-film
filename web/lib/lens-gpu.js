@@ -128,7 +128,8 @@ export class LensGPU {
 
   /** Same contract as lens.js extractLens, for the frame last passed to setFrame. */
   /** `tone` (tone.js) turns display-linear samples into scene light; null = identity. */
-  async extract(p3, x0, y0, w, h, scale, lens, tone = null) {
+  /** Writes into `target` when it is big enough (returns a view of exactly w*h*3). */
+  async extract(p3, x0, y0, w, h, scale, lens, tone = null, target = null) {
     const { device, frame } = this;
     const geo = lensGeometry(frame.W, frame.H, lens);
     const M = P3_TO_REC2020;
@@ -140,8 +141,7 @@ export class LensGPU {
       ...M[0], 0, ...M[1], 0, ...M[2], 0,
     ]));
     const bytes = w * h * 3 * 4;
-    const out = device.createBuffer({ size: bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-    const read = device.createBuffer({ size: bytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const { out, read } = this.buffers(bytes);
     const bind = device.createBindGroup({
       layout: this.pipeline.getBindGroupLayout(0),
       entries: [
@@ -160,9 +160,30 @@ export class LensGPU {
     pass.end();
     enc.copyBufferToBuffer(out, 0, read, 0, bytes);
     device.queue.submit([enc.finish()]);
-    await read.mapAsync(GPUMapMode.READ);
-    const rgb = new Float32Array(read.getMappedRange().slice(0));
-    read.unmap(); read.destroy(); out.destroy();
+    await read.mapAsync(GPUMapMode.READ, 0, bytes);
+    const n = w * h * 3;
+    if (!target || target.length < n) target = new Float32Array(n);
+    const rgb = target.length === n ? target : target.subarray(0, n);
+    rgb.set(new Float32Array(read.getMappedRange(0, bytes)));
+    read.unmap();
     return rgb;
   }
+
+  // Storage + readback buffers, kept between calls (allocating ~36 MB per
+  // call costs more than the shader itself); grown when a bigger region comes.
+  buffers(bytes) {
+    if (!this.bufs || this.bufs.size < bytes) {
+      this.bufs?.out.destroy(); this.bufs?.read.destroy();
+      const size = Math.ceil(bytes / 4096) * 4096;
+      this.bufs = {
+        size,
+        out: this.device.createBuffer({ size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC }),
+        read: this.device.createBuffer({ size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
+      };
+    }
+    return this.bufs;
+  }
+
+  /** Free the cached buffers (e.g. after an export at full resolution). */
+  trim() { this.bufs?.out.destroy(); this.bufs?.read.destroy(); this.bufs = null; }
 }
