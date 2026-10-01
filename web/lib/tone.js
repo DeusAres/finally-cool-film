@@ -15,15 +15,17 @@
 // lands on display white, as a lab scanner sets its white point. Shadows compress
 // linearly into the paper's real maximum density (scanner black correction off):
 // blacks are never pure, as on any print.
-// `ev` is a midtone exposure: a bell in log space centred on mid grey, so the
-// mids move a lot and shadows / highlights little; applied before the shoulder,
-// it cannot clip highlights.
+// Before the inversion, a display tone curve shapes the result (displayCurve):
+// a monotone spline in log space (EV around mid grey) whose control points make
+// `ev` move the mids a lot and shadows / lights little, and whose `rolloff`
+// lowers the lights and makes white an asymptote reached with slope < 1 — a soft
+// shoulder that lets the mids climb without clipping the highlights.
 import { LIN8 } from './color.js';
 
 const LO = -12, HI = 8, N = 81;      // patch exposures: log2(s / 0.18), EV
 const PATCH = 64, COLS = 9;          // 9×9 grid of 64 px patches, one engine run
-const KNEE = 0.6, TOP = 0.985;       // identity below KNEE·G, shoulder up to TOP·G
-const MID_SIGMA = 2.2;               // EV width of the midtone exposure bell
+const KNEE = 0.85, TOP = 0.985;      // numerical guard only: F is flat near paper white
+const XW = Math.log2(1 / 0.18);      // display white, EV above mid grey (2.47)
 const SQRT_N = 1024;                 // LUT over sqrt(display linear) for interpolated samples
 
 const lin = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
@@ -70,11 +72,49 @@ function inverse(T, d) {
   return logS[a] + f * (logS[b] - logS[a]);
 }
 
-/** Scene-linear value for display-linear d. */
-function sceneValue(T, d, look, ev) {
-  const x = Math.log2(Math.max(d, 1e-5) / 0.18);
-  d = 0.18 * 2 ** (x + ev * Math.exp(-(x * x) / (2 * MID_SIGMA * MID_SIGMA)));
-  return 0.18 * 2 ** ((1 - look) * inverse(T, Math.min(d, 1)) + look * Math.log2(d / 0.18));
+// Monotone cubic Hermite through points [x, y] with slopes M (null = average of
+// the neighbouring secants), limited Fritsch–Carlson style so it never overshoots.
+function monotoneSpline(P, M) {
+  const n = P.length, d = [];
+  for (let i = 0; i < n - 1; i++) d.push((P[i + 1][1] - P[i][1]) / (P[i + 1][0] - P[i][0]));
+  const m = M.map((v, i) => (v ?? (i === 0 ? d[0] : i === n - 1 ? d[n - 2] : (d[i - 1] + d[i]) / 2)));
+  for (let i = 0; i < n - 1; i++) {
+    if (d[i] <= 0) { m[i] = m[i + 1] = 0; continue; }
+    const a = m[i] / d[i], b = m[i + 1] / d[i], h = a * a + b * b;
+    if (h > 9) { const t = 3 / Math.sqrt(h); m[i] = t * a * d[i]; m[i + 1] = t * b * d[i]; }
+  }
+  return (x) => {
+    if (x <= P[0][0]) return P[0][1] + (x - P[0][0]) * m[0];
+    if (x >= P[n - 1][0]) return P[n - 1][1];
+    let i = 0; while (x > P[i + 1][0]) i++;
+    const h = P[i + 1][0] - P[i][0], t = (x - P[i][0]) / h, t2 = t * t, t3 = t2 * t;
+    return (2 * t3 - 3 * t2 + 1) * P[i][1] + (t3 - 2 * t2 + t) * h * m[i] + (-2 * t3 + 3 * t2) * P[i + 1][1] + (t3 - t2) * h * m[i + 1];
+  };
+}
+
+/**
+ * Display tone curve in log2 space around mid grey (x = log2(d / 0.18)):
+ *   deep shadows fixed, shadows +0.15·ev, mids +0.9·ev;
+ *   above the mids a concave shoulder: slope starts at (1 + 0.25·rolloff)× the
+ *   mid→white secant and falls to (1 − 0.6·rolloff)× at white, so the lights
+ *   spread evenly and white is approached gently (no band where the iPhone
+ *   clipped); with full rolloff white lands just below 1, like paper.
+ */
+function displayCurve(ev, rolloff) {
+  const mid = 0.9 * ev, white = XW - 0.06 * rolloff;
+  const shadows = Math.min(mid - 0.25 * 3.5, -3.5 + 0.15 * ev);
+  const secant = (white - mid) / XW;
+  return monotoneSpline(
+    [[-10, -10], [-3.5, shadows], [0, mid], [XW, white]],
+    [1, null, secant * (1 + 0.25 * rolloff), secant * (1 - 0.6 * rolloff)],
+  );
+}
+
+/** Scene-linear value for display-linear d, through the display curve `curve`. */
+function sceneValue(T, d, look, curve) {
+  const y = curve(Math.log2(Math.max(d, 1e-5) / 0.18));
+  const dc = 0.18 * 2 ** y;
+  return 0.18 * 2 ** ((1 - look) * inverse(T, Math.min(dc, 1)) + look * y);
 }
 
 /**
@@ -98,10 +138,11 @@ export function autoTone(Ys) {
  *   lutSqrt[i]          display-linear c = (i/SQRT_N)² → scene-linear (for interpolated samples)
  *   out8[i]             engine output (sRGB-encoded, i/4095) → display 8-bit after the white stretch
  */
-export function buildTone(T, { look, ev }) {
-  const lut8 = Float32Array.from(LIN8, (d) => sceneValue(T, d, look, ev));
+export function buildTone(T, { look, ev, rolloff = 0.6 }) {
+  const curve = displayCurve(ev, rolloff);
+  const lut8 = Float32Array.from(LIN8, (d) => sceneValue(T, d, look, curve));
   const lutSqrt = new Float32Array(SQRT_N + 1);
-  for (let i = 0; i <= SQRT_N; i++) lutSqrt[i] = sceneValue(T, (i / SQRT_N) ** 2, look, ev);
+  for (let i = 0; i <= SQRT_N; i++) lutSqrt[i] = sceneValue(T, (i / SQRT_N) ** 2, look, curve);
   // White stretch, plus a soft floor at the paper black: scanner sharpening and
   // grain can undershoot locally, but a print is never darker than its Dmax.
   const out8 = new Uint8ClampedArray(4096), f = T.floor * 0.85;
@@ -119,3 +160,6 @@ export function sceneFromLinear(lutSqrt, c) {
 }
 
 export const TONE_SQRT_N = SQRT_N;
+
+/** For inspection/tests: the display curve as a function of display-linear d. */
+export const displayTone = (ev, rolloff) => { const c = displayCurve(ev, rolloff); return (d) => 0.18 * 2 ** c(Math.log2(Math.max(d, 1e-5) / 0.18)); };

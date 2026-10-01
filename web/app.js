@@ -32,7 +32,7 @@ let rendering = false, dirty = false, exporting = false;
 // ---------- params ----------
 
 const ui = () => ({
-  ev: +$('ev').value, look: +$('look').value,
+  ev: +$('ev').value, look: +$('look').value, rolloff: +$('rolloff').value,
   mshift: +$('mshift').value, yshift: +$('yshift').value,
   grain: +$('grain').value, halation: +$('halation').value,
   ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value,
@@ -72,7 +72,7 @@ const run = (img) => (gpu ? engine.process_gpu(img.rgb, img.w, img.h) : Promise.
 // ---------- tone ----------
 // Measure the pipeline's grey transfer once per calibration (one render of a
 // 81-patch grey chart), then build the scene-reconstruction / white-point LUTs
-// for the current Contrasto (look) and Esposizione (midtone ev). See tone.js.
+// for the current Contrasto (look), Esposizione (midtone ev) and Alte luci (rolloff). See tone.js.
 
 async function ensureTone(u) {
   ensureEngine(u);
@@ -83,8 +83,8 @@ async function ensureTone(u) {
     transferKey = engineCalib;
     log(`transfer measured ${Math.round(performance.now() - t)} ms: white Y ${transfer.white.toFixed(3)}, black ${transfer.floor.toFixed(4)}`);
   }
-  const key = `${transferKey}|${u.look}|${u.ev}`;
-  if (key !== toneKey) { tone = buildTone(transfer, { look: u.look, ev: u.ev }); toneKey = key; }
+  const key = `${transferKey}|${u.look}|${u.ev}|${u.rolloff}`;
+  if (key !== toneKey) { tone = buildTone(transfer, { look: u.look, ev: u.ev, rolloff: u.rolloff }); toneKey = key; }
 }
 
 // ---------- lens ----------
@@ -453,6 +453,7 @@ function status(msg) { $('status').textContent = msg; }
 const FORMAT = {
   ev: (v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}`,
   look: (v) => `${Math.round(v * 100)}`,
+  rolloff: (v) => `${Math.round(v * 100)}`,
   mshift: (v) => `${v > 0 ? '+' : ''}${v}`,
   yshift: (v) => `${v > 0 ? '+' : ''}${v}`,
   grain: (v) => (v === 0 ? 'off' : `${v.toFixed(1)}×`),
@@ -461,7 +462,7 @@ const FORMAT = {
   vignette: (v) => (v === 0 ? 'off' : `${Math.round(v * 100)}`),
   falloff: (v) => `${Math.round(v * 100)}`,
 };
-const DEFAULTS = { ev: 0, look: 0.35, mshift: 0, yshift: 0, grain: 1, halation: 1, ca: 0, vignette: 0, falloff: 0.4 };
+const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 1, halation: 1, ca: 0, vignette: 0, falloff: 0.4 };
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }
 
 for (const id of Object.keys(FORMAT)) {
