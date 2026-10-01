@@ -1,11 +1,12 @@
-import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, extractLinear, readPixels, toImageData, srgbToLinear } from './lib/common.js';
+import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, extractLinear, readPixels, toImageData, to8 } from './lib/common.js';
+import { transferChart, readTransfer, buildTone, autoTone } from './lib/tone.js';
+import { LIN8 } from './lib/color.js';
 import { log, logText, clearLog, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { LensGPU } from './lib/lens-gpu.js';
 
 const PREVIEW_LONG_SIDE = 2000;   // display canvas cap (bigger canvases make iOS compositing crash when zoomed)
-const FIT_LONG_SIDE = 256;        // proxy used by the auto-lab fit
 const GRAIN_AREA_UM2 = 0.2;       // engine default AgX particle area
 const FILM_FORMAT_MM = 35;        // engine default; sets the physical pixel size
 const EXPORT_TILE = 1024;         // export tile core size (px)
@@ -23,14 +24,15 @@ let gpu = false;
 let lensGpu = null;          // WebGPU lens stage (CPU fallback in lens.js)
 let engine = null;          // sf.Engine for the current photo + calibration
 let engineCalib = '';       // JSON of the calibration params `engine` was built with
-let photo = null;           // { file, bitmap, preview, fit, after }
-let auto = { pe: 1, gamma: 1 };
+let photo = null;           // { file, bitmap, preview, after, inputKey }
+let transfer = null, transferKey = '';   // measured grey transfer of the pipeline (per calibration)
+let tone = null, toneKey = '';           // LUTs for the current transfer + look + ev
 let rendering = false, dirty = false, exporting = false;
 
 // ---------- params ----------
 
 const ui = () => ({
-  ev: +$('ev').value, contrast: +$('contrast').value,
+  ev: +$('ev').value, look: +$('look').value,
   mshift: +$('mshift').value, yshift: +$('yshift').value,
   grain: +$('grain').value, halation: +$('halation').value,
   ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value,
@@ -42,13 +44,13 @@ const lensOf = (u) => ({ ca: u.ca * u.ca, vignette: u.vignette, falloff: u.fallo
 const calibParams = (u) => ({ enlarger: { m_filter_shift: u.mshift, y_filter_shift: u.yshift } });
 
 // Everything else is read at render time and goes through `engine.update`.
-// Scanner levels map paper black/white to the output range (lab-scan style).
-function renderParams(u, { pe, gamma }, { noGrain = false } = {}) {
+// Tone is handled by tone.js on the input (scene reconstruction) and output
+// (white point), so the engine runs at fixed exposure with no auto-exposure,
+// no print-curve morph and no scanner levels: the paper's real black stays.
+function renderParams(u, { noGrain = false } = {}) {
   return {
-    camera: { auto_exposure: true, film_format_mm: FILM_FORMAT_MM },
-    scanner: { black_correction: true, white_correction: true },
-    enlarger: { print_exposure: pe * 2 ** -u.ev },
-    print_render: { density_curves_morph: { active: true, gamma_factor: gamma * 2 ** (u.contrast * 0.5) } },
+    camera: { auto_exposure: false, film_format_mm: FILM_FORMAT_MM },
+    scanner: { black_correction: false, white_correction: false },
     film_render: {
       grain: { active: !noGrain && u.grain > 0, agx_particle_area_um2: GRAIN_AREA_UM2 * Math.max(u.grain, 0.01) },
       halation: { active: u.halation > 0, halation_amount: u.halation },
@@ -67,88 +69,53 @@ function ensureEngine(u) {
 
 const run = (img) => (gpu ? engine.process_gpu(img.rgb, img.w, img.h) : Promise.resolve(engine.process(img.rgb, img.w, img.h)));
 
+// ---------- tone ----------
+// Measure the pipeline's grey transfer once per calibration (one render of a
+// 81-patch grey chart), then build the scene-reconstruction / white-point LUTs
+// for the current Contrasto (look) and Esposizione (midtone ev). See tone.js.
+
+async function ensureTone(u) {
+  ensureEngine(u);
+  if (transferKey !== engineCalib) {
+    const t = performance.now(), chart = transferChart();
+    engine.update(JSON.stringify(renderParams(u, { noGrain: true })));
+    transfer = readTransfer(await run(chart), chart.w);
+    transferKey = engineCalib;
+    log(`transfer measured ${Math.round(performance.now() - t)} ms: white Y ${transfer.white.toFixed(3)}, black ${transfer.floor.toFixed(4)}`);
+  }
+  const key = `${transferKey}|${u.look}|${u.ev}`;
+  if (key !== toneKey) { tone = buildTone(transfer, { look: u.look, ev: u.ev }); toneKey = key; }
+}
+
 // ---------- lens ----------
 // Applied to the light reaching the film (engine input), in frame coordinates.
 
-/** Engine input for a region of the frame currently loaded in the lens stage. */
-async function lensInput(frame, x0, y0, w, h, scale, lens) {
-  if (!lensActive(lens)) return extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, scale);
-  if (lensGpu) return lensGpu.extract(frame.p3, x0, y0, w, h, scale, lens);
-  return extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, scale, lensGeometry(frame.w, frame.h, lens));
+/** Scene-light engine input for a region of the frame currently loaded in the lens stage. */
+async function lensInput(frame, x0, y0, w, h, lens) {
+  if (!lensActive(lens)) return extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, 1, tone.lut8);
+  if (lensGpu) return lensGpu.extract(frame.p3, x0, y0, w, h, 1, lens, tone.lutSqrt);
+  return extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lensGeometry(frame.w, frame.h, lens), tone.lutSqrt);
 }
 
-/** Recompute the preview input only when the lens sliders changed. */
+/** Recompute the preview input only when the lens or tone changed. */
 async function updatePreviewInput(u) {
-  const key = JSON.stringify(lensOf(u));
-  if (photo.lensKey === key) return;
+  const key = JSON.stringify(lensOf(u)) + toneKey;
+  if (photo.inputKey === key) return;
   const pv = photo.preview, t = performance.now();
-  pv.rgb = await lensInput(pv, 0, 0, pv.w, pv.h, 1, lensOf(u));
-  photo.lensKey = key;
-  if (lensActive(lensOf(u))) log(`lens ${key} ${Math.round(performance.now() - t)} ms (${lensGpu ? 'gpu' : 'cpu'})`);
+  pv.rgb = await lensInput(pv, 0, 0, pv.w, pv.h, lensOf(u));
+  photo.inputKey = key;
+  if (lensActive(lensOf(u))) log(`lens ${JSON.stringify(lensOf(u))} ${Math.round(performance.now() - t)} ms (${lensGpu ? 'gpu' : 'cpu'})`);
 }
 
-// ---------- auto-lab ----------
-// Like a lab printer metering each negative: choose print exposure so the
-// output median lightness matches the photo's, and paper contrast so the
-// p25–p75 spread matches. Runs on a small proxy, grain off.
+// ---------- auto ----------
+// Starting Esposizione / Contrasto from the photo's own luminance (tone.js autoTone).
 
-const Lstar = (Y) => (Y > 0.008856 ? 116 * Math.cbrt(Y) - 16 : 903.3 * Y);
-
-function percentiles(lums, ps) {
-  const hist = new Uint32Array(1001);
-  for (const L of lums) hist[Math.max(0, Math.min(1000, Math.round(L * 10)))]++;
-  const res = [];
-  let acc = 0, k = 0;
-  const targets = ps.map((p) => p / 100 * lums.length);
-  for (let b = 0; b <= 1000 && k < ps.length; b++) {
-    acc += hist[b];
-    while (k < ps.length && acc >= targets[k]) { res.push(b / 10); k++; }
-  }
-  while (res.length < ps.length) res.push(100);
-  return res;
-}
-
-function outputL(out) {
-  const n = out.length / 3, L = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    const r = srgbToLinear(Math.min(1, Math.max(0, out[3 * i])));
-    const g = srgbToLinear(Math.min(1, Math.max(0, out[3 * i + 1])));
-    const b = srgbToLinear(Math.min(1, Math.max(0, out[3 * i + 2])));
-    L[i] = Lstar(0.2126 * r + 0.7152 * g + 0.0722 * b);
-  }
-  return L;
-}
-
-function inputL(img) {
-  // Input is linear Rec.2020 (P3 path) or linear sRGB.
-  const [kr, kg, kb] = img.p3 ? [0.2627, 0.6780, 0.0593] : [0.2126, 0.7152, 0.0722];
-  const n = img.w * img.h, L = new Float32Array(n);
-  for (let i = 0; i < n; i++) L[i] = Lstar(Math.max(0, kr * img.rgb[3 * i] + kg * img.rgb[3 * i + 1] + kb * img.rgb[3 * i + 2]));
-  return L;
-}
-
-async function autoLab() {
-  const fit = photo.fit, u = { ...ui(), ev: 0, contrast: 0 };
-  ensureEngine(u);
-  const [t25, t50, t75] = percentiles(inputL(fit), [25, 50, 75]);
-  const measure = async (pe, gamma) => {
-    engine.update(JSON.stringify(renderParams(u, { pe, gamma }, { noGrain: true })));
-    return percentiles(outputL(await run(fit)), [25, 50, 75]);
-  };
-  let best = null;
-  for (const gamma of [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]) {
-    let lo = -3, hi = 1.5;                         // log2(print_exposure)
-    for (let i = 0; i < 7; i++) {
-      const mid = (lo + hi) / 2;
-      const [, m] = await measure(2 ** mid, gamma);
-      if (m > t50) lo = mid; else hi = mid;        // too bright → more print exposure
-    }
-    const pe = 2 ** ((lo + hi) / 2);
-    const [a, , b] = await measure(pe, gamma);
-    const err = Math.abs((b - a) - (t75 - t25));
-    if (!best || err < best.err) best = { pe, gamma, err };
-  }
-  auto = { pe: best.pe, gamma: best.gamma };
+function autoFromPhoto() {
+  const { data, p3 } = photo.preview;
+  const [kr, kg, kb] = p3 ? [0.2290, 0.6917, 0.0793] : [0.2126, 0.7152, 0.0722];   // P3 / sRGB luminance
+  const Ys = new Float32Array(Math.ceil(data.length / 32));
+  for (let i = 0, k = 0; i < data.length; i += 32, k++) Ys[k] = kr * LIN8[data[i]] + kg * LIN8[data[i + 1]] + kb * LIN8[data[i + 2]];
+  return autoTone(Ys);
 }
 
 // ---------- preview ----------
@@ -162,11 +129,11 @@ async function render() {
       dirty = false;
       const u = ui();
       const t = performance.now();
+      await ensureTone(u);
       await updatePreviewInput(u);
-      ensureEngine(u);
-      engine.update(JSON.stringify(renderParams(u, auto)));
+      engine.update(JSON.stringify(renderParams(u)));
       const out = await run(photo.preview);
-      photo.after = toImageData(out, photo.preview.w, photo.preview.h);
+      photo.after = toImageData(out, photo.preview.w, photo.preview.h, tone.out8);
       if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); }
       status(`${photo.preview.w}×${photo.preview.h} · ${Math.round(performance.now() - t)} ms${gpu ? '' : ' (CPU)'}`);
     } while (dirty);
@@ -341,9 +308,8 @@ async function loadPhoto(file) {
     log(`photo: ${file.name} ${file.type} ${(file.size / 1e6).toFixed(1)} MB`);
     const bitmap = await createImageBitmap(file);
     const preview = readPixels(bitmap, PREVIEW_LONG_SIDE);
-    const fit = readPixels(bitmap, FIT_LONG_SIDE);
     log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
-    photo = { file, bitmap, preview, fit, lensKey: JSON.stringify(lensOf({ ca: 0, vignette: 0, falloff: 0 })) };
+    photo = { file, bitmap, preview, inputKey: '' };
     lensGpu?.setFrame(preview.data, preview.w, preview.h);
     engine?.free(); engine = null;
     view.width = preview.w; view.height = preview.h;
@@ -361,15 +327,11 @@ async function loadPhoto(file) {
 }
 
 async function runAuto() {
-  for (const [id, v] of [['ev', 0], ['contrast', 0]]) $(id).value = v;
+  const a = autoFromPhoto();
+  $('ev').value = a.ev; $('look').value = a.look;
   syncOutputs();
-  status('Analisi (auto-lab)…');
-  const t = performance.now();
-  await autoLab();
-  const ms = Math.round(performance.now() - t);
-  log(`auto-lab ${ms} ms: print ${Math.log2(auto.pe).toFixed(2)} EV, gamma ${auto.gamma}`);
+  log(`auto: ev ${a.ev}, look ${a.look}`);
   await render();
-  status($('status').textContent + ` · auto-lab ${ms} ms`);
 }
 
 // ---------- export ----------
@@ -377,7 +339,7 @@ async function runAuto() {
 // is streamed to jpegli in a worker and dropped. Neither the full float image
 // nor the full RGB image ever exists (in JS, wasm or on the GPU).
 // Each tile keeps the frame's physical pixel size (film_format_mm scaled to the
-// tile) and the frame's auto-exposure, with an overlap margin cropped away.
+// tile) and uses the same tone LUTs as the preview, with an overlap margin cropped away.
 
 const encoder = new Worker('export-worker.js');
 let encoderError = null, encoderDone = null;
@@ -411,9 +373,7 @@ async function exportFull() {
     const border = $('border').checked ? Math.round(Math.max(w, h) * BORDER_FRACTION) : 0;
     log(`export start ${w}x${h} p3=${p3} progressive=${progressive} border=${border}`);
 
-    ensureEngine(u);
-    await updatePreviewInput(u);   // metering must see the same (lens-applied) preview the user saw
-    const exposure = 2 ** engine.auto_exposure_ev(photo.preview.rgb, photo.preview.w, photo.preview.h);
+    await ensureTone(u);
     const frame = { data, w, h, p3 };
     lensGpu?.setFrame(data, w, h);
     const longSide = Math.max(w, h);
@@ -433,14 +393,14 @@ async function exportFull() {
         status(`Esporto ${w}×${h}: tile ${s * cols + c + 1}/${strips * cols}…`);
         const x0 = Math.max(0, tx - EXPORT_PAD), y0 = Math.max(0, ty - EXPORT_PAD);
         const tw = Math.min(w, tx + EXPORT_TILE + EXPORT_PAD) - x0, th = Math.min(h, ty + EXPORT_TILE + EXPORT_PAD) - y0;
-        engine.update(JSON.stringify(deepMerge(renderParams(u, auto), {
-          camera: { auto_exposure: false, film_format_mm: FILM_FORMAT_MM * Math.max(tw, th) / longSide },
+        engine.update(JSON.stringify(deepMerge(renderParams(u), {
+          camera: { film_format_mm: FILM_FORMAT_MM * Math.max(tw, th) / longSide },
         })));
-        const out = await run({ rgb: await lensInput(frame, x0, y0, tw, th, exposure, lensOf(u)), w: tw, h: th });
+        const out = await run({ rgb: await lensInput(frame, x0, y0, tw, th, lensOf(u)), w: tw, h: th });
         const cw = Math.min(EXPORT_TILE, w - tx);
         for (let y = 0; y < ch; y++) {
           let src = ((ty - y0 + y) * tw + (tx - x0)) * 3, dst = (y * w + tx) * 3;
-          for (let i = 0; i < cw * 3; i++) strip[dst++] = Math.max(0, Math.min(255, Math.round(out[src++] * 255)));
+          for (let i = 0; i < cw * 3; i++) strip[dst++] = to8(out[src++], tone.out8);
         }
       }
       encoder.postMessage({ cmd: 'rows', rgb: strip.buffer }, [strip.buffer]);
@@ -469,7 +429,7 @@ async function exportFull() {
     exporting = false;
     lensGpu?.setFrame(photo.preview.data, photo.preview.w, photo.preview.h);   // back to the preview frame
     $('export').disabled = false;
-    engine?.update(JSON.stringify(renderParams(ui(), auto)));   // back to preview params
+    engine?.update(JSON.stringify(renderParams(ui())));   // back to preview params
   }
 }
 
@@ -492,7 +452,7 @@ function status(msg) { $('status').textContent = msg; }
 
 const FORMAT = {
   ev: (v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}`,
-  contrast: (v) => `${v > 0 ? '+' : ''}${v.toFixed(2)}`,
+  look: (v) => `${Math.round(v * 100)}`,
   mshift: (v) => `${v > 0 ? '+' : ''}${v}`,
   yshift: (v) => `${v > 0 ? '+' : ''}${v}`,
   grain: (v) => (v === 0 ? 'off' : `${v.toFixed(1)}×`),
@@ -501,7 +461,7 @@ const FORMAT = {
   vignette: (v) => (v === 0 ? 'off' : `${Math.round(v * 100)}`),
   falloff: (v) => `${Math.round(v * 100)}`,
 };
-const DEFAULTS = { ev: 0, contrast: 0, mshift: 0, yshift: 0, grain: 1, halation: 1, ca: 0, vignette: 0, falloff: 0.4 };
+const DEFAULTS = { ev: 0, look: 0.35, mshift: 0, yshift: 0, grain: 1, halation: 1, ca: 0, vignette: 0, falloff: 0.4 };
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }
 
 for (const id of Object.keys(FORMAT)) {

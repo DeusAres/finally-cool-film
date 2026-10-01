@@ -29,6 +29,7 @@
 //   - CA is calibrated in µm on the 35 mm frame (see CA_MAX_UM), ~7× below the
 //     original's ceiling, so the whole slider range stays within real glass.
 import { LIN8, P3_TO_REC2020 } from './color.js';
+import { sceneFromLinear } from './tone.js';
 
 // Lateral colour at the corner at amount 1, in µm on the film: a strong toy /
 // vintage lens. Expressed on the 35 mm frame (half diagonal 21.63 mm) like the
@@ -97,10 +98,12 @@ function sample(data, W, H, c, x, y) {
 /**
  * Engine input for the region (x0, y0, w, h) of the W×H frame `data` (8-bit
  * RGBA), with the lens applied in frame coordinates and the result multiplied
- * by `scale`. Linear Rec.2020 when `p3`, else linear sRGB — same contract as
+ * by `scale`. `lutSqrt` (tone.js) maps the interpolated display-linear samples
+ * to scene light; without it they are used as-is. Linear Rec.2020 when `p3`,
+ * else linear sRGB — same contract as
  * common.js `extractLinear`, which this replaces when a lens is active.
  */
-export function extractLens(data, W, H, p3, x0, y0, w, h, scale, geo) {
+export function extractLens(data, W, H, p3, x0, y0, w, h, scale, geo, lutSqrt = null) {
   const { cx, cy, rMax, cov, dR, dB, blur, depth } = geo;
   const M = P3_TO_REC2020;
   const rgb = new Float32Array(w * h * 3);
@@ -137,6 +140,7 @@ export function extractLens(data, W, H, p3, x0, y0, w, h, scale, geo) {
         const i = (y * W + x) * 4;
         R = LIN8[data[i]]; G = LIN8[data[i + 1]]; B = LIN8[data[i + 2]];
       }
+      if (lutSqrt) { R = sceneFromLinear(lutSqrt, R); G = sceneFromLinear(lutSqrt, G); B = sceneFromLinear(lutSqrt, B); }
       let k = scale;
       if (depth > 0) {
         const lost = depth * g;           // fraction of light the lens loses here

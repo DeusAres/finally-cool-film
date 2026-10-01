@@ -159,3 +159,15 @@ Secondo set (kayak, mare, campo, nuvola — tutti P3). Mediana L* originale → 
 kayak 35→22→35 · mare 34→49→34 · campo 55→56→54 · nuvola 56→41→56.
 Il default non è "sempre scuro" ma **imprevedibile** (dipende dall'auto-exposure del negativo); l'auto-lab lo rende stabile.
 Griglia contrasto estesa a 0.4–1.0; valori scelti 0.6–0.8.
+
+## Ricostruzione della luce di scena (sostituisce l'auto-lab)
+
+Diagnosi (2026-10-01): motore identico a Python anche con input Rec.2020 (ΔE 0.00); il problema è l'input
+display-referred. Pellicola+carta hanno gamma di sistema ~1.5–2 **per canale**: applicata a una foto già "renderizzata"
+raddoppia contrasto e saturazione (rapporti tra canali elevati alla gamma). L'inversione solo-luminanza lasciava
+saturazione ×1.25–1.75; l'inversione per canale la riporta a ×1.0–1.35 (= firma colore della pellicola).
+
+`web/lib/tone.js`: F (scena → luminanza in uscita) misurata su griglia di 81 grigi uniformi (un render), P = F⁻¹ per canale
+in P3, spalla esponenziale sopra 0.6 del bianco, nero = Dmax carta (levels scanner off), white point in uscita.
+Prototipo: `spike/tone/newpipe.mjs`. Nota: gli esperimenti Node precedenti leggevano con sharp, che converte P3→sRGB:
+le saturazioni misurate allora erano gonfiate (l'app non era affetta).

@@ -5,6 +5,7 @@
 // Output: linear Rec.2020 (p3) or linear sRGB floats, interleaved RGB, for the region.
 import { LENS_CONST, lensGeometry } from './lens.js';
 import { P3_TO_REC2020 } from './color.js';
+import { TONE_SQRT_N } from './tone.js';
 
 const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
 
@@ -20,6 +21,14 @@ struct P {
 @group(0) @binding(1) var smp: sampler;
 @group(0) @binding(2) var<uniform> p: P;
 @group(0) @binding(3) var<storage, read_write> outBuf: array<f32>;
+@group(0) @binding(4) var<storage, read> tone: array<f32>;   // scene light over sqrt(display linear), tone.js
+
+fn toScene(v: f32) -> f32 {                    // same lookup as tone.js sceneFromLinear
+  let f = sqrt(clamp(v, 0.0, 1.0)) * ${TONE_SQRT_N}.0;
+  let i = u32(f);
+  if (i >= ${TONE_SQRT_N}u) { return tone[${TONE_SQRT_N}u]; }
+  return mix(tone[i], tone[i + 1u], f - f32(i));
+}
 
 fn at(pos: vec2<f32>) -> vec4<f32> {           // pos in frame pixel coords (pixel centres at integers)
   return textureSampleLevel(tex, smp, (pos + 0.5) / p.frame, 0.0);
@@ -59,6 +68,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   } else {
     c = at(pos).rgb;
   }
+  c = vec3<f32>(toScene(c.r), toScene(c.g), toScene(c.b));
   var k = p.scale;
   if (p.depth > 0.0) {
     let lost = p.depth * g;                    // fraction of light the lens loses here
@@ -89,6 +99,19 @@ export class LensGPU {
     this.frame = null;
   }
 
+  // Tone LUT buffer, re-uploaded only when the LUT object changes.
+  toneBuffer(lut) {
+    if (!lut) {
+      lut = this.identity ||= Float32Array.from({ length: TONE_SQRT_N + 1 }, (_, i) => (i / TONE_SQRT_N) ** 2);
+    }
+    if (this.toneLut !== lut) {
+      this.toneBuf ||= this.device.createBuffer({ size: (TONE_SQRT_N + 1) * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+      this.device.queue.writeBuffer(this.toneBuf, 0, lut);
+      this.toneLut = lut;
+    }
+    return this.toneBuf;
+  }
+
   /** Upload the whole frame (8-bit RGBA, sRGB or Display P3 encoded — same transfer curve). */
   setFrame(data, W, H) {
     this.frame?.texture.destroy();
@@ -100,7 +123,8 @@ export class LensGPU {
   }
 
   /** Same contract as lens.js extractLens, for the frame last passed to setFrame. */
-  async extract(p3, x0, y0, w, h, scale, lens) {
+  /** `lutSqrt` (tone.js) maps display-linear samples to scene light; null = identity. */
+  async extract(p3, x0, y0, w, h, scale, lens, lutSqrt = null) {
     const { device, frame } = this;
     const geo = lensGeometry(frame.W, frame.H, lens);
     const M = P3_TO_REC2020;
@@ -117,6 +141,7 @@ export class LensGPU {
     const bind = device.createBindGroup({
       layout: this.pipeline.getBindGroupLayout(0),
       entries: [
+        { binding: 4, resource: { buffer: this.toneBuffer(lutSqrt) } },
         { binding: 0, resource: frame.texture.createView() },
         { binding: 1, resource: this.sampler },
         { binding: 2, resource: { buffer: this.uniform } },

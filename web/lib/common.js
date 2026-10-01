@@ -64,15 +64,16 @@ export function decodeRGBA(bitmap, longSide = Infinity) {
 
 /**
  * Linear engine input for the region (x0, y0, w, h) of 8-bit RGBA `data`
- * (row stride `W`), multiplied by `scale`.
+ * (row stride `W`), multiplied by `scale`. `lut` maps each 8-bit code value to
+ * linear light (default: plain sRGB decode; tone.js supplies the scene-referred one).
  */
-export function extractLinear(data, W, p3, x0 = 0, y0 = 0, w = W, h = data.length / 4 / W, scale = 1) {
+export function extractLinear(data, W, p3, x0 = 0, y0 = 0, w = W, h = data.length / 4 / W, scale = 1, lut = LIN8) {
   const rgb = new Float32Array(w * h * 3);
   const M = P3_TO_REC2020;
   let j = 0;
   for (let y = y0; y < y0 + h; y++) {
     for (let i = (y * W + x0) * 4, end = i + w * 4; i < end; i += 4, j += 3) {
-      const r = LIN8[data[i]] * scale, g = LIN8[data[i + 1]] * scale, b = LIN8[data[i + 2]] * scale;
+      const r = lut[data[i]] * scale, g = lut[data[i + 1]] * scale, b = lut[data[i + 2]] * scale;
       if (p3) {
         rgb[j] = M[0][0] * r + M[0][1] * g + M[0][2] * b;
         rgb[j + 1] = M[1][0] * r + M[1][1] * g + M[1][2] * b;
@@ -93,12 +94,15 @@ export function readPixels(bitmap, longSide = Infinity) {
   return { rgb, w, h, p3, before, data };
 }
 
+/** Engine output → 8-bit: through `out8` (tone.js, 4096 entries over 0..1) or a plain scale. */
+export const to8 = (v, out8) => (out8 ? out8[v <= 0 ? 0 : v >= 1 ? 4095 : (v * 4095 + 0.5) | 0] : v * 255);
+
 /** Engine output (sRGB-encoded floats, interleaved RGB) → RGBA ImageData. */
-export function toImageData(out, w, h) {
+export function toImageData(out, w, h, out8) {
   const img = new ImageData(w, h);
   const d = img.data;
   for (let i = 0, j = 0; i < d.length; i += 4, j += 3) {
-    d[i] = out[j] * 255; d[i + 1] = out[j + 1] * 255; d[i + 2] = out[j + 2] * 255; d[i + 3] = 255;
+    d[i] = to8(out[j], out8); d[i + 1] = to8(out[j + 1], out8); d[i + 2] = to8(out[j + 2], out8); d[i + 3] = 255;
   }
   return img;
 }

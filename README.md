@@ -14,8 +14,11 @@ di pellicola → stampa → scansione, nel browser via WebAssembly + WebGPU. Foc
 
 ## App (MVP)
 
-- Scegli foto → **auto-lab**: esposizione e contrasto di stampa calcolati per foto (come una stampatrice da lab), così la luminosità resta quella dell'originale.
-- Slider: esposizione, contrasto, filtri ingranditore (magenta↔verde, giallo↔blu), grana, halation. Doppio tap sull'etichetta = reset.
+- Scegli foto → **ricostruzione della luce di scena** (`web/lib/tone.js`): la curva dei grigi dell'intera pipeline viene misurata
+  e invertita per canale, così la foto iPhone (già con la sua curva) non subisce una doppia curva/saturazione.
+  **Contrasto** = quanta curva di stampa reintrodurre, **Esposizione** = campana sui mezzi toni, spalla morbida (niente
+  alte luci bruciate), nero = Dmax reale della carta. **Auto** parte dall'istogramma della foto.
+- Slider: esposizione (mezzi toni), contrasto (curva di stampa), filtri ingranditore (magenta↔verde, giallo↔blu), grana, halation. Doppio tap sull'etichetta = reset.
 - **Lens** (portato da grain pro e migliorato, `web/lib/lens.js` + shader WebGPU `lens-gpu.js`): aberrazione cromatica laterale
   (calibrata in µm sul 35 mm, max 60 µm), vignettatura in luce lineare e falloff condiviso, applicati alla luce *prima* della pellicola.
 - Zoom/pan: pizzica, trascina, doppio tap (adatta ↔ 100%). Tieni premuto **A/B** = originale.
