@@ -16,8 +16,9 @@
 //   - fibres / hairs: smooth random walks (curvature is itself a random walk,
 //     so they bend and occasionally curl), thin, sometimes soft;
 //   - scratches: rare, long, along the film's travel (the frame's long side),
-//     nearly straight with a slow wobble, broken into dashes where the
-//     pressure lifted.
+//     heading wandering as a mean-reverting random walk with rare kinks, width and
+//     intensity varying along the line, tapering ends, faint parallel companions,
+//     white or tinted (top dye layers only); plus short thin handling hairlines.
 // Each primitive has a rank in [0, 1): the amount slider draws those with
 // rank < amount, so raising it only ADDS marks; reseeding gives a new roll.
 // Marks thinner than ~0.8 px are drawn 0.8 px wide with proportionally lower
@@ -27,7 +28,7 @@ const FRAME_UM = 36000;              // long side of the frame
 const PAPER = [252, 250, 246];       // paper base, as the print shows it
 
 // Counts at amount 1 (a frame that has been handled carelessly).
-const N_SPECKS = 320, N_FIBRES = 18, N_SCRATCHES = 3;
+const N_SPECKS = 320, N_FIBRES = 18, N_SCRATCHES = 4, N_HAIRLINES = 10;
 
 function rng(seed) {                 // mulberry32
   let a = seed >>> 0;
@@ -74,19 +75,53 @@ export function dustField(seed, aspect) {
       alpha: soft ? between(0.25, 0.5) : between(0.5, 0.85) });
   }
 
-  for (let i = 0; i < N_SCRATCHES; i++) {
-    // Along the film's travel = the frame's long side (x here).
-    const x0 = between(-0.1, 0.4) * L, x1 = x0 + between(0.35, 1.1) * L;
-    const y0 = R() * S, slope = between(-0.006, 0.006);
-    const wob = between(5, 25), wobLen = between(4000, 15000), ph = R() * 6.283;
-    const pts = [], dash = [];
-    let on = R() < 0.8, run = 0;
-    for (let x = x0; x <= x1; x += 40) {
-      pts.push([x, y0 + (x - x0) * slope + wob * Math.sin(ph + (x / wobLen) * 6.283)]);
-      if ((run += 40) > between(300, 4000)) { on = R() < (on ? 0.7 : 0.8); run = 0; }
-      dash.push(on);
+  // 1D smooth noise for profiles along a path: random knots every `k` steps, cosine-interpolated.
+  const profile = (n, k) => {
+    const knots = Array.from({ length: Math.ceil(n / k) + 2 }, () => R());
+    return (i) => { const t = i / k, j = Math.floor(t), f = (1 - Math.cos((t - j) * Math.PI)) / 2; return knots[j] + (knots[j + 1] - knots[j]) * f; };
+  };
+  // Tint: base-side scratches print white; one that only strips the negative's
+  // top dye layers lets more blue (yellow layer gone) or blue+green light
+  // through, so the print forms extra yellow / red there.
+  const tint = () => { const r = R(); return r < 0.72 ? PAPER : r < 0.88 ? [253, 246, 214] : [252, 226, 214]; };
+
+  // A drawn line: heading wanders (mean-reverting random walk, rare kinks),
+  // width and intensity follow their own slow profiles, ends taper, and
+  // intensity below a threshold leaves gaps (pressure lifted).
+  const line = (x, y, heading, len, step, wander, width, alpha, gapLevel, color, rank) => {
+    const n = Math.max(3, Math.round(len / step)), pts = [], w = [], a = [];
+    const pw = profile(n, between(8, 30)), pa = profile(n, between(6, 40)), pf = profile(n, between(2, 6));
+    let h = heading;
+    for (let i = 0; i <= n; i++) {
+      h += (R() - 0.5) * wander; h = heading + (h - heading) * 0.995;
+      if (R() < 0.004) h += (R() - 0.5) * wander * 25;          // grit jumps: a small kink
+      x += Math.cos(h) * step; y += Math.sin(h) * step;
+      const t = i / n, taper = Math.min(1, t / 0.04, (1 - t) / 0.04);
+      const lvl = 0.55 * pa(i) + 0.45 * pf(i);                // slow pressure + faster flicker
+      pts.push([x, y]);
+      w.push(width * (0.55 + 0.7 * pw(i)) * Math.max(0.2, taper));
+      a.push(alpha * Math.max(0, Math.min(1, (lvl - gapLevel) / 0.25)) * Math.max(0, taper));
     }
-    marks.push({ kind: 'scratch', rank: R() * 1.6, pts, dash, width: between(3, 9), alpha: between(0.45, 0.8) });
+    return { kind: 'scratch', rank, pts, w, a, color };
+  };
+
+  for (let i = 0; i < N_SCRATCHES; i++) {
+    // Along the film's travel (x = the frame's long side), a little off axis.
+    const x0 = between(-0.15, 0.5) * L, len = between(0.35, 1.2) * L, y0 = R() * S;
+    const heading = between(-0.012, 0.012), rank = R() * 1.4, color = tint();
+    const width = between(3, 8), alpha = between(0.5, 0.85), gap = between(0.1, 0.4);
+    marks.push(line(x0, y0, heading, len, 60, 0.004, width, alpha, gap, color, rank));
+    // The same grit often drags companions: close, parallel, shorter, fainter.
+    for (let k = 0, nk = R() < 0.55 ? 1 + ((R() * 2) | 0) : 0; k < nk; k++) {
+      const off = between(40, 220) * (R() < 0.5 ? -1 : 1), start = between(0, 0.5) * len;
+      marks.push(line(x0 + start, y0 + off, heading + between(-0.002, 0.002), len * between(0.2, 0.7), 60, 0.004,
+        width * between(0.4, 0.8), alpha * between(0.4, 0.8), gap + 0.1, color, rank));
+    }
+  }
+  for (let i = 0; i < N_HAIRLINES; i++) {
+    // Handling scratches: short, any direction, very thin, gently curved.
+    marks.push(line(R() * L, R() * S, R() * Math.PI * 2, pareto(400, 1.4, 5000), 30, 0.02,
+      between(1.5, 4), between(0.3, 0.6), between(0, 0.25), tint(), R()));
   }
   return marks;
 }
@@ -127,6 +162,20 @@ export function drawDust(ctx, marks, amount, W, H, x0 = 0, y0 = 0) {
           ctx.beginPath();
           ctx.ellipse(cx, cy, Math.max(p.rx, minW / 2), Math.max(p.ry, minW / 2), p.rot, 0, 6.2832);
           ctx.fill();
+        }
+      }
+    } else if (m.kind === 'scratch') {
+      // Segment by segment: width and intensity vary along the line. Butt caps,
+      // so joints do not double up; a faint wider pass gives the soft edge.
+      ctx.lineCap = 'butt';
+      const c = `${m.color[0]},${m.color[1]},${m.color[2]}`;
+      for (const [k, scale] of [[2.6, 0.16], [1, 1]]) {
+        for (let i = 1; i < m.pts.length; i++) {
+          const wi = m.w[i] * k, ai = m.a[i] * scale * Math.min(1, wi / minW);
+          if (ai < 0.004) continue;
+          ctx.lineWidth = Math.max(wi, minW);
+          ctx.strokeStyle = `rgba(${c},${ai})`;
+          ctx.beginPath(); ctx.moveTo(m.pts[i - 1][0], m.pts[i - 1][1]); ctx.lineTo(m.pts[i][0], m.pts[i][1]); ctx.stroke();
         }
       }
     } else {
