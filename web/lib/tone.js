@@ -117,9 +117,20 @@ function displayCurve(ev, rolloff) {
   );
 }
 
+// `look` mixes in the print curve channel by channel, which is what gives the
+// mids their punch and colour. In deep shadows it double-toes: a warm dark
+// colour (R > G > B) has G and B already in the paper's toe while R is not, so
+// the hue swings to red/magenta and the chroma collapses (measured on an
+// iPhone original: hue 51° → 36°, chroma ×0.56 at L* 10–20). So the print
+// curve fades out below LOOK_FADE (EV under mid grey); there the inversion,
+// which keeps hue exactly, takes over.
+const LOOK_FADE = [-5, -2];
+
 /** Scene-linear value for a display-linear value dc that has been through the display curve. */
 function sceneValue(T, dc, look) {
   dc = Math.max(dc, 1e-5);
+  const t = Math.max(0, Math.min(1, (Math.log2(dc / 0.18) - LOOK_FADE[0]) / (LOOK_FADE[1] - LOOK_FADE[0])));
+  look *= t * t * (3 - 2 * t);
   return 0.18 * 2 ** ((1 - look) * inverse(T, Math.min(dc, 1)) + look * Math.log2(dc / 0.18));
 }
 
