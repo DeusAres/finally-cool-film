@@ -137,7 +137,9 @@ impl Engine {
     /// last given to `set_frame` by the `input_wgsl` pass (lens, tone, colour
     /// matrix; see `WgpuBackend::set_input_pass`), the film chain runs, and its
     /// output is packed to RGBA through `lut` (4096 entries) into `out`
-    /// (width × height × 4 bytes). Resolves to undefined.
+    /// (width × height × 4 bytes), by `output_wgsl` when not empty (bindings:
+    /// see `WgpuBackend::set_output_pack`) with `output_params`. Resolves to
+    /// undefined.
     #[allow(clippy::too_many_arguments)]
     pub fn process_frame(
         &self,
@@ -147,6 +149,8 @@ impl Engine {
         width: u32,
         height: u32,
         lut: &[u8],
+        output_wgsl: &str,
+        output_params: Vec<f32>,
         out: js_sys::Uint8Array,
     ) -> Result<js_sys::Promise, JsError> {
         if lut.len() != 4096 {
@@ -157,7 +161,7 @@ impl Engine {
         }
         let gpu = gpu()?;
         gpu.set_input_pass(input_wgsl, uniform, tone);
-        gpu.set_output_pack(lut);
+        gpu.set_output_pack(lut, (!output_wgsl.is_empty()).then_some(output_wgsl), output_params);
         // Dimensions only: the input pass fills the chain input on the GPU.
         let image = ImageBuf { width, height, data: Vec::new() };
         if self.pipeline().process_resident_borrowed(&image, gpu.as_ref()).is_none() {

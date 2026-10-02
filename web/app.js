@@ -6,6 +6,7 @@ import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, inputUniform } from './lib/lens-gpu.js';
 import { dustField, drawDust, compositeDust } from './lib/dust.js';
+import { GRAIN_WGSL, grainParams } from './lib/grain.js';
 
 const PREVIEW_LONG_SIDE = 2000;   // display canvas cap (bigger canvases make iOS compositing crash when zoomed)
 const GRAIN_AREA_UM2 = 0.2;       // engine default AgX particle area
@@ -52,7 +53,8 @@ function renderParams(u, { noGrain = false } = {}) {
     camera: { auto_exposure: false, film_format_mm: FILM_FORMAT_MM },
     scanner: { black_correction: false, white_correction: false },
     film_render: {
-      grain: { active: !noGrain && u.grain > 0, agx_particle_area_um2: GRAIN_AREA_UM2 * Math.max(u.grain, 0.01) },
+      // On the GPU path grain is ours (grain.js, in the output pass); the engine's is the CPU fallback.
+      grain: { active: !gpu && !noGrain && u.grain > 0, agx_particle_area_um2: GRAIN_AREA_UM2 * Math.max(u.grain, 0.01) },
       halation: { active: u.halation > 0, halation_amount: u.halation },
     },
   };
@@ -96,10 +98,11 @@ async function ensureTone(u) {
 // below (no WebGPU): float input built here, float output converted here.
 
 /** 8-bit render of a region of `frame` into `target` (RGBA, w×h×4 bytes). */
-async function renderRegion(frame, x0, y0, w, h, target, lens) {
+async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0) {
   if (gpu) {
     return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lens),
-      tone.packed, w, h, tone.out8, target);
+      tone.packed, w, h, tone.out8,
+      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed), target);
   }
   const rgb = lensActive(lens)
     ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lensGeometry(frame.w, frame.h, lens), tone)
@@ -135,7 +138,7 @@ async function render() {
       await ensureTone(u);
       engine.update(JSON.stringify(renderParams(u)));
       if (photo.after?.width !== pv.w || photo.after?.height !== pv.h) photo.after = new ImageData(pv.w, pv.h);
-      await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), lensOf(u));
+      await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), lensOf(u), u.grain);
       const t1 = performance.now();
       if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); }
       const t2 = performance.now(), ms = (v) => Math.round(v);
@@ -354,7 +357,7 @@ async function loadPhoto(file) {
     const preview = decodeRGBA(bitmap, PREVIEW_LONG_SIDE);
     preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
     log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
-    photo = { file, bitmap, preview, dustSeed: newDustSeed() };
+    photo = { file, bitmap, preview, dustSeed: newDustSeed(), grainSeed: newDustSeed() };
     if (gpu) {
       preview.clip = clipMask(bitmap, preview.w, preview.h);   // full-res clipping, see common.js
       sf.set_frame(withAlpha(preview.data, preview.clip), preview.w, preview.h);
@@ -447,7 +450,7 @@ async function exportFull() {
           camera: { film_format_mm: FILM_FORMAT_MM * Math.max(tw, th) / longSide },
         })));
         const tile = (tileBuf = tileBuf?.length >= tw * th * 4 ? tileBuf : new Uint8Array(tw * th * 4)).subarray(0, tw * th * 4);
-        await renderRegion(frame, x0, y0, tw, th, tile, lensOf(u));
+        await renderRegion(frame, x0, y0, tw, th, tile, lensOf(u), u.grain);
         const cw = Math.min(EXPORT_TILE, w - tx);
         for (let y = 0; y < ch; y++) {   // RGBA tile → RGB strip
           let src = ((ty - y0 + y) * tw + (tx - x0)) * 4, dst = (y * w + tx) * 3;

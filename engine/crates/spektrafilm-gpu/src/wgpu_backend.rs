@@ -129,16 +129,25 @@ struct PendingReadback {
 /// - `frame`: the photo as an 8-bit sRGB-encoded texture, uploaded once;
 /// - `input`: a caller-supplied WGSL pass that fills the chain input from
 ///   that texture (lens, tone, colour matrix), replacing the upload;
-/// - `pack`: an 8-bit LUT; the chain output is packed to RGBA through it.
+/// - `pack`: an 8-bit LUT; the chain output is packed to RGBA through it, by
+///   PACK_WGSL or a caller-supplied shader with the same bindings (e.g. one
+///   that also adds procedural grain), with caller params.
 /// `input` and `pack` apply to the next `run_film_chain` only.
 #[cfg(feature = "wgpu-backend")]
 #[derive(Default)]
 struct WebIo {
     frame: Option<wgpu::Texture>,
     input: Option<InputPass>,
-    pack: Option<Vec<u32>>,
+    pack: Option<OutputPass>,
     input_pipe: Option<(String, wgpu::ComputePipeline)>,
-    pack_pipe: Option<wgpu::ComputePipeline>,
+    pack_pipe: Option<(String, wgpu::ComputePipeline)>,
+}
+
+#[cfg(feature = "wgpu-backend")]
+struct OutputPass {
+    lut: Vec<u32>,
+    wgsl: Option<String>,
+    params: Vec<f32>,
 }
 
 #[cfg(feature = "wgpu-backend")]
@@ -149,18 +158,21 @@ struct InputPass {
 }
 
 /// Chain output (interleaved RGB f32, display-encoded) → RGBA8 through a
-/// 4096-entry LUT, index round(v * 4095), alpha 255.
+/// 4096-entry LUT, index round(v * 4095), alpha 255. Bindings (shared with
+/// caller-supplied output shaders): 0 src, 1 lut, 2 dst, 3 params, where
+/// params[0] = pixel count, params[1] = invocations per dispatch row
+/// (pixel index = id.x + id.y * params[1]), params[4..] = caller params.
 #[cfg(feature = "wgpu-backend")]
 const PACK_WGSL: &str = r#"
 @group(0) @binding(0) var<storage, read> src: array<f32>;
 @group(0) @binding(1) var<storage, read> lut: array<u32>;
 @group(0) @binding(2) var<storage, read_write> dst: array<u32>;
-@group(0) @binding(3) var<uniform> n: vec4<u32>;
+@group(0) @binding(3) var<storage, read> P: array<f32>;
 fn q(v: f32) -> u32 { return lut[u32(clamp(v * 4095.0 + 0.5, 0.0, 4095.0))]; }
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let i = id.x + id.y * n.y;
-  if (i >= n.x) { return; }
+  let i = id.x + id.y * u32(P[1]);
+  if (i >= u32(P[0])) { return; }
   dst[i] = q(src[3u * i]) | (q(src[3u * i + 1u]) << 8u) | (q(src[3u * i + 2u]) << 16u) | 0xff000000u;
 }
 "#;
@@ -386,8 +398,14 @@ impl WgpuBackend {
 
     /// Pack the next chain output to RGBA8 through `lut` (4096 entries); read
     /// it with `take_readback_packed`.
-    pub fn set_output_pack(&self, lut: &[u8]) {
-        self.io.lock().unwrap().pack = Some(lut.iter().map(|&v| v as u32).collect());
+    /// With `wgsl`, that shader replaces PACK_WGSL (same bindings, see there)
+    /// and gets `params` from params[4] on.
+    pub fn set_output_pack(&self, lut: &[u8], wgsl: Option<&str>, params: Vec<f32>) {
+        self.io.lock().unwrap().pack = Some(OutputPass {
+            lut: lut.iter().map(|&v| v as u32).collect(),
+            wgsl: wgsl.map(str::to_owned),
+            params,
+        });
     }
 
     /// Drop pending `set_input_pass` / `set_output_pack` requests (the run they
@@ -451,22 +469,25 @@ impl WgpuBackend {
     }
 
     /// Encode the RGBA8 pack of `src` (n pixels); returns the packed buffer.
-    fn encode_pack_pass(&self, encoder: &mut wgpu::CommandEncoder, lut: &[u32], src: &wgpu::Buffer, n: u32) -> wgpu::Buffer {
+    fn encode_pack_pass(&self, encoder: &mut wgpu::CommandEncoder, req: &OutputPass, src: &wgpu::Buffer, n: u32) -> wgpu::Buffer {
         let mut io = self.io.lock().unwrap();
-        let pipe = io.pack_pipe.get_or_insert_with(|| {
+        let wgsl = req.wgsl.as_deref().unwrap_or(PACK_WGSL);
+        if io.pack_pipe.as_ref().is_none_or(|(s, _)| s != wgsl) {
             let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("pack_rgba8"),
-                source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(PACK_WGSL)),
+                source: wgpu::ShaderSource::Wgsl(Cow::Owned(wgsl.to_owned())),
             });
-            self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            let pipe = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("pack_rgba8"),
                 layout: None,
                 module: &module,
                 entry_point: Some("main"),
                 compilation_options: Default::default(),
                 cache: None,
-            })
-        });
+            });
+            io.pack_pipe = Some((wgsl.to_owned(), pipe));
+        }
+        let pipe = &io.pack_pipe.as_ref().unwrap().1;
         let groups = n.div_ceil(256);
         let gx = groups.min(65535);
         let gy = groups.div_ceil(gx);
@@ -478,13 +499,15 @@ impl WgpuBackend {
         });
         let lut_buf = self.device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some("pack_lut"),
-            contents: bytemuck::cast_slice(lut),
+            contents: bytemuck::cast_slice(&req.lut),
             usage: wgpu::BufferUsages::STORAGE,
         });
+        let mut params = vec![n as f32, (gx * 256) as f32, 0.0, 0.0];
+        params.extend_from_slice(&req.params);
         let dims = self.device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
-            label: Some("pack_dims"),
-            contents: bytemuck::cast_slice(&[n, gx * 256, 0u32, 0u32]),
-            usage: wgpu::BufferUsages::UNIFORM,
+            label: Some("pack_params"),
+            contents: bytemuck::cast_slice(&params),
+            usage: wgpu::BufferUsages::STORAGE,
         });
         let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
@@ -2000,7 +2023,7 @@ impl WgpuBackend {
         // Zero-copy path: when buf_b is mappable, skip the blit and map it
         // directly below. Otherwise stage it into the MAP_READ readback buffer.
         // With an output pack, the packed RGBA8 is what gets staged.
-        let packed = pack_req.as_ref().map(|lut| self.encode_pack_pass(&mut encoder, lut, &buf_b, n_pixels));
+        let packed = pack_req.as_ref().map(|req| self.encode_pack_pass(&mut encoder, req, &buf_b, n_pixels));
         if let Some(rb) = readback.as_ref() {
             encoder.copy_buffer_to_buffer(packed.as_ref().unwrap_or(&buf_b), 0, rb, 0, readback_bytes);
         }
