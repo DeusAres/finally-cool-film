@@ -803,6 +803,7 @@ impl Pipeline {
         );
         let base_xyz_to_rgb = match self.params.io.output_color_space.as_str() {
             "sRGB" => spektrafilm_math::colorspace::XYZ_TO_SRGB_F64,
+            "Display P3" => spektrafilm_math::colorspace::XYZ_TO_DISPLAY_P3_F64,
             "ProPhoto RGB" => spektrafilm_math::colorspace::XYZ_TO_PROPHOTO_F64,
             "Rec. 2020" | "Rec2020" | "ITU-R BT.2020" => {
                 spektrafilm_math::colorspace::XYZ_TO_REC2020_F64

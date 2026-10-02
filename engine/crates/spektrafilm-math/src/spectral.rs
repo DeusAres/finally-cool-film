@@ -705,7 +705,7 @@ pub fn colorspace_white_xyz(name: &str) -> [f32; 3] {
 /// f64 variant: native white point XYZ for a named colorspace.
 pub fn colorspace_white_xyz_f64(name: &str) -> [f64; 3] {
     match name {
-        "sRGB" => colorspace::xy_to_xyz_f64(0.3127, 0.329),
+        "sRGB" | "Display P3" => colorspace::xy_to_xyz_f64(0.3127, 0.329),
         "ProPhoto RGB" => colorspace::xy_to_xyz_f64(0.3457, 0.3585),
         "Rec. 2020" | "Rec2020" | "ITU-R BT.2020" => colorspace::xy_to_xyz_f64(0.3127, 0.329),
         "ACES2065-1" => colorspace::xy_to_xyz_f64(0.32168, 0.33767),

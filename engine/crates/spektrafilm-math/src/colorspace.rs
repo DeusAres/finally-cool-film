@@ -48,6 +48,17 @@ pub const ACES_TO_XYZ_F64: [[f64; 3]; 3] = [
 /// matrix at the IEC 61966-2-1 standard 4-decimal precision — using
 /// the high-precision inverse here produces ~1e-5 of drift in the
 /// scan stage.
+/// Display P3 (D65, sRGB transfer): Apple displays and iPhone photos.
+pub const DISPLAY_P3_TO_XYZ_F64: [[f64; 3]; 3] = [
+    [0.4865709486482162, 0.26566769316909306, 0.1982172852343625],
+    [0.2289745640697488, 0.6917385218365064, 0.079286914093745],
+    [0.0, 0.04511338185890264, 1.043944368900976],
+];
+pub const XYZ_TO_DISPLAY_P3_F64: [[f64; 3]; 3] = [
+    [2.493496911941425, -0.9313836179191239, -0.40271078445071684],
+    [-0.8294889695615747, 1.7626640603183463, 0.023624685841943577],
+    [0.03584583024378447, -0.07617238926804182, 0.9568845240076872],
+];
 pub const XYZ_TO_SRGB_F64: [[f64; 3]; 3] = [
     [3.2406, -1.5372, -0.4986],
     [-0.9689, 1.8758, 0.0415],

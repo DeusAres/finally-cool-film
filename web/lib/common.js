@@ -74,7 +74,7 @@ export function decodeRGBA(bitmap, longSide = Infinity) {
 // fraction of the pixel that clipped, 0..255. The input stage multiplies that
 // fraction of the light by CLIP_GAIN. Frame-independent, so export tiles
 // (alpha per pixel) match the preview (alpha = area average).
-const CLIP_LO = 235, CLIP_HI = 252;          // min(R,G,B), 8-bit: neutral clipping only
+const CLIP_LO = 250, CLIP_HI = 254;          // min(R,G,B), 8-bit: true neutral clipping only (near-white fur at 235–250 is not clipped)
 export const CLIP_GAIN = 2 ** 5 - 1;        // clipped light is +5 EV
 const CLIP_W = Uint8Array.from({ length: 256 }, (_, v) => {
   const t = Math.max(0, Math.min(1, (v - CLIP_LO) / (CLIP_HI - CLIP_LO)));

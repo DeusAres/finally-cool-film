@@ -3,6 +3,7 @@ import { transferChart, readTransfer, buildTone, autoTone } from './lib/tone.js'
 import { LIN8 } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
+import { iccSegment } from './lib/icc.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, inputUniform } from './lib/lens-gpu.js';
 import { dustField, drawDust, compositeDust } from './lib/dust.js';
@@ -48,9 +49,15 @@ const calibParams = (u) => ({ enlarger: { m_filter_shift: u.mshift, y_filter_shi
 // Tone is handled by tone.js on the input (scene reconstruction) and output
 // (white point), so the engine runs at fixed exposure with no auto-exposure,
 // no print-curve morph and no scanner levels: the paper's real black stays.
+const outP3 = () => !!photo?.preview.p3;
+
 function renderParams(u, { noGrain = false } = {}) {
   return {
     camera: { auto_exposure: false, film_format_mm: FILM_FORMAT_MM },
+    // P3 photos render straight into Display P3 (same transfer curve as sRGB,
+    // so tones are identical): the engine's sRGB-only gamut compression was
+    // squeezing saturated reds / oranges / yellows by ~20% (measured).
+    io: outP3() ? { output_color_space: 'Display P3', output_gamut_compress: { algorithm: 'off' } } : { output_color_space: 'sRGB', output_gamut_compress: { algorithm: 'cam16ucs' } },
     scanner: { black_correction: false, white_correction: false },
     film_render: {
       // On the GPU path grain is ours (grain.js, in the output pass); the engine's is the CPU fallback.
@@ -137,7 +144,8 @@ async function render() {
       setBusy(`anteprima #${n} ${pv.w}x${pv.h} ${JSON.stringify(u)}`);
       await ensureTone(u);
       engine.update(JSON.stringify(renderParams(u)));
-      if (photo.after?.width !== pv.w || photo.after?.height !== pv.h) photo.after = new ImageData(pv.w, pv.h);
+      const cs = outP3() ? 'display-p3' : 'srgb';
+      if (photo.after?.width !== pv.w || photo.after?.height !== pv.h || photo.after.colorSpace !== cs) photo.after = new ImageData(pv.w, pv.h, { colorSpace: cs });
       await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), lensOf(u), u.grain);
       const t1 = performance.now();
       if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); }
@@ -465,6 +473,7 @@ async function exportFull() {
     encoder.postMessage({ cmd: 'finish' });
     const result = await done;
     let bytes = result.jpeg;
+    if (outP3()) bytes = insertExif(bytes, iccSegment());   // generic segment insert: the JPEG is Display P3
     try {
       const seg = await readExifSegment(photo.file);
       if (seg) { bytes = insertExif(bytes, patchExif(seg, result.width, result.height)); log(`EXIF carried over (${seg.length} B)`); }
