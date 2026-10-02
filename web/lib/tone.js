@@ -168,17 +168,33 @@ export function buildTone(T, { look, ev, rolloff = 0.6 }) {
     gain[i] = (0.18 * 2 ** curve(Math.log2(n / 0.18))) / n;
     scene[i] = sceneValue(T, (i / SQRT_N) ** 2, look);
   }
-  // White stretch, plus a soft floor at the paper black: scanner sharpening and
-  // grain can undershoot locally, but a print is never darker than its Dmax.
+  // White stretch, a soft floor at the paper black (scanner sharpening and
+  // grain can undershoot locally, but a print is never darker than its Dmax),
+  // then the scanner curve (SCAN_CURVE).
   const out8 = new Uint8ClampedArray(4096), f = T.floor * 0.85;
   for (let j = 0; j < 4096; j++) {
     const x = Math.min(1, lin(j / 4095) / T.white);
-    out8[j] = Math.round(255 * enc(Math.min(1, Math.sqrt(x * x + f * f))));
+    out8[j] = Math.round(255 * enc(fromLstar(scanCurve(toLstar(Math.min(1, Math.sqrt(x * x + f * f)))))));
   }
   const packed = new Float32Array(2 * (SQRT_N + 1));
   packed.set(gain, 0); packed.set(scene, SQRT_N + 1);
   return { gain, scene, out8, packed };
 }
+
+// Scanner curve, in L* (output → output), per channel like a lab scanner's.
+// Fitted to real Kodak Gold 200 scans the user likes (shopfront, two people on
+// grass, cliffs over the sea), measured against the grey ramp through this
+// pipeline: the black point sits at L* ~2.5 (the scans reach 1–4; paper Dmax
+// alone leaves ~7), the deep shadows rise steeply from it, the low shadows are
+// lifted +6–8 L* (cast shadows in those scans are ~1.5 stops under the sunlit
+// side, not ~3: luminous, open), and the lift fades out by L* ~65. The steep
+// stretch between the deep black and the lifted shadows is the soft
+// "detachment" between shadows and mids. Highlights are untouched.
+const SCAN_PTS = [[0, 0], [7.2, 2.5], [11.8, 9], [13.2, 14], [14.7, 19], [16.6, 23], [18.9, 27],
+  [25.3, 33], [33.2, 39], [41.1, 45], [52.8, 54.5], [64, 64.5], [76.6, 76.6], [100, 100]];
+const scanCurve = monotoneSpline(SCAN_PTS, SCAN_PTS.map(() => null));
+const toLstar = (Y) => (Y > 0.008856 ? 116 * Math.cbrt(Y) - 16 : 903.3 * Y);
+const fromLstar = (L) => (L > 8 ? ((L + 16) / 116) ** 3 : Math.max(0, L) / 903.3);
 
 const lookup = (lut, c) => {
   const f = Math.sqrt(c <= 0 ? 0 : c >= 1 ? 1 : c) * SQRT_N, i = f | 0;
