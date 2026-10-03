@@ -152,8 +152,8 @@ function autoFromPhoto() {
 // ---------- preview ----------
 
 async function render() {
-  if (!photo || exporting) return;
-  if (rendering) { dirty = true; return; }
+  if (!photo) return;
+  if (rendering || exporting) { dirty = true; return; }   // export: re-rendered when it ends
   rendering = true;
   try {
     do {
@@ -172,7 +172,7 @@ async function render() {
       const t2 = performance.now(), ms = (v) => Math.round(v);
       status(`${pv.w}×${pv.h} · ${ms(t2 - t0)} ms (render ${ms(t1 - t0)} · display ${ms(t2 - t1)})${gpu ? '' : ' CPU'}`);
       log(`render #${n} ${ms(t1 - t0)}+${ms(t2 - t1)} ms`);
-    } while (dirty);
+    } while (dirty && !exporting);
   } catch (e) {
     log('render error: ' + (e?.stack || e));
     status('Errore: ' + (e?.message || e));
@@ -444,6 +444,8 @@ async function exportFull() {
   exporting = true;
   $('export').disabled = true;
   setBusy('export');
+  // A preview render in flight shares the engine and the GPU frame: let it finish first.
+  while (rendering) await new Promise((r) => setTimeout(r, 20));
   const u = ui();
   const t0 = performance.now();
   try {
@@ -517,6 +519,7 @@ async function exportFull() {
     if (gpu) sf.set_frame(withAlpha(photo.preview.data, photo.preview.clip), photo.preview.w, photo.preview.h);   // back to the preview frame
     $('export').disabled = false;
     engine?.update(JSON.stringify(renderParams(ui())));   // back to preview params
+    if (dirty) render();   // sliders moved during the export
   }
 }
 
