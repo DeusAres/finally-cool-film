@@ -143,3 +143,27 @@ export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = fa
 
 // Peak amplitude (8-bit levels, per unit of noise) at amount 1.
 const GRAIN_LEVELS = 13;
+
+// CPU twin of the colour steps of GRAIN_WGSL (grey balance, then Rec.2020 → P3),
+// for the no-WebGPU path: `px` is one engine output pixel (sRGB-encoded), in place.
+const decs = (v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+const encsCPU = (v) => (v <= 0.0031308 ? 12.92 * v : 1.055 * Math.max(v, 0) ** (1 / 2.4) - 0.055);
+const RGC_SCL = (1.3 - 0.9) / (((1 - 0.9) / (1.3 - 0.9)) ** -1.2 - 1) ** (1 / 1.2);
+const rgcCPU = (d) => { if (d < 0.9) return d; const x = (d - 0.9) / RGC_SCL; return 0.9 + RGC_SCL * x / (1 + x ** 1.2) ** (1 / 1.2); };
+export function outputColourCPU(px, rec2020ToP3, balance) {
+  if (balance) {
+    for (let c = 0; c < 3; c++) {
+      const f = Math.min(1, Math.max(0, px[c])) * 1024, i = f | 0, base = c * 1025;
+      px[c] = i >= 1024 ? balance[base + 1024] : balance[base + i] + (balance[base + i + 1] - balance[base + i]) * (f - i);
+    }
+  }
+  if (rec2020ToP3) {
+    const r = decs(px[0]), g = decs(px[1]), b = decs(px[2]);
+    let p0 = 1.3435783 * r - 0.2821797 * g - 0.0613986 * b;
+    let p1 = -0.0652975 * r + 1.0757879 * g - 0.0104905 * b;
+    let p2 = 0.0028218 * r - 0.0195985 * g + 1.0167767 * b;
+    const a = Math.max(p0, p1, p2);
+    if (a > 0) { p0 = a - rgcCPU((a - p0) / a) * a; p1 = a - rgcCPU((a - p1) / a) * a; p2 = a - rgcCPU((a - p2) / a) * a; }
+    px[0] = encsCPU(p0); px[1] = encsCPU(p1); px[2] = encsCPU(p2);
+  }
+}
