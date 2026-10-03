@@ -246,14 +246,13 @@ const newDustSeed = () => (Math.random() * 2 ** 32) >>> 0;
 // and every export (FNV-1a of name, size, date).
 const fileSeed = (f) => { let h = 2166136261; for (const ch of `${f.name}|${f.size}|${f.lastModified}`) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return h >>> 0; };
 
-/** Composite the dust layer into an RGB strip (rows y0.. of a w×h export). */
-function dustIntoStrip(strip, w, h, y0, rows) {
-  const a = dustAmount();
+/** Composite dust marks at amount `a` into an RGB strip (rows y0.. of a w×h export). */
+function dustIntoStrip(strip, w, h, y0, rows, a, marks) {
   if (!a) return;
   const c = document.createElement('canvas');
   c.width = w; c.height = rows;
   const x = c.getContext('2d', { willReadFrequently: true });
-  drawDust(x, dustMarks(), a, w, h, 0, y0);
+  drawDust(x, marks, a, w, h, 0, y0);
   compositeDust(strip, x.getImageData(0, 0, w, rows).data);
   c.width = c.height = 0;
 }
@@ -449,7 +448,7 @@ async function exportFull() {
   setBusy('export');
   // A preview render in flight shares the engine and the GPU frame: let it finish first.
   while (rendering) await new Promise((r) => setTimeout(r, 20));
-  const u = ui();
+  const u = ui(), dust = dustAmount(), marks = dustMarks();   // fixed for every strip
   const t0 = performance.now();
   try {
     const { bitmap } = photo;
@@ -493,7 +492,7 @@ async function exportFull() {
           for (let x = 0; x < cw; x++, src += 4) { strip[dst++] = tile[src]; strip[dst++] = tile[src + 1]; strip[dst++] = tile[src + 2]; }
         }
       }
-      dustIntoStrip(strip, w, h, ty, ch);
+      dustIntoStrip(strip, w, h, ty, ch, dust, marks);
       encoder.postMessage({ cmd: 'rows', rgb: strip.buffer }, [strip.buffer]);
       log(`strip ${s + 1}/${strips} sent`);
     }
