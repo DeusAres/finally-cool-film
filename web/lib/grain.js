@@ -28,7 +28,9 @@ export const GRAIN_WGSL = /* wgsl */`
 @group(0) @binding(2) var<storage, read_write> dst: array<u32>;
 @group(0) @binding(3) var<storage, read> P: array<f32>;
 // P[4] region width, P[5..6] region origin (frame px), P[7] µm per px,
-// P[8] amplitude (8-bit levels), P[9] grain size (µm), P[10] seed.
+// P[8] amplitude (8-bit levels), P[9] grain size (µm), P[10] seed,
+// P[11] = 1: the chain output is Rec.2020 → convert to Display P3 here, with
+// ACES-style per-channel soft gamut compression (see toP3).
 
 fn q(v: f32) -> f32 { return f32(lut[u32(clamp(v * 4095.0 + 0.5, 0.0, 4095.0))]) / 255.0; }
 
@@ -57,11 +59,41 @@ fn lstar(c: vec3<f32>) -> f32 {
 }
 fn sstep(a: f32, b: f32, x: f32) -> f32 { let t = clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
 
+fn dec(v: vec3<f32>) -> vec3<f32> { return select(pow((v + 0.055) / 1.055, vec3<f32>(2.4)), v / 12.92, v <= vec3<f32>(0.04045)); }
+fn encs(v: vec3<f32>) -> vec3<f32> { return select(1.055 * pow(max(v, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055, 12.92 * v, v <= vec3<f32>(0.0031308)); }
+// One channel's distance from the achromatic axis compressed beyond THR so that
+// LIM (the farthest a film colour lands outside P3) maps exactly to the gamut edge.
+fn rgc(d: f32) -> f32 {
+  let thr = 0.9; let lim = 1.3; let pw = 1.2;
+  if (d < thr) { return d; }
+  let scl = (lim - thr) / pow(pow((1.0 - thr) / (lim - thr), -pw) - 1.0, 1.0 / pw);
+  let x = (d - thr) / scl;
+  return thr + scl * x / pow(1.0 + pow(x, pw), 1.0 / pw);
+}
+// Rec.2020 (sRGB-encoded) → Display P3 (sRGB-encoded). Film colours a little
+// outside P3 (dark saturated browns, deep reds) are pulled in along their own
+// channel instead of clipping to 0, which would rotate the hue and flatten them.
+fn toP3(e: vec3<f32>) -> vec3<f32> {
+  let l = dec(e);
+  var p = vec3<f32>(
+    dot(vec3<f32>(1.3435783, -0.2821797, -0.0613986), l),
+    dot(vec3<f32>(-0.0652975, 1.0757879, -0.0104905), l),
+    dot(vec3<f32>(0.0028218, -0.0195985, 1.0167767), l));
+  let a = max(p.x, max(p.y, p.z));
+  if (a > 0.0) {
+    let d = (vec3<f32>(a) - p) / a;
+    p = vec3<f32>(a) - vec3<f32>(rgc(d.x), rgc(d.y), rgc(d.z)) * a;
+  }
+  return encs(p);
+}
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = id.x + id.y * u32(P[1]);
   if (i >= u32(P[0])) { return; }
-  var c = vec3<f32>(q(src[3u * i]), q(src[3u * i + 1u]), q(src[3u * i + 2u]));
+  var e = vec3<f32>(src[3u * i], src[3u * i + 1u], src[3u * i + 2u]);
+  if (P[11] > 0.5) { e = toP3(e); }
+  var c = vec3<f32>(q(e.x), q(e.y), q(e.z));
   if (P[8] > 0.0) {
     let w = u32(P[4]);
     let um = (vec2<f32>(f32(i % w), f32(i / w)) + vec2<f32>(P[5], P[6]) + 0.5) * P[7];
@@ -85,11 +117,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
  * Params for GRAIN_WGSL: region (x0, y0, w) of a frame whose long side is
  * `frameLong` px; `amount` is the Grana slider (0 = off), `seed` per photo.
  */
-export function grainParams(w, x0, y0, frameLong, amount, seed) {
+export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false) {
   const umPerPx = FRAME_UM / frameLong;
   // Size grows a little with the amount (a coarser-looking stock); 12 µm at 1.
   const size = 12 * (0.75 + 0.25 * amount);
-  return new Float32Array([w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536]);
+  return new Float32Array([w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0]);
 }
 
 // Peak amplitude (8-bit levels, per unit of noise) at amount 1.

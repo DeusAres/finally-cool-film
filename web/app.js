@@ -54,16 +54,26 @@ const outP3 = () => !!photo?.preview.p3;
 function renderParams(u, { noGrain = false } = {}) {
   return {
     camera: { auto_exposure: false, film_format_mm: FILM_FORMAT_MM },
-    // P3 photos render straight into Display P3 (same transfer curve as sRGB,
-    // so tones are identical): the engine's sRGB-only gamut compression was
-    // squeezing saturated reds / oranges / yellows by ~20% (measured).
-    io: outP3() ? { output_color_space: 'Display P3', output_gamut_compress: { algorithm: 'off' } } : { output_color_space: 'sRGB', output_gamut_compress: { algorithm: 'cam16ucs' } },
+    // P3 photos end up in Display P3 (same transfer curve as sRGB, so tones are
+    // identical): the engine's sRGB-only gamut compression was squeezing
+    // saturated reds / oranges / yellows by ~20% (measured). The engine renders
+    // them into Rec.2020 (film colours fit there) and the output pass converts
+    // to P3 with a soft gamut compression (grain.js toP3); plain P3 output
+    // hard-clipped dark warm browns (B = 0, hue swung red).
+    io: outP3() ? { output_color_space: 'ITU-R BT.2020', output_gamut_compress: { algorithm: 'off' } } : { output_color_space: 'sRGB', output_gamut_compress: { algorithm: 'cam16ucs' } },
     scanner: { black_correction: false, white_correction: false },
     film_render: {
       // On the GPU path grain is ours (grain.js, in the output pass); the engine's is the CPU fallback.
       grain: { active: !gpu && !noGrain && u.grain > 0, agx_particle_area_um2: GRAIN_AREA_UM2 * Math.max(u.grain, 0.01) },
       halation: { active: u.halation > 0, halation_amount: u.halation },
+      // Viewing glare: same mean (E = percent whatever the roughness), but no
+      // random per-pixel field: that field is seeded by the pixel's index in
+      // the region, so every export tile drew a different one (measured: the
+      // same pixel varied ~0.3 levels between tiles, and seams showed at tile
+      // boundaries). Our grain supplies the texture.
+      glare: { roughness: 0 },
     },
+    print_render: { glare: { roughness: 0 } },
   };
 }
 
@@ -109,7 +119,7 @@ async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0) {
   if (gpu) {
     return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lens),
       tone.packed, w, h, tone.out8,
-      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed), target);
+      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3()), target);
   }
   const rgb = lensActive(lens)
     ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lensGeometry(frame.w, frame.h, lens), tone)
@@ -222,6 +232,9 @@ function drawDustLayer() {
   if (a > 0) drawDust(dctx, dustMarks(), a, w, h);
 }
 const newDustSeed = () => (Math.random() * 2 ** 32) >>> 0;
+// Grain is the film's own: the same photo gets the same grain on every load
+// and every export (FNV-1a of name, size, date).
+const fileSeed = (f) => { let h = 2166136261; for (const ch of `${f.name}|${f.size}|${f.lastModified}`) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return h >>> 0; };
 
 /** Composite the dust layer into an RGB strip (rows y0.. of a w×h export). */
 function dustIntoStrip(strip, w, h, y0, rows) {
@@ -365,7 +378,7 @@ async function loadPhoto(file) {
     const preview = decodeRGBA(bitmap, PREVIEW_LONG_SIDE);
     preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
     log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
-    photo = { file, bitmap, preview, dustSeed: newDustSeed(), grainSeed: newDustSeed() };
+    photo = { file, bitmap, preview, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
     if (gpu) {
       preview.clip = clipMask(bitmap, preview.w, preview.h);   // full-res clipping, see common.js
       sf.set_frame(withAlpha(preview.data, preview.clip), preview.w, preview.h);
