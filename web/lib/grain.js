@@ -31,8 +31,14 @@ export const GRAIN_WGSL = /* wgsl */`
 // P[8] amplitude (8-bit levels), P[9] grain size (µm), P[10] seed,
 // P[11] = 1: the chain output is Rec.2020 → convert to Display P3 here, with
 // ACES-style per-channel soft gamut compression (see toP3); P[12] the paper
-// black (8-bit / 255): grain softly floors there instead of clipping to 0.
+// black (8-bit / 255): grain softly floors there instead of clipping to 0;
+// P[13] = 1: grey balance curves (tone.js greyBalance) from P[16], applied first.
 
+fn bal(c: u32, v: f32) -> f32 {             // grey balance (tone.js greyBalance), P[16..]
+  let f = clamp(v, 0.0, 1.0) * 1024.0; let i = u32(f); let base = 16u + c * 1025u;
+  if (i >= 1024u) { return P[base + 1024u]; }
+  return mix(P[base + i], P[base + i + 1u], f - f32(i));
+}
 fn q(v: f32) -> f32 { return f32(lut[u32(clamp(v * 4095.0 + 0.5, 0.0, 4095.0))]) / 255.0; }
 
 fn pcg(v0: vec3<u32>) -> u32 {                 // pcg3d hash
@@ -93,6 +99,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = id.x + id.y * u32(P[1]);
   if (i >= u32(P[0])) { return; }
   var e = vec3<f32>(src[3u * i], src[3u * i + 1u], src[3u * i + 2u]);
+  if (P[13] > 0.5) { e = vec3<f32>(bal(0u, e.x), bal(1u, e.y), bal(2u, e.z)); }
   if (P[11] > 0.5) { e = toP3(e); }
   var c = vec3<f32>(q(e.x), q(e.y), q(e.z));
   if (P[8] > 0.0) {
@@ -124,11 +131,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
  * Params for GRAIN_WGSL: region (x0, y0, w) of a frame whose long side is
  * `frameLong` px; `amount` is the Grana slider (0 = off), `seed` per photo.
  */
-export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false, black = 0) {
+export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false, black = 0, balance = null) {
   const umPerPx = FRAME_UM / frameLong;
   // Size grows a little with the amount (a coarser-looking stock); 12 µm at 1.
   const size = 12 * (0.75 + 0.25 * amount);
-  return new Float32Array([w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0, black / 255]);
+  const head = [w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0, black / 255, balance ? 1 : 0, 0, 0];
+  const p = new Float32Array(head.length + (balance ? balance.length : 0));
+  p.set(head); if (balance) p.set(balance, head.length);   // balance starts at P[16]
+  return p;
 }
 
 // Peak amplitude (8-bit levels, per unit of noise) at amount 1.

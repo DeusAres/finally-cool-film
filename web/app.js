@@ -123,7 +123,7 @@ async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, textur
   if (gpu) {
     return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lens, texture),
       tone.packed, w, h, tone.out8,
-      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0]), target);
+      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0], tone.balance), target);
   }
   const rgb = lensActive(lens)
     ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lensGeometry(frame.w, frame.h, lens), tone)

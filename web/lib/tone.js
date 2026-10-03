@@ -49,18 +49,21 @@ export function transferChart() {
 
 /** F from the engine's render of `transferChart()` (sRGB-encoded output). */
 export function readTransfer(out, w) {
-  const logS = [], Y = [];
+  const logS = [], Y = [], C = [[], [], []];
   for (let k = 0; k < N; k++) {
     const cx = (k % COLS) * PATCH + PATCH / 2, cy = ((k / COLS) | 0) * PATCH + PATCH / 2;
     let s = 0, n = 0;
+    const sc = [0, 0, 0];
     for (let y = cy - 8; y < cy + 8; y++) for (let x = cx - 8; x < cx + 8; x++) {
       const i = (y * w + x) * 3;
+      for (let c = 0; c < 3; c++) sc[c] += lin(out[i + c]);
       s += 0.2126 * lin(out[i]) + 0.7152 * lin(out[i + 1]) + 0.0722 * lin(out[i + 2]); n++;
     }
     logS.push(LO + (HI - LO) * k / (N - 1));
     Y.push(Math.max(s / n, k ? Y[k - 1] + 1e-7 : 1e-7));   // keep F strictly increasing
+    for (let c = 0; c < 3; c++) C[c].push(sc[c] / n);         // per-channel response to neutral grey
   }
-  return { logS, Y, white: Y[N - 1], floor: Y[0] / Y[N - 1] };
+  return { logS, Y, C, white: Y[N - 1], floor: Y[0] / Y[N - 1] };
 }
 
 // log2(s/0.18) with F(s) = target(d).
@@ -178,7 +181,7 @@ export function buildTone(T, { look, ev, rolloff = 0.6 }) {
   }
   const packed = new Float32Array(2 * (SQRT_N + 1));
   packed.set(gain, 0); packed.set(scene, SQRT_N + 1);
-  return { gain, scene, out8, packed };
+  return { gain, scene, out8, packed, balance: (T.balance ||= greyBalance(T)) };
 }
 
 // Scanner curve, in L* (output → output), per channel like a lab scanner's.
@@ -195,6 +198,37 @@ const SCAN_PTS = [[0, 0], [7.2, 2.5], [11.8, 9], [13.2, 14], [14.7, 19], [16.6, 
 const scanCurve = monotoneSpline(SCAN_PTS, SCAN_PTS.map(() => null));
 const toLstar = (Y) => (Y > 0.008856 ? 116 * Math.cbrt(Y) - 16 : 903.3 * Y);
 const fromLstar = (L) => (L > 8 ? ((L + 16) / 116) ** 3 : Math.max(0, L) / 903.3);
+
+/**
+ * Grey balance, as a lab scanner sets it: three curves over the engine's
+ * encoded output (1025 entries each, R ++ G ++ B) mapping each channel's
+ * response to the neutral chart onto the patch's luminance, so a neutral
+ * grey comes out neutral at every level. Measured need: in the film/paper
+ * toe the channels part slightly, and the scanner curve's steep shadow
+ * stretch turned that into a green-yellow cast on dark neutrals
+ * (a* −5, b* +3 at L* 17 on a grey ramp).
+ */
+export function greyBalance(T) {
+  const n = SQRT_N + 1, out = new Float32Array(3 * n);
+  for (let c = 0; c < 3; c++) {
+    // (x, y) = (channel's encoded output, encoded luminance) per patch, x strictly increasing.
+    const xs = [], ys = [];
+    for (let k = 0; k < T.Y.length; k++) {
+      const x = enc(T.C[c][k]), y = enc(T.Y[k]);
+      if (!xs.length || x > xs[xs.length - 1] + 1e-5) { xs.push(x); ys.push(y); }
+    }
+    for (let i = 0; i < n; i++) {
+      const u = i / SQRT_N;
+      let v;
+      if (u <= xs[0]) v = u * ys[0] / Math.max(xs[0], 1e-6);
+      else if (u >= xs[xs.length - 1]) v = ys[ys.length - 1] + (u - xs[xs.length - 1]);
+      else { let a = 0, b = xs.length - 1; while (b - a > 1) { const m = (a + b) >> 1; if (xs[m] < u) a = m; else b = m; }
+        v = ys[a] + (ys[b] - ys[a]) * (u - xs[a]) / (xs[b] - xs[a]); }
+      out[c * n + i] = Math.min(1, Math.max(0, v));
+    }
+  }
+  return out;
+}
 
 const lookup = (lut, c) => {
   const f = Math.sqrt(c <= 0 ? 0 : c >= 1 ? 1 : c) * SQRT_N, i = f | 0;
