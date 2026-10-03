@@ -63,6 +63,32 @@ export function decodeRGBA(bitmap, longSide = Infinity) {
   return { data, w, h, p3 };
 }
 
+// Strips of about this many bytes (8-bit RGBA) when a full-size frame is
+// decoded or uploaded piecewise, so it never sits whole in memory.
+const STRIP_BYTES = 4 << 20;
+export const stripRows = (w) => Math.max(1, Math.floor(STRIP_BYTES / (w * 4)));
+
+/**
+ * `bitmap` at its native size as 8-bit RGBA, a strip of rows at a time:
+ * fn(data, y0, rows, p3). The same pixels as decodeRGBA(bitmap) (a 1:1 draw
+ * is a copy), without the whole frame and its canvas in memory at once.
+ */
+export function forEachStrip(bitmap, fn) {
+  const w = bitmap.width, H = bitmap.height, step = stripRows(w);
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = Math.min(step, H);
+  const ctx = canvas.getContext('2d', { colorSpace: 'display-p3' });
+  const p3 = ctx.getContextAttributes?.().colorSpace === 'display-p3';
+  ctx.imageSmoothingEnabled = false;   // 1:1: an exact copy, strip edges included
+  for (let y0 = 0; y0 < H; y0 += step) {
+    const rows = Math.min(step, H - y0);
+    ctx.clearRect(0, 0, w, rows);
+    ctx.drawImage(bitmap, 0, y0, w, rows, 0, 0, w, rows);
+    fn((p3 ? ctx.getImageData(0, 0, w, rows, { colorSpace: 'display-p3' }) : ctx.getImageData(0, 0, w, rows)).data, y0, rows, p3);
+  }
+  canvas.width = canvas.height = 0;
+}
+
 // ---------- clipped highlights ----------
 // Where the phone clipped (sky through a blind, a window, a lamp) the real
 // light was far brighter than display white. The print can't show the
@@ -89,14 +115,24 @@ export function writeClipAlpha(data) {
 
 /** Clip fraction per pixel of a w×h preview: clip weights of the full-resolution decode, area-averaged. */
 export function clipMask(bitmap, w, h, longCap = 4096) {
-  const full = decodeRGBA(bitmap, longCap), sx = w / full.w, sy = h / full.h;
-  const sum = new Float32Array(w * h), cnt = new Float32Array(w * h);
-  for (let y = 0; y < full.h; y++) {
-    const row = Math.min(h - 1, (y * sy) | 0) * w;
-    for (let x = 0, i = y * full.w * 4; x < full.w; x++, i += 4) {
-      const k = row + Math.min(w - 1, (x * sx) | 0);
-      sum[k] += clipWeight(full.data, i); cnt[k]++;
+  // Integer sums: exact, as the float ones were.
+  const sum = new Uint32Array(w * h), cnt = new Uint16Array(w * h);
+  const add = (data, fw, fh, y0, rows) => {
+    const sx = w / fw, sy = h / fh;
+    for (let y = y0; y < y0 + rows; y++) {
+      const row = Math.min(h - 1, (y * sy) | 0) * w;
+      for (let x = 0, i = (y - y0) * fw * 4; x < fw; x++, i += 4) {
+        const k = row + Math.min(w - 1, (x * sx) | 0);
+        sum[k] += clipWeight(data, i); cnt[k]++;
+      }
     }
+  };
+  if (Math.max(bitmap.width, bitmap.height) <= longCap) {
+    // Native size: in strips (a 12 MP decode is ~100 MB of canvas + pixels).
+    forEachStrip(bitmap, (data, y0, rows) => add(data, bitmap.width, bitmap.height, y0, rows));
+  } else {
+    const full = decodeRGBA(bitmap, longCap);
+    add(full.data, full.w, full.h, 0, full.h);
   }
   return Uint8Array.from(sum, (s, k) => Math.round(s / cnt[k]));
 }

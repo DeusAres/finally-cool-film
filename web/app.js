@@ -1,4 +1,4 @@
-import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, extractLinear, to8, clipMask, writeClipAlpha, withAlpha } from './lib/common.js';
+import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, to8, clipMask, writeClipAlpha, withAlpha } from './lib/common.js';
 import { transferChart, readTransfer, buildTone, autoTone } from './lib/tone.js';
 import { LIN8 } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
@@ -26,6 +26,7 @@ const ctx = view.getContext('2d', { colorSpace: 'display-p3' });
 let gpu = false;
 let engine = null;          // sf.Engine for the current photo + calibration
 let engineCalib = '';       // JSON of the calibration params `engine` was built with
+let engineParams = '';      // JSON last given to `engine.update` (re-sending it is a no-op)
 let photo = null;           // { file, bitmap, preview, after }
 let transfer = null, transferKey = '';   // measured grey transfer of the pipeline (per calibration)
 let tone = null, toneKey = '';           // LUTs for the current transfer + look + ev
@@ -87,7 +88,23 @@ function ensureEngine(u) {
   engine?.free();
   engine = new sf.Engine(FILM, PAPER, JSON.stringify(deepMerge(BASE_PARAMS, inputParams(photo.preview.p3), calibParams(u))));
   engineCalib = calib;
+  engineParams = '';
   return engine;
+}
+
+// Skips the parse / merge / rebuild in the engine when the params did not
+// change (most sliders are ours: tone, lens, grain, texture).
+function updateEngine(json) {
+  if (json === engineParams) return;
+  engine.update(json);
+  engineParams = json;
+}
+
+// The frame goes to the GPU a strip at a time: the wasm heap (which never
+// shrinks) only ever holds one strip, not the whole frame.
+function uploadFrame(data, w, h) {
+  sf.alloc_frame(w, h);
+  for (let y = 0, n = stripRows(w); y < h; y += n) sf.set_frame_rows(data.subarray(y * w * 4, Math.min(h, y + n) * w * 4), y);
 }
 
 const run = (img) => (gpu ? engine.process_gpu(img.rgb, img.w, img.h) : Promise.resolve(engine.process(img.rgb, img.w, img.h)));
@@ -101,7 +118,7 @@ async function ensureTone(u) {
   ensureEngine(u);
   if (transferKey !== engineCalib) {
     const t = performance.now(), chart = transferChart();
-    engine.update(JSON.stringify(renderParams(u, { noGrain: true })));
+    updateEngine(JSON.stringify(renderParams(u, { noGrain: true })));
     transfer = readTransfer(await run(chart), chart.w);
     transferKey = engineCalib;
     log(`transfer measured ${Math.round(performance.now() - t)} ms: white Y ${transfer.white.toFixed(3)}, black ${transfer.floor.toFixed(4)}`);
@@ -157,7 +174,7 @@ async function render() {
       // Breadcrumb: if iOS kills the tab mid-render, the next load says so.
       setBusy(`anteprima #${n} ${pv.w}x${pv.h} ${JSON.stringify(u)}`);
       await ensureTone(u);
-      engine.update(JSON.stringify(renderParams(u)));
+      updateEngine(JSON.stringify(renderParams(u)));
       const cs = outP3() ? 'display-p3' : 'srgb';
       if (photo.after?.width !== pv.w || photo.after?.height !== pv.h || photo.after.colorSpace !== cs) photo.after = new ImageData(pv.w, pv.h, { colorSpace: cs });
       await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), lensOf(u), u.grain, u.texture);
@@ -385,7 +402,7 @@ async function loadPhoto(file) {
     photo = { file, bitmap, preview, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
     if (gpu) {
       preview.clip = clipMask(bitmap, preview.w, preview.h);   // full-res clipping, see common.js
-      sf.set_frame(withAlpha(preview.data, preview.clip), preview.w, preview.h);
+      uploadFrame(withAlpha(preview.data, preview.clip), preview.w, preview.h);
     }
     engine?.free(); engine = null;
     view.width = preview.w; view.height = preview.h;
@@ -445,14 +462,24 @@ async function exportFull() {
     const scale = Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (bitmap.width * bitmap.height)));
     const longCap = Math.max(bitmap.width, bitmap.height) * scale;
     status('Esporto: decodifica…');
-    const { data, w, h, p3 } = decodeRGBA(bitmap, longCap);
+    let frame;   // { data (CPU path only), w, h, p3 }
+    if (gpu && scale === 1) {
+      // Native size: decoded and uploaded a strip at a time, so the full
+      // frame (~50 MB at 12 MP, plus its canvas) is never in memory.
+      frame = { data: null, w: bitmap.width, h: bitmap.height, p3: false };
+      sf.alloc_frame(frame.w, frame.h);
+      forEachStrip(bitmap, (data, y0, rows, p3) => { writeClipAlpha(data); sf.set_frame_rows(data, y0); frame.p3 = p3; });
+    } else {
+      frame = decodeRGBA(bitmap, longCap);
+      // GPU: the pixels live in the frame texture; drop them for the tile loop.
+      if (gpu) { writeClipAlpha(frame.data); uploadFrame(frame.data, frame.w, frame.h); frame.data = null; }
+    }
+    const { w, h, p3 } = frame;
     const progressive = w * h > PROGRESSIVE_PIXEL_LIMIT ? 0 : 2;
     const border = $('border').checked ? Math.round(Math.max(w, h) * BORDER_FRACTION) : 0;
     log(`export start ${w}x${h} p3=${p3} progressive=${progressive} border=${border}`);
 
     await ensureTone(u);
-    const frame = { data, w, h, p3 };
-    if (gpu) { writeClipAlpha(data); sf.set_frame(data, w, h); }
     const longSide = Math.max(w, h);
     const strips = Math.ceil(h / EXPORT_TILE), cols = Math.ceil(w / EXPORT_TILE);
 
@@ -471,7 +498,7 @@ async function exportFull() {
         status(`Esporto ${w}×${h}: tile ${s * cols + c + 1}/${strips * cols}…`);
         const x0 = Math.max(0, tx - EXPORT_PAD), y0 = Math.max(0, ty - EXPORT_PAD);
         const tw = Math.min(w, tx + EXPORT_TILE + EXPORT_PAD) - x0, th = Math.min(h, ty + EXPORT_TILE + EXPORT_PAD) - y0;
-        engine.update(JSON.stringify(deepMerge(renderParams(u), {
+        updateEngine(JSON.stringify(deepMerge(renderParams(u), {
           camera: { film_format_mm: FILM_FORMAT_MM * Math.max(tw, th) / longSide },
         })));
         const tile = (tileBuf = tileBuf?.length >= tw * th * 4 ? tileBuf : new Uint8Array(tw * th * 4)).subarray(0, tw * th * 4);
@@ -508,9 +535,9 @@ async function exportFull() {
   } finally {
     setBusy(null);
     exporting = false;
-    if (gpu) sf.set_frame(withAlpha(photo.preview.data, photo.preview.clip), photo.preview.w, photo.preview.h);   // back to the preview frame
+    if (gpu) uploadFrame(withAlpha(photo.preview.data, photo.preview.clip), photo.preview.w, photo.preview.h);   // back to the preview frame
     $('export').disabled = false;
-    engine?.update(JSON.stringify(renderParams(ui())));   // back to preview params
+    if (engine) updateEngine(JSON.stringify(renderParams(ui())));   // back to preview params
   }
 }
 
