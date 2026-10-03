@@ -390,6 +390,7 @@ async function loadPhoto(file) {
     const preview = decodeRGBA(bitmap, PREVIEW_LONG_SIDE);
     preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
     log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
+    photo?.bitmap.close();   // full-resolution decode of the previous photo
     photo = { file, bitmap, preview, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
     if (gpu) {
       preview.clip = clipMask(bitmap, preview.w, preview.h);   // full-res clipping, see common.js
