@@ -385,6 +385,8 @@ async function loadPhoto(file) {
   try {
     log(`photo: ${file.name} ${file.type} ${(file.size / 1e6).toFixed(1)} MB`);
     const bitmap = await createImageBitmap(file);
+    // A render or export in flight still uses the current photo, engine and GPU frame.
+    while (rendering || exporting) await new Promise((r) => setTimeout(r, 20));
     const preview = decodeRGBA(bitmap, PREVIEW_LONG_SIDE);
     preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
     log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
