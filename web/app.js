@@ -36,7 +36,7 @@ let rendering = false, dirty = false, exporting = false, renderCount = 0;
 const ui = () => ({
   ev: +$('ev').value, look: +$('look').value, rolloff: +$('rolloff').value,
   mshift: +$('mshift').value, yshift: +$('yshift').value,
-  grain: +$('grain').value, halation: +$('halation').value,
+  grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value,
   ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value,
 });
 // CA slider is quadratic: realistic (subtle) amounts get most of the travel.
@@ -61,7 +61,11 @@ function renderParams(u, { noGrain = false } = {}) {
     // to P3 with a soft gamut compression (grain.js toP3); plain P3 output
     // hard-clipped dark warm browns (B = 0, hue swung red).
     io: outP3() ? { output_color_space: 'ITU-R BT.2020', output_gamut_compress: { algorithm: 'off' } } : { output_color_space: 'sRGB', output_gamut_compress: { algorithm: 'cam16ucs' } },
-    scanner: { black_correction: false, white_correction: false },
+    // The engine's scanner unsharp mask works in pixels (0.7 px: crisper at
+    // preview size than on a 12 MP export) and inflated pixel-level detail
+    // ×1.3–1.6 (measured): a phone's crunch, not film. Texture comes from the
+    // film-adjacency clarity in the input pass instead (lens-gpu.js), in µm.
+    scanner: { black_correction: false, white_correction: false, unsharp_mask: [0, 0] },
     film_render: {
       // On the GPU path grain is ours (grain.js, in the output pass); the engine's is the CPU fallback.
       grain: { active: !gpu && !noGrain && u.grain > 0, agx_particle_area_um2: GRAIN_AREA_UM2 * Math.max(u.grain, 0.01) },
@@ -115,9 +119,9 @@ async function ensureTone(u) {
 // below (no WebGPU): float input built here, float output converted here.
 
 /** 8-bit render of a region of `frame` into `target` (RGBA, w×h×4 bytes). */
-async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0) {
+async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, texture = 0) {
   if (gpu) {
-    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lens),
+    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lens, texture),
       tone.packed, w, h, tone.out8,
       GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0]), target);
   }
@@ -156,7 +160,7 @@ async function render() {
       engine.update(JSON.stringify(renderParams(u)));
       const cs = outP3() ? 'display-p3' : 'srgb';
       if (photo.after?.width !== pv.w || photo.after?.height !== pv.h || photo.after.colorSpace !== cs) photo.after = new ImageData(pv.w, pv.h, { colorSpace: cs });
-      await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), lensOf(u), u.grain);
+      await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), lensOf(u), u.grain, u.texture);
       const t1 = performance.now();
       if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); }
       const t2 = performance.now(), ms = (v) => Math.round(v);
@@ -471,7 +475,7 @@ async function exportFull() {
           camera: { film_format_mm: FILM_FORMAT_MM * Math.max(tw, th) / longSide },
         })));
         const tile = (tileBuf = tileBuf?.length >= tw * th * 4 ? tileBuf : new Uint8Array(tw * th * 4)).subarray(0, tw * th * 4);
-        await renderRegion(frame, x0, y0, tw, th, tile, lensOf(u), u.grain);
+        await renderRegion(frame, x0, y0, tw, th, tile, lensOf(u), u.grain, u.texture);
         const cw = Math.min(EXPORT_TILE, w - tx);
         for (let y = 0; y < ch; y++) {   // RGBA tile → RGB strip
           let src = ((ty - y0 + y) * tw + (tx - x0)) * 4, dst = (y * w + tx) * 3;
@@ -540,9 +544,10 @@ const FORMAT = {
   ca: (v) => (v === 0 ? 'off' : `${Math.round(v * 100)}`),
   vignette: (v) => (v === 0 ? 'off' : `${Math.round(v * 100)}`),
   falloff: (v) => `${Math.round(v * 100)}`,
+  texture: (v) => (v === 0 ? 'off' : `${Math.round(v * 100)}`),
   dust: (v) => (v === 0 ? 'off' : `${Math.round(v * 100)}`),
 };
-const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 1, halation: 1, ca: 0, vignette: 0, falloff: 0.4, dust: 0 };
+const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 1, halation: 1, texture: 0.5, ca: 0, vignette: 0, falloff: 0.4, dust: 0 };
 const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }
 

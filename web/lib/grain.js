@@ -104,7 +104,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let p = um / size;
     let L = lstar(c);
     // GRAIN_SHAPE: measured on real scans (see grain.js).
-    let shape = (0.3 + 0.7 * sstep(2.0, 22.0, L)) * (1.0 - 0.95 * sstep(55.0, 88.0, L));
+    let shape = (0.6 + 0.4 * sstep(2.0, 22.0, L)) * (1.0 - 0.95 * sstep(55.0, 88.0, L));
     let chroma = mix(0.55, 0.2, sstep(10.0, 50.0, L));
     let mono = 0.8 * vnoise(p, s) + 0.6 * vnoise(p / 2.3 + 17.0, s + 1u);
     let n = vec3<f32>(vnoise(p + 31.0, s + 2u), vnoise(p + 57.0, s + 3u), vnoise(p + 83.0, s + 4u));
@@ -113,7 +113,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   // Soft floor at the paper black: unchanged a few levels above it, approaching
   // it below (softplus), so grain never punches pure-black specks into the
   // deepest shadows (measured: up to 4% of a frame at exactly 0).
-  let k = 1.5 / 255.0; let b = P[12] - 2.0 * k;   // paper black maps to itself within 0.2 levels
+  let k = 2.0 / 255.0; let b = P[12] - 2.0 * k;   // paper black maps to itself within 0.3 levels; grain has room below it
   let x = (c - b) / k;                         // stable softplus: max(x,0) + log(1 + e^-|x|)
   c = b + k * (max(x, vec3<f32>(0.0)) + log(vec3<f32>(1.0) + exp(-abs(x))));
   let o = vec3<u32>(round(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)) * 255.0));

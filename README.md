@@ -28,6 +28,9 @@ di pellicola → stampa → scansione, nel browser via WebAssembly + WebGPU. Foc
 - **Pipeline GPU**: la foto va sulla GPU una volta, come texture 8-bit; lens + ricostruzione tono + matrice colore girano
   come primo pass della catena del motore (shader in `lens-gpu.js`, `Engine.process_frame`) e l'uscita torna già RGBA 8-bit
   tramite la LUT di stampa. Nessun frame float attraversa JS↔wasm: ~4 ms di CPU per frame invece di ~100.
+- **Texture** (adiacenza della pellicola): contrasto locale in luminanza log sulla scala dove l'MTF del negativo colore supera
+  il 100% (~250 µm sul fotogramma: diffusione di sviluppatore e inibitori DIR ai bordi), con pesi che ignorano i bordi forti
+  (niente aloni). Sostituisce lo sharpening digitale del motore (in pixel, che gonfiava il dettaglio fine ×1.3–1.6).
 - **Polvere e graffi** (`web/lib/dust.js`): procedurali, niente texture. Granelli irregolari (alcuni sfocati), fibre a curvatura
   casuale, rari graffi lungo lo scorrimento della pellicola, in µm sul fotogramma 36 mm, quindi identici in anteprima ed export.
   Stanno sul negativo, quindi in stampa sono bianco carta. Layer separato: slider e **Rimescola** non ri-renderizzano nulla.
