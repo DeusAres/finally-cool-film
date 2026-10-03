@@ -1,8 +1,8 @@
 // EXIF carry-over (adapted from the grain project's exporter).
 // jpegli writes pixels only, so date, camera, lens and GPS would be lost. The
 // original APP1/Exif segment is copied into the output with three patches:
-// Orientation → 1 (pixels are already upright), ColorSpace → sRGB (the export
-// is sRGB; iPhone files say "uncalibrated" because they are Display P3),
+// Orientation → 1 (pixels are already upright), ColorSpace → sRGB for an sRGB
+// export, "uncalibrated" for a Display P3 one (the ICC profile says which),
 // PixelX/YDimension → the exported size. Anything unexpected → no EXIF rather
 // than a broken file.
 
@@ -26,7 +26,7 @@ export async function readExifSegment(file) {
   return null;
 }
 
-export function patchExif(seg, w, h) {
+export function patchExif(seg, w, h, p3 = false) {
   const dv = new DataView(seg.buffer, seg.byteOffset, seg.byteLength);
   const T = 10;                                            // TIFF header offset inside the segment
   const le = dv.getUint16(T) === 0x4949;
@@ -51,7 +51,7 @@ export function patchExif(seg, w, h) {
     else if (tag === 0x8769) exifIfd = u32(e + 8);
   });
   walk(exifIfd, (tag, e) => {
-    if (tag === 0xA001) set(e, 1);
+    if (tag === 0xA001) set(e, p3 ? 0xFFFF : 1);
     else if (tag === 0xA002) set(e, w);
     else if (tag === 0xA003) set(e, h);
   });

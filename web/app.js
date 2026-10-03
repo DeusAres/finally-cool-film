@@ -503,7 +503,7 @@ async function exportFull() {
     if (outP3()) bytes = insertExif(bytes, iccSegment());   // generic segment insert: the JPEG is Display P3
     try {
       const seg = await readExifSegment(photo.file);
-      if (seg) { bytes = insertExif(bytes, patchExif(seg, result.width, result.height)); log(`EXIF carried over (${seg.length} B)`); }
+      if (seg) { bytes = insertExif(bytes, patchExif(seg, result.width, result.height, outP3())); log(`EXIF carried over (${seg.length} B)`); }
     } catch (e) { log('EXIF skipped: ' + (e?.message || e)); }
     const blob = new Blob([bytes], { type: 'image/jpeg' });
     const base = (photo.file.name || 'foto').replace(/\.[^.]+$/, '');
