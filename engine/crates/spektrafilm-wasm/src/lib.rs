@@ -43,6 +43,22 @@ pub fn set_frame(rgba: &[u8], width: u32, height: u32) -> Result<(), JsError> {
     Ok(())
 }
 
+/// Start a width × height frame for `process_frame`, filled by `set_frame_rows`.
+#[wasm_bindgen]
+pub fn alloc_frame(width: u32, height: u32) -> Result<(), JsError> {
+    gpu()?.alloc_frame(width, height);
+    Ok(())
+}
+
+/// Upload whole rows (8-bit RGBA, as `set_frame`) of the frame from row `y0`:
+/// a big frame goes up a strip at a time, so the wasm heap (which never
+/// shrinks) only ever holds one strip.
+#[wasm_bindgen]
+pub fn set_frame_rows(rgba: &[u8], y0: u32) -> Result<(), JsError> {
+    gpu()?.set_frame_rows(rgba, y0);
+    Ok(())
+}
+
 /// Make a data file visible to the engine, e.g. `data/profiles/kodak_gold_200.json`.
 #[wasm_bindgen]
 pub fn register_file(path: &str, bytes: Vec<u8>) {
@@ -169,7 +185,9 @@ impl Engine {
             return Err(JsError::new("GPU-resident path unavailable for these params"));
         }
         Ok(wasm_bindgen_futures::future_to_promise(async move {
-            gpu.take_readback_packed(|bytes| out.copy_from(bytes))
+            // Not get_mapped_range_as_array_buffer: in wgpu 24 it leaves a mapped
+            // view registered and the unmap that follows panics.
+            gpu.take_readback_packed(|mapped| out.copy_from(&mapped.get_mapped_range()))
                 .await
                 .ok_or_else(|| JsValue::from_str("GPU readback failed"))?;
             Ok(JsValue::UNDEFINED)

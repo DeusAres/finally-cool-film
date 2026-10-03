@@ -364,12 +364,18 @@ impl WgpuBackend {
     /// Upload the frame the `set_input_pass` shader samples: 8-bit RGBA,
     /// sRGB-encoded (Display P3 shares the curve), decoded to linear by the sampler.
     pub fn set_frame(&self, rgba: &[u8], width: u32, height: u32) {
+        self.alloc_frame(width, height);
+        self.set_frame_rows(rgba, 0);
+    }
+
+    /// New (zeroed) width × height frame texture, filled by `set_frame_rows`.
+    pub fn alloc_frame(&self, width: u32, height: u32) {
         let mut io = self.io.lock().unwrap();
         if let Some(t) = io.frame.take() {
             t.destroy();
         }
         let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
-        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+        io.frame = Some(self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("frame"),
             size,
             mip_level_count: 1,
@@ -378,14 +384,25 @@ impl WgpuBackend {
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
-        });
+        }));
+    }
+
+    /// Write whole rows of the frame from row `y0` on (as many as `rgba`
+    /// holds): uploading in strips keeps a big frame out of the wasm heap.
+    pub fn set_frame_rows(&self, rgba: &[u8], y0: u32) {
+        let io = self.io.lock().unwrap();
+        let tex = io.frame.as_ref().expect("alloc_frame before set_frame_rows");
+        let width = tex.width();
+        let rows = (rgba.len() / (width as usize * 4)) as u32;
+        if rows == 0 {
+            return;
+        }
         self.queue.write_texture(
-            tex.as_image_copy(),
-            rgba,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width * 4), rows_per_image: Some(height) },
-            size,
+            wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
+            &rgba[..rows as usize * width as usize * 4],
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width * 4), rows_per_image: Some(rows) },
+            wgpu::Extent3d { width, height: rows, depth_or_array_layers: 1 },
         );
-        io.frame = Some(tex);
     }
 
     /// Fill the next chain input on the GPU with `wgsl` (entry `main`,
@@ -527,9 +544,11 @@ impl WgpuBackend {
         dst
     }
 
-    /// Await a packed (`set_output_pack`) readback and copy it into `out`.
+    /// Await a packed (`set_output_pack`) readback and hand `out` the mapped
+    /// slice, to copy from before it is unmapped (on WebGPU straight from its
+    /// ArrayBuffer: `get_mapped_range` would copy it into the wasm heap first).
     #[cfg(target_arch = "wasm32")]
-    pub async fn take_readback_packed<F: FnOnce(&[u8])>(&self, out: F) -> Option<()> {
+    pub async fn take_readback_packed<F: FnOnce(wgpu::BufferSlice<'_>)>(&self, out: F) -> Option<()> {
         let pending = self.pending_readback.lock().unwrap().take()?;
         if !pending.packed {
             return None;
@@ -538,7 +557,7 @@ impl WgpuBackend {
             release_frame_buffers();
             return None;
         }
-        out(&pending.buffer.slice(..).get_mapped_range());
+        out(pending.buffer.slice(..));
         pending.buffer.unmap();
         release_frame_buffers();
         Some(())
