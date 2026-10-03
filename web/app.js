@@ -571,9 +571,14 @@ try { $('border').checked = localStorage.getItem('fcf_border') === '1'; } catch 
 $('border').addEventListener('change', () => { try { localStorage.setItem('fcf_border', $('border').checked ? '1' : '0'); } catch {} });
 syncOutputs();
 
+// Build stamp: replaced at deploy (scripts/stamp-version.sh) with the commit and
+// its time; it lives in app.js itself, so a stale cached app.js shows a stale stamp.
+const BUILD = '__BUILD__';
+$('ver').textContent = BUILD.startsWith('__') ? 'dev' : BUILD;
+
 const crashed = takeCrashMarker();
 if (crashed) openLog(`La sessione precedente si è interrotta durante: ${crashed}. Copia il log e mandamelo.`, true);
-log(`boot ${navigator.userAgent}`);
+log(`boot ${BUILD} ${navigator.userAgent}`);
 
 bootEngine().then(async (ok) => {
   gpu = ok;
