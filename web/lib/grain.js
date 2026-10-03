@@ -30,7 +30,8 @@ export const GRAIN_WGSL = /* wgsl */`
 // P[4] region width, P[5..6] region origin (frame px), P[7] µm per px,
 // P[8] amplitude (8-bit levels), P[9] grain size (µm), P[10] seed,
 // P[11] = 1: the chain output is Rec.2020 → convert to Display P3 here, with
-// ACES-style per-channel soft gamut compression (see toP3).
+// ACES-style per-channel soft gamut compression (see toP3); P[12] the paper
+// black (8-bit / 255): grain softly floors there instead of clipping to 0.
 
 fn q(v: f32) -> f32 { return f32(lut[u32(clamp(v * 4095.0 + 0.5, 0.0, 4095.0))]) / 255.0; }
 
@@ -109,6 +110,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let n = vec3<f32>(vnoise(p + 31.0, s + 2u), vnoise(p + 57.0, s + 3u), vnoise(p + 83.0, s + 4u));
     c += (P[8] / 255.0) * avg * shape * (mono + chroma * n);
   }
+  // Soft floor at the paper black: unchanged a few levels above it, approaching
+  // it below (softplus), so grain never punches pure-black specks into the
+  // deepest shadows (measured: up to 4% of a frame at exactly 0).
+  let k = 1.5 / 255.0; let b = P[12] - 2.0 * k;   // paper black maps to itself within 0.2 levels
+  let x = (c - b) / k;                         // stable softplus: max(x,0) + log(1 + e^-|x|)
+  c = b + k * (max(x, vec3<f32>(0.0)) + log(vec3<f32>(1.0) + exp(-abs(x))));
   let o = vec3<u32>(round(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)) * 255.0));
   dst[i] = o.x | (o.y << 8u) | (o.z << 16u) | 0xff000000u;
 }`;
@@ -117,11 +124,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
  * Params for GRAIN_WGSL: region (x0, y0, w) of a frame whose long side is
  * `frameLong` px; `amount` is the Grana slider (0 = off), `seed` per photo.
  */
-export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false) {
+export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false, black = 0) {
   const umPerPx = FRAME_UM / frameLong;
   // Size grows a little with the amount (a coarser-looking stock); 12 µm at 1.
   const size = 12 * (0.75 + 0.25 * amount);
-  return new Float32Array([w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0]);
+  return new Float32Array([w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0, black / 255]);
 }
 
 // Peak amplitude (8-bit levels, per unit of noise) at amount 1.
