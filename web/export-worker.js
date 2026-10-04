@@ -46,13 +46,19 @@ function cleanup() {
 
 async function handle(msg) {
   M = M || await ready;
+  // After an error cleanup() left ctx = rowPtr = 0: rows / finish already queued
+  // for that export must not touch the heap (rowPtr 0 = the bottom of the wasm
+  // heap, corrupting every later export). The error was already reported.
+  if ((msg.cmd === 'rows' || msg.cmd === 'finish') && !ctx) return;
   switch (msg.cmd) {
     case 'start': {
+      if (ctx) { M._jpegli_wasm_abort(ctx); cleanup(); }   // a stale export that never finished
       width = msg.width; border = msg.border | 0;
       outW = width + 2 * border; outH = msg.height + 2 * border;
       ctx = M._jpegli_wasm_start(outW, outH, msg.distance ?? 1.0, msg.progressive ?? 0, msg.yuv444 ?? 1);
       if (!ctx) throw new Error('jpegli_wasm_start failed');
       rowPtr = M._malloc(outW * 3 * ROW_BATCH);
+      if (!rowPtr) throw new Error('out of memory (row buffer)');
       if (border) M.HEAPU8.fill(255, rowPtr, rowPtr + outW * 3 * ROW_BATCH);   // side mats stay white for every batch
       writeWhite(border);                        // top mat
       break;

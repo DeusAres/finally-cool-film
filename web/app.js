@@ -451,11 +451,15 @@ encoder.onmessage = ({ data }) => {
 };
 encoder.onerror = (e) => { encoderError = e.message || 'worker error'; log('jpegli worker error: ' + encoderError); encoderDone?.reject(new Error(encoderError)); };
 
+// iOS Safari fetches a download's blob only after the user confirms the sheet,
+// which can take any time: keep the URL until the next export (or a minute).
+let lastDownloadUrl = null;
 function download(blob, name) {
-  const url = URL.createObjectURL(blob);
+  if (lastDownloadUrl) URL.revokeObjectURL(lastDownloadUrl);
+  const url = lastDownloadUrl = URL.createObjectURL(blob);
   const a = Object.assign(document.createElement('a'), { href: url, download: name });
   document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  setTimeout(() => { if (lastDownloadUrl === url) { URL.revokeObjectURL(url); lastDownloadUrl = null; } }, 60000);
 }
 
 async function exportFull() {
@@ -545,8 +549,10 @@ async function exportFull() {
   } finally {
     setBusy(null);
     exporting = false;
-    if (gpu) uploadFrame(withAlpha(photo.preview.data, photo.preview.clip), photo.preview.w, photo.preview.h);   // back to the preview frame
     $('export').disabled = false;
+    try {
+      if (gpu) uploadFrame(withAlpha(photo.preview.data, photo.preview.clip), photo.preview.w, photo.preview.h);   // back to the preview frame
+    } catch (e) { log('preview re-upload failed: ' + (e?.stack || e)); }
     if (engine) updateEngine(JSON.stringify(renderParams(ui())));   // back to preview params
     if (dirty) render();   // sliders moved during the export
   }
@@ -600,7 +606,7 @@ $('reseed').addEventListener('click', () => {
   if (!dustAmount()) { $('dust').value = 0.5; syncOutputs(); }
   drawDustLayer();
 });
-$('pick').addEventListener('change', (e) => loadPhoto(e.target.files[0]));
+$('pick').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadPhoto(f); });
 $('newPhoto').addEventListener('click', () => $('pick').click());
 $('auto').addEventListener('click', () => runAuto());
 $('export').addEventListener('click', exportFull);
