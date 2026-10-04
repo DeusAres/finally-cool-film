@@ -7,3 +7,6 @@ export const store = {
   get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
   set: (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} },
 };
+
+/** Long side of the 36 mm film frame, µm: every spatial effect (grain, dust, clarity, lens) is defined on it, never in px. */
+export const FRAME_UM = 36000;

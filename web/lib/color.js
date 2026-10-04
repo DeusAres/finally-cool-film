@@ -2,6 +2,8 @@
 
 export const srgbToLinear = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 
+export const linearToSrgb = (v) => (v <= 0.0031308 ? 12.92 * v : 1.055 * Math.max(v, 0) ** (1 / 2.4) - 0.055);
+
 /** 8-bit sRGB / Display P3 code value → linear light. */
 export const LIN8 = Float32Array.from({ length: 256 }, (_, i) => srgbToLinear(i / 255));
 

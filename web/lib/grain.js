@@ -45,7 +45,8 @@
 // same profile within 0.02), so a film MTF / adjacency step would only add
 // taps and drift from the scans.
 
-const FRAME_UM = 36000;
+import { FRAME_UM } from './util.js';
+import { srgbToLinear, linearToSrgb } from './color.js';
 
 export const GRAIN_WGSL = /* wgsl */`
 @group(0) @binding(0) var<storage, read> src: array<f32>;
@@ -219,8 +220,6 @@ const GRAIN_LEVELS = 13;
 
 // CPU twin of the colour steps of GRAIN_WGSL (grey balance, then Rec.2020 → P3),
 // for the no-WebGPU path: `px` is one engine output pixel (sRGB-encoded), in place.
-const decs = (v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
-const encsCPU = (v) => (v <= 0.0031308 ? 12.92 * v : 1.055 * Math.max(v, 0) ** (1 / 2.4) - 0.055);
 const RGC_SCL = (1.3 - 0.9) / (((1 - 0.9) / (1.3 - 0.9)) ** -1.2 - 1) ** (1 / 1.2);
 const rgcCPU = (d) => { if (d < 0.9) return d; const x = (d - 0.9) / RGC_SCL; return 0.9 + RGC_SCL * x / (1 + x ** 1.2) ** (1 / 1.2); };
 export function outputColourCPU(px, rec2020ToP3, balance) {
@@ -231,13 +230,13 @@ export function outputColourCPU(px, rec2020ToP3, balance) {
     }
   }
   if (rec2020ToP3) {
-    const r = decs(px[0]), g = decs(px[1]), b = decs(px[2]);
+    const r = srgbToLinear(px[0]), g = srgbToLinear(px[1]), b = srgbToLinear(px[2]);
     let p0 = 1.3435783 * r - 0.2821797 * g - 0.0613986 * b;
     let p1 = -0.0652975 * r + 1.0757879 * g - 0.0104905 * b;
     let p2 = 0.0028218 * r - 0.0195985 * g + 1.0167767 * b;
     const a = Math.max(p0, p1, p2);
     if (a > 0) { p0 = a - rgcCPU((a - p0) / a) * a; p1 = a - rgcCPU((a - p1) / a) * a; p2 = a - rgcCPU((a - p2) / a) * a; }
-    px[0] = encsCPU(p0); px[1] = encsCPU(p1); px[2] = encsCPU(p2);
+    px[0] = linearToSrgb(p0); px[1] = linearToSrgb(p1); px[2] = linearToSrgb(p2);
   }
   skyHueCPU(px, rec2020ToP3);
 }
@@ -253,7 +252,7 @@ const OK_LMS = [1, 0.3963377774, 0.2158037573, 1, -0.1055613458, -0.0638541728, 
 const m3 = (m, x, y, z) => [m[0] * x + m[1] * y + m[2] * z, m[3] * x + m[4] * y + m[5] * z, m[6] * x + m[7] * y + m[8] * z];
 function skyHueCPU(px, p3) {
   const sp = p3 ? 'p3' : 'srgb';
-  const l = [0, 1, 2].map((c) => decs(Math.min(1, Math.max(0, px[c]))));
+  const l = [0, 1, 2].map((c) => srgbToLinear(Math.min(1, Math.max(0, px[c]))));
   const lms = m3(SKY_LMS[sp], l[0], l[1], l[2]);
   const [L, a, b] = m3(OK_LAB, Math.cbrt(Math.max(lms[0], 0)), Math.cbrt(Math.max(lms[1], 0)), Math.cbrt(Math.max(lms[2], 0)));
   const C = Math.hypot(a, b);
@@ -269,5 +268,5 @@ function skyHueCPU(px, p3) {
     if (r[c] < 0) t = Math.min(t, l[c] / (l[c] - r[c]));
     if (r[c] > 1) t = Math.min(t, (1 - l[c]) / (r[c] - l[c]));
   }
-  for (let c = 0; c < 3; c++) px[c] = encsCPU(l[c] + t * (r[c] - l[c]));
+  for (let c = 0; c < 3; c++) px[c] = linearToSrgb(l[c] + t * (r[c] - l[c]));
 }

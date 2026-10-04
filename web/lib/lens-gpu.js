@@ -9,6 +9,7 @@ import { LENS_CONST, lensGeometry } from './lens.js';
 import { P3_TO_REC2020 } from './color.js';
 import { TONE_SQRT_N } from './tone.js';
 import { CLIP_GAIN } from './common.js';
+import { FRAME_UM } from './util.js';
 
 const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
 
@@ -180,7 +181,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
  * restore strength (halo removal + taking lens), on by default.
  */
 // Clarity scale on the 36 mm frame, and strength at Texture = 1.
-const CLARITY_UM = 250, FRAME_UM = 36000;
+const CLARITY_UM = 250;
 export const CLARITY_MAX = 1.0;
 
 export function inputUniform(W, H, p3, x0, y0, w, h, scale, lens, clarity = 0, restore = 1) {

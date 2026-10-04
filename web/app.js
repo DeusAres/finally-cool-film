@@ -1,4 +1,4 @@
-import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, to8, clipMask, writeClipAlpha } from './lib/common.js';
+import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, to8, clipMask, writeClipAlpha, run } from './lib/common.js';
 import { transferChart, readTransfer, buildTone, autoTone } from './lib/tone.js';
 import { sleep, store } from './lib/util.js';
 import { LIN8 } from './lib/color.js';
@@ -137,8 +137,6 @@ function uploadFrame(data, w, h, mask = null) {
   }
 }
 
-const run = (img) => (gpu ? engine.process_gpu(img.rgb, img.w, img.h) : Promise.resolve(engine.process(img.rgb, img.w, img.h)));
-
 // ---------- tone ----------
 // Measure the pipeline's grey transfer once per calibration (one render of a
 // 81-patch grey chart), then build the scene-reconstruction / white-point LUTs
@@ -149,7 +147,7 @@ async function ensureTone(u) {
   if (transferKey !== engineCalib) {
     const t = performance.now(), chart = transferChart();
     updateEngine(renderParamsJson(u, true));
-    transfer = readTransfer(await run(chart), chart.w);
+    transfer = readTransfer(await run(engine, chart, gpu), chart.w);
     transferKey = engineCalib;
     log(`transfer measured ${Math.round(performance.now() - t)} ms: white Y ${transfer.white.toFixed(3)}, black ${transfer.floor.toFixed(4)}`);
   }
