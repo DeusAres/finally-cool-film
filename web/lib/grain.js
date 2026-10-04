@@ -240,7 +240,8 @@ export function outputColourCPU(px, rec2020ToP3, balance) {
   }
   if (rec2020ToP3) {
     const r = srgbToLinear(px[0]), g = srgbToLinear(px[1]), b = srgbToLinear(px[2]);
-    let [p0, p1, p2] = REC2020_TO_P3.map(([x, y, z]) => x * r + y * g + z * b);
+    const [m0, m1, m2] = REC2020_TO_P3;   // no per-pixel allocation
+    let p0 = m0[0] * r + m0[1] * g + m0[2] * b, p1 = m1[0] * r + m1[1] * g + m1[2] * b, p2 = m2[0] * r + m2[1] * g + m2[2] * b;
     const a = Math.max(p0, p1, p2);
     if (a > 0) { p0 = a - rgcCPU((a - p0) / a) * a; p1 = a - rgcCPU((a - p1) / a) * a; p2 = a - rgcCPU((a - p2) / a) * a; }
     px[0] = linearToSrgb(p0); px[1] = linearToSrgb(p1); px[2] = linearToSrgb(p2);
