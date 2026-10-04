@@ -183,7 +183,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let wF = 0.8 - 0.25 * sh; let wC = 0.35 + 0.1 * sh; let wK = 0.05 + 0.35 * sh;
     let vC = vnoise(um / max(P[9] * 2.3, P[7]) + 17.0, s + 1u);   // clump field, also the clustering of the fine grain
     let fine = grainField(um, 1.0, 0.0, s) * (1.0 + 0.2121 * (vC * vC - 1.0)) * 0.9578;
-    let mono = 0.85 * inverseSqrt(wF * wF + wC * wC + wK * wK)
+    let mono = 0.95 * inverseSqrt(wF * wF + wC * wC + wK * wK)
              * (wF * fine + wC * bpx(2.3) * vC + wK * grainField(um, 5.0, 41.0, s + 5u));
     // Colour grain: the dye layers' coarse, independent mottle, not per-pixel speckle.
     let chroma = 0.3 * (1.0 - 0.5 * sstep(10.0, 50.0, L));
