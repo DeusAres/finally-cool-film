@@ -1,5 +1,5 @@
 import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, to8, clipMask, writeClipAlpha, run } from './lib/common.js';
-import { transferChart, readTransfer, buildTone, autoTone } from './lib/tone.js';
+import { transferChart, readTransfer, buildTone, autoTone, scanLevels } from './lib/tone.js';
 import { sleep, store } from './lib/util.js';
 import { LIN8, LUMA_P3, LUMA_SRGB } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
@@ -151,8 +151,9 @@ async function ensureTone(u) {
     transferKey = engineCalib;
     log(`transfer measured ${Math.round(performance.now() - t)} ms: white Y ${transfer.white.toFixed(3)}, black ${transfer.floor.toFixed(4)}`);
   }
-  const key = `${transferKey}|${u.look}|${u.ev}|${u.rolloff}`;
-  if (key !== toneKey) { tone = buildTone(transfer, { look: u.look, ev: u.ev, rolloff: u.rolloff }); toneKey = key; }
+  const levels = photo?.levels;
+  const key = `${transferKey}|${u.look}|${u.ev}|${u.rolloff}|${levels ? `${levels.black}|${levels.white}` : ''}`;
+  if (key !== toneKey) { tone = buildTone(transfer, { look: u.look, ev: u.ev, rolloff: u.rolloff, levels }); toneKey = key; }
 }
 
 // ---------- lens ----------
@@ -458,11 +459,29 @@ async function loadPhoto(file) {
   }
 }
 
+// Scanner levels (tone.js scanLevels): as a lab scanner sets each frame's black
+// and white point, measured once on the rendered preview, then kept fixed for
+// the sliders and for every export tile (so tiles stay identical).
+function outputLstar(img) {
+  const [kr, kg, kb] = img.colorSpace === 'display-p3' ? LUMA_P3 : LUMA_SRGB, d = img.data;
+  const L = new Float32Array(Math.ceil(d.length / 16));
+  for (let i = 0, k = 0; i < d.length; i += 16, k++) {
+    const Y = kr * LIN8[d[i]] + kg * LIN8[d[i + 1]] + kb * LIN8[d[i + 2]];
+    L[k] = Y > 0.008856 ? 116 * Math.cbrt(Y) - 16 : 903.3 * Y;
+  }
+  return L;
+}
+
 async function runAuto() {
   const a = autoFromPhoto();
   $('ev').value = a.ev; $('look').value = a.look;
   syncOutputs();
-  log(`auto: ev ${a.ev}, look ${a.look}`);
+  photo.levels = undefined;
+  await render();                                   // as rendered without levels
+  if (!photo?.after) return;
+  const lv = scanLevels(outputLstar(photo.after));
+  photo.levels = lv.black === 0 && lv.white === 100 ? undefined : lv;   // full-range frame: untouched
+  log(`auto: ev ${a.ev}, look ${a.look}, levels ${lv.black.toFixed(1)}..${lv.white.toFixed(1)}`);
   await render();
 }
 
