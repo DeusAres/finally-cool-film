@@ -189,6 +189,8 @@ struct WebIo {
     pack: Option<OutputPass>,
     input_pipe: Option<(String, wgpu::ComputePipeline)>,
     pack_pipe: Option<(String, wgpu::ComputePipeline)>,
+    /// Linear clamp sampler of the input pass (stateless: made once).
+    sampler: Option<wgpu::Sampler>,
 }
 
 #[cfg(feature = "wgpu-backend")]
@@ -555,14 +557,17 @@ impl WgpuBackend {
             });
             io.input_pipe = Some((req.wgsl.clone(), pipe));
         }
+        if io.sampler.is_none() {
+            io.sampler = Some(self.device.create_sampler(&wgpu::SamplerDescriptor {
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            }));
+        }
+        let sampler = io.sampler.as_ref().unwrap();
         let pipe = &io.input_pipe.as_ref().unwrap().1;
         let frame = io.frame.as_ref().expect("set_frame before an input pass");
         let view = frame.create_view(&Default::default());
-        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
         let uni = self.device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some("input_uniform"),
             contents: bytemuck::cast_slice(&req.uniform),
@@ -574,7 +579,7 @@ impl WgpuBackend {
             layout: &pipe.get_bind_group_layout(0),
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
                 wgpu::BindGroupEntry { binding: 2, resource: uni.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: out.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 4, resource: tone.as_entire_binding() },

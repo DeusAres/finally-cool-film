@@ -1,4 +1,4 @@
-import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, to8, clipMask, writeClipAlpha, withAlpha } from './lib/common.js';
+import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, to8, clipMask, writeClipAlpha } from './lib/common.js';
 import { transferChart, readTransfer, buildTone, autoTone } from './lib/tone.js';
 import { sleep, store } from './lib/util.js';
 import { LIN8 } from './lib/color.js';
@@ -70,7 +70,8 @@ function renderParams(u, { noGrain = false } = {}) {
     scanner: { black_correction: false, white_correction: false, unsharp_mask: [0, 0] },
     film_render: {
       // On the GPU path grain is ours (grain.js, in the output pass); the engine's is the CPU fallback.
-      grain: { active: !gpu && !noGrain && u.grain > 0, agx_particle_area_um2: GRAIN_AREA_UM2 * Math.max(u.grain, 0.01) },
+      // (Inactive on the GPU path: a constant area keeps the grain slider from changing the params JSON, so no engine.update.)
+      grain: { active: !gpu && !noGrain && u.grain > 0, agx_particle_area_um2: GRAIN_AREA_UM2 * (gpu ? 1 : Math.max(u.grain, 0.01)) },
       halation: { active: u.halation > 0, halation_amount: u.halation },
       // Viewing glare: same mean (E = percent whatever the roughness), but no
       // random per-pixel field: that field is seeded by the pixel's index in
@@ -83,12 +84,27 @@ function renderParams(u, { noGrain = false } = {}) {
   };
 }
 
+// JSON of renderParams, memoised on the inputs it depends on (the slider path
+// asks for it on every render; the export loop once per tile).
+let rpKey = '', rpJson = '';
+function renderParamsJson(u, noGrain = false, tileMm = 0) {
+  const key = `${gpu}|${outP3()}|${noGrain}|${tileMm}|${u.halation}|${gpu ? 0 : u.grain}`;
+  if (key !== rpKey) {
+    const p = renderParams(u, { noGrain });
+    rpJson = JSON.stringify(tileMm ? deepMerge(p, { camera: { film_format_mm: tileMm } }) : p);
+    rpKey = key;
+  }
+  return rpJson;
+}
+
+let calibM = NaN, calibY = NaN;
 function ensureEngine(u) {
+  if (engine && u.mshift === calibM && u.yshift === calibY) return engine;
   const calib = JSON.stringify(calibParams(u));
-  if (engine && calib === engineCalib) return engine;
+  if (engine && calib === engineCalib) { calibM = u.mshift; calibY = u.yshift; return engine; }
   engine?.free();
   engine = new sf.Engine(FILM, PAPER, JSON.stringify(deepMerge(BASE_PARAMS, inputParams(photo.preview.p3), calibParams(u))));
-  engineCalib = calib;
+  engineCalib = calib; calibM = u.mshift; calibY = u.yshift;
   engineParams = '';
   return engine;
 }
@@ -103,9 +119,22 @@ function updateEngine(json) {
 
 // The frame goes to the GPU a strip at a time: the wasm heap (which never
 // shrinks) only ever holds one strip, not the whole frame.
-function uploadFrame(data, w, h) {
+// With `mask`, the alpha channel is written (per strip, into a scratch copy)
+// from it: `data` itself stays untouched (it is also the 'before' image).
+function uploadFrame(data, w, h, mask = null) {
   sf.alloc_frame(w, h);
-  for (let y = 0, n = stripRows(w); y < h; y += n) sf.set_frame_rows(data.subarray(y * w * 4, Math.min(h, y + n) * w * 4), y);
+  let scratch = null;
+  for (let y = 0, n = stripRows(w); y < h; y += n) {
+    const rows = Math.min(h, y + n) - y;
+    let part = data.subarray(y * w * 4, (y + rows) * w * 4);
+    if (mask) {
+      scratch = scratch?.length === part.length ? scratch : new Uint8Array(part.length);
+      scratch.set(part);
+      for (let k = y * w, i = 3, e = part.length; i < e; k++, i += 4) scratch[i] = mask[k];
+      part = scratch;
+    }
+    sf.set_frame_rows(part, y);   // copied into the wasm heap synchronously: the scratch can be reused
+  }
 }
 
 const run = (img) => (gpu ? engine.process_gpu(img.rgb, img.w, img.h) : Promise.resolve(engine.process(img.rgb, img.w, img.h)));
@@ -119,7 +148,7 @@ async function ensureTone(u) {
   ensureEngine(u);
   if (transferKey !== engineCalib) {
     const t = performance.now(), chart = transferChart();
-    updateEngine(JSON.stringify(renderParams(u, { noGrain: true })));
+    updateEngine(renderParamsJson(u, true));
     transfer = readTransfer(await run(chart), chart.w);
     transferKey = engineCalib;
     log(`transfer measured ${Math.round(performance.now() - t)} ms: white Y ${transfer.white.toFixed(3)}, black ${transfer.floor.toFixed(4)}`);
@@ -180,7 +209,7 @@ async function render() {
       // Breadcrumb: if iOS kills the tab mid-render, the next load says so.
       setBusy(`anteprima #${n} ${pv.w}x${pv.h} ${JSON.stringify(u)}`);
       await ensureTone(u);
-      updateEngine(JSON.stringify(renderParams(u)));
+      updateEngine(renderParamsJson(u));
       const cs = outP3() ? 'display-p3' : 'srgb';
       if (photo.after?.width !== pv.w || photo.after?.height !== pv.h || photo.after.colorSpace !== cs) photo.after = new ImageData(pv.w, pv.h, { colorSpace: cs });
       await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), lensOf(u), u.grain, u.texture);
@@ -205,8 +234,10 @@ async function render() {
 // tallest bin that is not a clipped end: a dark or sky-heavy frame keeps a
 // readable shape instead of one spike and a flat line.
 const histo = $('histo'), hctx = histo.getContext('2d');
+const HBINS = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
 function drawHistogram(img) {
-  const bins = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+  const bins = HBINS;
+  for (const b of bins) b.fill(0);
   const { data, width, height } = img;
   for (let y = 0; y < height; y += 2) {
     for (let i = y * width * 4, end = i + width * 4; i < end; i += 8) {
@@ -266,13 +297,14 @@ const fileSeed = (f) => { let h = 2166136261; for (const ch of `${f.name}|${f.si
 /** Composite dust marks at amount `a` into an RGB strip (rows y0.. of a w×h export). */
 function dustIntoStrip(strip, w, h, y0, rows, a, marks) {
   if (!a) return;
-  const c = document.createElement('canvas');
-  c.width = w; c.height = rows;
+  const c = dustStripCanvas || (dustStripCanvas = document.createElement('canvas'));
+  if (c.width !== w || c.height !== rows) { c.width = w; c.height = rows; }   // resizing clears
   const x = c.getContext('2d', { willReadFrequently: true });
+  x.clearRect(0, 0, w, rows);
   drawDust(x, marks, a, w, h, 0, y0);
   compositeDust(strip, x.getImageData(0, 0, w, rows).data);
-  c.width = c.height = 0;
 }
+let dustStripCanvas = null;
 
 let showingBefore = false;
 function showBefore(on) {
@@ -410,7 +442,7 @@ async function loadPhoto(file) {
     photo = { file, bitmap, preview, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
     if (gpu) {
       preview.clip = clipMask(bitmap, preview.w, preview.h);   // full-res clipping, see common.js
-      uploadFrame(withAlpha(preview.data, preview.clip), preview.w, preview.h);
+      uploadFrame(preview.data, preview.w, preview.h, preview.clip);
     }
     engine?.free(); engine = null;
     view.width = preview.w; view.height = preview.h;
@@ -512,15 +544,14 @@ async function exportFull() {
         status(`Esporto ${w}×${h}: tile ${s * cols + c + 1}/${strips * cols}…`);
         const x0 = Math.max(0, tx - EXPORT_PAD), y0 = Math.max(0, ty - EXPORT_PAD);
         const tw = Math.min(w, tx + EXPORT_TILE + EXPORT_PAD) - x0, th = Math.min(h, ty + EXPORT_TILE + EXPORT_PAD) - y0;
-        updateEngine(JSON.stringify(deepMerge(renderParams(u), {
-          camera: { film_format_mm: FILM_FORMAT_MM * Math.max(tw, th) / longSide },
-        })));
+        updateEngine(renderParamsJson(u, false, FILM_FORMAT_MM * Math.max(tw, th) / longSide));
         const tile = (tileBuf = tileBuf?.length >= tw * th * 4 ? tileBuf : new Uint8Array(tw * th * 4)).subarray(0, tw * th * 4);
         await renderRegion(frame, x0, y0, tw, th, tile, lensOf(u), u.grain, u.texture);
         const cw = Math.min(EXPORT_TILE, w - tx);
-        for (let y = 0; y < ch; y++) {   // RGBA tile → RGB strip
-          let src = ((ty - y0 + y) * tw + (tx - x0)) * 4, dst = (y * w + tx) * 3;
-          for (let x = 0; x < cw; x++, src += 4) { strip[dst++] = tile[src]; strip[dst++] = tile[src + 1]; strip[dst++] = tile[src + 2]; }
+        const t32 = new Uint32Array(tile.buffer, tile.byteOffset, tw * th);
+        for (let y = 0; y < ch; y++) {   // RGBA tile → RGB strip (one 32-bit read per pixel; little-endian, as the CPU path)
+          let src = (ty - y0 + y) * tw + (tx - x0), dst = (y * w + tx) * 3;
+          for (let x = 0; x < cw; x++) { const v = t32[src++]; strip[dst] = v; strip[dst + 1] = v >> 8; strip[dst + 2] = v >> 16; dst += 3; }
         }
       }
       dustIntoStrip(strip, w, h, ty, ch, dust, marks);
@@ -549,11 +580,12 @@ async function exportFull() {
   } finally {
     setBusy(null);
     exporting = false;
+    if (dustStripCanvas) { dustStripCanvas.width = dustStripCanvas.height = 0; dustStripCanvas = null; }   // release the backing store
     $('export').disabled = false;
     try {
-      if (gpu) uploadFrame(withAlpha(photo.preview.data, photo.preview.clip), photo.preview.w, photo.preview.h);   // back to the preview frame
+      if (gpu) uploadFrame(photo.preview.data, photo.preview.w, photo.preview.h, photo.preview.clip);   // back to the preview frame
     } catch (e) { log('preview re-upload failed: ' + (e?.stack || e)); }
-    if (engine) updateEngine(JSON.stringify(renderParams(ui())));   // back to preview params
+    if (engine) updateEngine(renderParamsJson(ui()));   // back to preview params
     if (dirty) render();   // sliders moved during the export
   }
 }
