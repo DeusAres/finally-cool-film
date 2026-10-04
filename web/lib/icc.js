@@ -8,6 +8,8 @@
 // requires; the sRGB transfer curve (P3's) as a 1024-entry `curv`, shared by
 // the three channels.
 
+import { srgbToLinear } from './color.js';
+
 const P3_TO_XYZ = [   // D65
   [0.4865709486482162, 0.26566769316909306, 0.1982172852343625],
   [0.2289745640697488, 0.6917385218365064, 0.079286914093745],
@@ -35,7 +37,7 @@ function chad() {
 let cached = null;
 
 /** The Display P3 ICC profile bytes. */
-export function displayP3Profile() {
+function displayP3Profile() {
   if (cached) return cached;
   const C = chad(), M = mul(C, P3_TO_XYZ);              // colorants, D50-adapted
   const col = (j) => [M[0][j], M[1][j], M[2][j]];
@@ -56,8 +58,7 @@ export function displayP3Profile() {
   const curv = () => {
     const n = 1024, a = [...enc('curv'), 0, 0, 0, 0, ...u32(n)];
     for (let i = 0; i < n; i++) {
-      const x = i / (n - 1), y = x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
-      const v = Math.round(y * 65535);
+      const v = Math.round(srgbToLinear(i / (n - 1)) * 65535);
       a.push(v >> 8, v & 255);
     }
     return a;

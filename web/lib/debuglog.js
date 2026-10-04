@@ -4,10 +4,11 @@
 // set around risky work (each render, the export) tells the next load that
 // the previous session died in the middle of it. Each load starts a fresh log
 // and keeps the previous session's as `prevLogText`.
+import { store } from './util.js';
+
 const KEY = 'fcf_log', PREV = 'fcf_log_prev', BUSY = 'fcf_busy', MAX_LINES = 300;
 
-const read = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
-const write = (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} };
+const { get: read, set: write } = store;
 
 const prev = read(KEY) || '';
 write(PREV, prev);

@@ -1,5 +1,6 @@
 import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, to8, clipMask, writeClipAlpha, withAlpha } from './lib/common.js';
 import { transferChart, readTransfer, buildTone, autoTone } from './lib/tone.js';
+import { sleep, store } from './lib/util.js';
 import { LIN8 } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
@@ -130,7 +131,6 @@ async function ensureTone(u) {
 // ---------- lens ----------
 // Applied to the light reaching the film (engine input), in frame coordinates.
 
-/** Scene-light engine input for a region of the frame currently loaded in the lens stage. */
 // GPU: the whole input stage (lens, tone, matrix) runs inside the engine's
 // chain from the frame texture (sf.set_frame), see lens-gpu.js. CPU fallback
 // below (no WebGPU): float input built here, float output converted here.
@@ -372,7 +372,7 @@ const setPanel = (px) => {
   controls.style.height = h + 'px';
   return h;
 };
-try { const saved = +localStorage.getItem('fcf_panel'); if (saved > 0) setPanel(saved); } catch {}
+{ const saved = +store.get('fcf_panel'); if (saved > 0) setPanel(saved); }
 let gripY = 0, gripH = 0;
 grip.addEventListener('pointerdown', (e) => {
   gripY = e.clientY; gripH = controls.getBoundingClientRect().height;
@@ -382,7 +382,7 @@ grip.addEventListener('pointermove', (e) => { if (grip.hasPointerCapture(e.point
 const endGrip = (e) => {
   if (!grip.hasPointerCapture?.(e.pointerId)) return;
   grip.releasePointerCapture(e.pointerId); grip.classList.remove('drag');
-  try { localStorage.setItem('fcf_panel', String(Math.round(controls.getBoundingClientRect().height))); } catch {}
+  store.set('fcf_panel', String(Math.round(controls.getBoundingClientRect().height)));
 };
 grip.addEventListener('pointerup', endGrip);
 grip.addEventListener('pointercancel', endGrip);
@@ -390,7 +390,7 @@ grip.addEventListener('pointercancel', endGrip);
 grip.addEventListener('dblclick', () => {
   const h = controls.getBoundingClientRect().height;
   const next = h > 8 ? setPanel(0) : setPanel(innerHeight * 0.18);
-  try { localStorage.setItem('fcf_panel', String(next || 1)); } catch {}
+  store.set('fcf_panel', String(next || 1));
 });
 
 // ---------- photo ----------
@@ -402,7 +402,7 @@ async function loadPhoto(file) {
     log(`photo: ${file.name} ${file.type} ${(file.size / 1e6).toFixed(1)} MB`);
     const bitmap = await createImageBitmap(file);
     // A render or export in flight still uses the current photo, engine and GPU frame.
-    while (rendering || exporting) await new Promise((r) => setTimeout(r, 20));
+    while (rendering || exporting) await sleep(20);
     const preview = decodeRGBA(bitmap, PREVIEW_LONG_SIDE);
     preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
     log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
@@ -464,7 +464,7 @@ async function exportFull() {
   $('export').disabled = true;
   setBusy('export');
   // A preview render in flight shares the engine and the GPU frame: let it finish first.
-  while (rendering) await new Promise((r) => setTimeout(r, 20));
+  while (rendering) await sleep(20);
   const u = ui(), dust = dustAmount(), marks = dustMarks();   // fixed for every strip
   const t0 = performance.now();
   try {
@@ -571,19 +571,18 @@ $('logCopy').addEventListener('click', async () => {
 
 function status(msg) { $('status').textContent = msg; }
 
+const sign = (v) => (v > 0 ? '+' : '');
+const pct = (v) => `${Math.round(v * 100)}`;
+const mult = (v) => (v === 0 ? 'off' : `${v.toFixed(1)}×`);
+const pctOff = (v) => (v === 0 ? 'off' : pct(v));
 const FORMAT = {
-  ev: (v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}`,
-  look: (v) => `${Math.round(v * 100)}`,
-  rolloff: (v) => `${Math.round(v * 100)}`,
-  mshift: (v) => `${v > 0 ? '+' : ''}${v}`,
-  yshift: (v) => `${v > 0 ? '+' : ''}${v}`,
-  grain: (v) => (v === 0 ? 'off' : `${v.toFixed(1)}×`),
-  halation: (v) => (v === 0 ? 'off' : `${v.toFixed(1)}×`),
-  ca: (v) => (v === 0 ? 'off' : `${Math.round(v * 100)}`),
-  vignette: (v) => (v === 0 ? 'off' : `${Math.round(v * 100)}`),
-  falloff: (v) => `${Math.round(v * 100)}`,
-  texture: (v) => (v === 0 ? 'off' : `${Math.round(v * 100)}`),
-  dust: (v) => (v === 0 ? 'off' : `${Math.round(v * 100)}`),
+  ev: (v) => `${sign(v)}${v.toFixed(1)}`,
+  look: pct, rolloff: pct,
+  mshift: (v) => `${sign(v)}${v}`, yshift: (v) => `${sign(v)}${v}`,
+  grain: mult, halation: mult,
+  ca: pctOff, vignette: pctOff,
+  falloff: pct,
+  texture: pctOff, dust: pctOff,
 };
 const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 1, halation: 1, texture: 0.5, ca: 0, vignette: 0, falloff: 0.4, dust: 0 };
 const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render
@@ -605,8 +604,8 @@ $('pick').addEventListener('change', (e) => loadPhoto(e.target.files[0]));
 $('newPhoto').addEventListener('click', () => $('pick').click());
 $('auto').addEventListener('click', () => runAuto());
 $('export').addEventListener('click', exportFull);
-try { $('border').checked = localStorage.getItem('fcf_border') === '1'; } catch {}
-$('border').addEventListener('change', () => { try { localStorage.setItem('fcf_border', $('border').checked ? '1' : '0'); } catch {} });
+$('border').checked = store.get('fcf_border') === '1';
+$('border').addEventListener('change', () => store.set('fcf_border', $('border').checked ? '1' : '0'));
 syncOutputs();
 
 // Build stamp: replaced at deploy (scripts/stamp-version.sh) with the commit and
@@ -615,7 +614,7 @@ const BUILD = '__BUILD__';
 $('ver').textContent = BUILD.startsWith('__') ? 'dev' : BUILD;
 
 const crashed = takeCrashMarker();
-if (crashed) openLog(`La sessione precedente si è interrotta durante: ${crashed}. Copia il log e mandamelo.`, true);
+if (crashed) openLog(`La sessione precedente si è interrotta durante: ${crashed}. Copia il log e mandamelo.`);
 log(`boot ${BUILD} ${navigator.userAgent}`);
 
 bootEngine().then(async (ok) => {

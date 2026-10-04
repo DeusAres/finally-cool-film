@@ -51,7 +51,6 @@ const WARM_R = 0.06;        // linear gain on R per unit of light lost
 const WARM_B = 0.08;        // linear cut on B per unit of light lost
 const LUT_N = 2048;
 
-export const LENS_OFF = { ca: 0, vignette: 0, falloff: 0.4 };
 // Shared with the WebGPU implementation (lens-gpu.js).
 export const LENS_CONST = { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B };
 export const lensActive = (l) => l.ca > 0 || l.vignette > 0;
