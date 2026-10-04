@@ -53,6 +53,7 @@ async function handle(msg) {
       ctx = M._jpegli_wasm_start(outW, outH, msg.distance ?? 1.0, msg.progressive ?? 0, msg.yuv444 ?? 1);
       if (!ctx) throw new Error('jpegli_wasm_start failed');
       rowPtr = M._malloc(outW * 3 * ROW_BATCH);
+      if (border) M.HEAPU8.fill(255, rowPtr, rowPtr + outW * 3 * ROW_BATCH);   // side mats stay white for every batch
       writeWhite(border);                        // top mat
       break;
     }
@@ -62,8 +63,7 @@ async function handle(msg) {
       for (let y = 0; y < rows; y += ROW_BATCH) {
         const n = Math.min(ROW_BATCH, rows - y);
         if (border) {
-          const heap = M.HEAPU8;
-          heap.fill(255, rowPtr, rowPtr + n * outStride);
+          const heap = M.HEAPU8;                 // only the image part is rewritten: the margins were filled at start
           for (let r = 0; r < n; r++) heap.set(rgb.subarray((y + r) * stride, (y + r + 1) * stride), rowPtr + r * outStride + side);
         } else {
           M.HEAPU8.set(rgb.subarray(y * stride, (y + n) * stride), rowPtr);

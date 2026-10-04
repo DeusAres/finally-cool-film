@@ -39,6 +39,9 @@ fn wgsl_for_target(src: &'static str) -> Cow<'static, str> {
 #[cfg(feature = "wgpu-backend")]
 trait TrackedCreate {
     fn create_buffer_t(&self, desc: &wgpu::BufferDescriptor<'_>) -> wgpu::Buffer;
+    /// Like `create_buffer_t` for a buffer the frame overwrites completely
+    /// before reading any of it: a reused one is not zeroed.
+    fn create_buffer_overwritten_t(&self, desc: &wgpu::BufferDescriptor<'_>) -> wgpu::Buffer;
     fn create_buffer_init_t(&self, desc: &wgpu::util::BufferInitDescriptor<'_>) -> wgpu::Buffer;
 }
 
@@ -52,6 +55,11 @@ struct BufferPool {
     used: Vec<wgpu::Buffer>,
     /// Left by the previous frame, available for reuse.
     free: Vec<wgpu::Buffer>,
+    /// While `batching`, reused buffers that must read as zero are queued here
+    /// and cleared inside the frame's command encoder (`flush_pending_clears`)
+    /// instead of one submit each.
+    batching: bool,
+    pending_clears: Vec<wgpu::Buffer>,
 }
 
 #[cfg(all(feature = "wgpu-backend", target_arch = "wasm32"))]
@@ -62,30 +70,10 @@ thread_local! {
 #[cfg(feature = "wgpu-backend")]
 impl TrackedCreate for wgpu::Device {
     fn create_buffer_t(&self, desc: &wgpu::BufferDescriptor<'_>) -> wgpu::Buffer {
-        #[cfg(target_arch = "wasm32")]
-        {
-            let poolable = !desc.mapped_at_creation && desc.usage.contains(wgpu::BufferUsages::COPY_DST);
-            return POOL.with(|p| {
-                let mut p = p.borrow_mut();
-                if poolable {
-                    if let Some(i) = p.free.iter().position(|b| b.size() == desc.size && b.usage() == desc.usage) {
-                        let buf = p.free.swap_remove(i);
-                        if let Some(q) = p.queue.as_ref() {
-                            let mut enc = self.create_command_encoder(&Default::default());
-                            enc.clear_buffer(&buf, 0, None);
-                            q.submit(Some(enc.finish()));
-                        }
-                        p.used.push(buf.clone());
-                        return buf;
-                    }
-                }
-                let buf = self.create_buffer(desc);
-                if poolable { p.used.push(buf.clone()) } else { p.transient.push(buf.clone()) }
-                buf
-            });
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        self.create_buffer(desc)
+        create_buffer_pooled(self, desc, true)
+    }
+    fn create_buffer_overwritten_t(&self, desc: &wgpu::BufferDescriptor<'_>) -> wgpu::Buffer {
+        create_buffer_pooled(self, desc, false)
     }
     fn create_buffer_init_t(&self, desc: &wgpu::util::BufferInitDescriptor<'_>) -> wgpu::Buffer {
         use wgpu::util::DeviceExt;
@@ -94,6 +82,66 @@ impl TrackedCreate for wgpu::Device {
         POOL.with(|p| p.borrow_mut().transient.push(buf.clone()));
         buf
     }
+}
+
+#[cfg(feature = "wgpu-backend")]
+fn create_buffer_pooled(device: &wgpu::Device, desc: &wgpu::BufferDescriptor<'_>, zero: bool) -> wgpu::Buffer {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let poolable = !desc.mapped_at_creation && desc.usage.contains(wgpu::BufferUsages::COPY_DST);
+        return POOL.with(|p| {
+            let mut p = p.borrow_mut();
+            if poolable {
+                if let Some(i) = p.free.iter().position(|b| b.size() == desc.size && b.usage() == desc.usage) {
+                    let buf = p.free.swap_remove(i);
+                    // A fresh WebGPU buffer reads as zero; a reused one is cleared to match.
+                    if zero {
+                        if p.batching {
+                            p.pending_clears.push(buf.clone());
+                        } else if let Some(q) = p.queue.as_ref() {
+                            let mut enc = device.create_command_encoder(&Default::default());
+                            enc.clear_buffer(&buf, 0, None);
+                            q.submit(Some(enc.finish()));
+                        }
+                    }
+                    p.used.push(buf.clone());
+                    return buf;
+                }
+            }
+            let buf = device.create_buffer(desc);
+            if poolable { p.used.push(buf.clone()) } else { p.transient.push(buf.clone()) }
+            buf
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = zero;
+        device.create_buffer(desc)
+    }
+}
+
+/// Start queueing the zeroing of reused pooled buffers (wasm; no-op elsewhere).
+#[cfg(feature = "wgpu-backend")]
+fn pool_batching(on: bool) {
+    #[cfg(target_arch = "wasm32")]
+    POOL.with(|p| p.borrow_mut().batching = on);
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = on;
+}
+
+/// Encode the queued clears at the head of `encoder` and stop batching.
+#[cfg(feature = "wgpu-backend")]
+fn flush_pending_clears(encoder: &mut wgpu::CommandEncoder) {
+    #[cfg(target_arch = "wasm32")]
+    POOL.with(|p| {
+        let mut p = p.borrow_mut();
+        for b in p.pending_clears.drain(..) {
+            encoder.clear_buffer(&b, 0, None);
+        }
+        p.batching = false;
+    });
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = encoder;
 }
 
 /// End of frame (wasm; see `TrackedCreate`): destroy the transient buffers and
@@ -268,6 +316,15 @@ pub struct WgpuBackend {
     #[cfg(target_arch = "wasm32")]
     pending_readback: std::sync::Mutex<Option<PendingReadback>>,
     io: std::sync::Mutex<WebIo>,
+    /// Read-only tables that rarely change between frames (spectral data,
+    /// curves, LUTs), kept on the GPU while their contents are unchanged.
+    static_bufs: std::sync::Mutex<std::collections::HashMap<&'static str, StaticBuf>>,
+}
+
+#[cfg(feature = "wgpu-backend")]
+struct StaticBuf {
+    bytes: Vec<u8>,
+    buf: wgpu::Buffer,
 }
 
 #[cfg(feature = "wgpu-backend")]
@@ -358,7 +415,55 @@ impl WgpuBackend {
             #[cfg(target_arch = "wasm32")]
             pending_readback: std::sync::Mutex::new(None),
             io: std::sync::Mutex::new(WebIo::default()),
+            static_bufs: std::sync::Mutex::new(std::collections::HashMap::new()),
         })
+    }
+
+    /// Storage buffer holding `bytes`, reused from an earlier frame when the
+    /// contents under `label` are byte-identical (exact comparison).
+    fn static_storage(&self, label: &'static str, bytes: &[u8]) -> wgpu::Buffer {
+        self.static_storage_by(label, bytes.len(), |old| old == bytes, || bytes.to_vec())
+    }
+
+    /// As `static_storage` for `data` narrowed to f32 (`v as f32`), without
+    /// materialising the f32 copy when nothing changed.
+    fn static_storage_f64(&self, label: &'static str, data: &[f64]) -> wgpu::Buffer {
+        self.static_storage_by(
+            label,
+            data.len() * 4,
+            |old| data.iter().zip(old.chunks_exact(4)).all(|(v, c)| (*v as f32).to_ne_bytes() == c),
+            || data.iter().flat_map(|&v| (v as f32).to_ne_bytes()).collect(),
+        )
+    }
+
+    fn static_storage_by(
+        &self,
+        label: &'static str,
+        len: usize,
+        same: impl FnOnce(&[u8]) -> bool,
+        make: impl FnOnce() -> Vec<u8>,
+    ) -> wgpu::Buffer {
+        use wgpu::util::DeviceExt;
+        let mut cache = self.static_bufs.lock().unwrap();
+        if let Some(e) = cache.get(label) {
+            if e.bytes.len() == len && same(&e.bytes) {
+                return e.buf.clone();
+            }
+        }
+        let bytes = make();
+        let buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(label),
+            contents: &bytes,
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        if let Some(old) = cache.insert(label, StaticBuf { bytes, buf: buf.clone() }) {
+            // Buffer drop is a no-op on WebGPU: free the replaced one explicitly.
+            #[cfg(target_arch = "wasm32")]
+            old.buf.destroy();
+            #[cfg(not(target_arch = "wasm32"))]
+            drop(old);
+        }
+        buf
     }
 
     /// Upload the frame the `set_input_pass` shader samples: 8-bit RGBA,
@@ -463,11 +568,7 @@ impl WgpuBackend {
             contents: bytemuck::cast_slice(&req.uniform),
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let tone = self.device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
-            label: Some("input_tone"),
-            contents: bytemuck::cast_slice(&req.tone),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let tone = self.static_storage("input_tone", bytemuck::cast_slice(&req.tone));
         let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &pipe.get_bind_group_layout(0),
@@ -508,17 +609,14 @@ impl WgpuBackend {
         let groups = n.div_ceil(256);
         let gx = groups.min(65535);
         let gy = groups.div_ceil(gx);
-        let dst = self.device.create_buffer_t(&wgpu::BufferDescriptor {
+        // Every pixel of `dst` is written by the pack pass.
+        let dst = self.device.create_buffer_overwritten_t(&wgpu::BufferDescriptor {
             label: Some("packed"),
             size: n as u64 * 4,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        let lut_buf = self.device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
-            label: Some("pack_lut"),
-            contents: bytemuck::cast_slice(&req.lut),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let lut_buf = self.static_storage("pack_lut", bytemuck::cast_slice(&req.lut));
         let mut params = vec![n as f32, (gx * 256) as f32, 0.0, 0.0];
         params.extend_from_slice(&req.params);
         let dims = self.device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
@@ -545,10 +643,12 @@ impl WgpuBackend {
     }
 
     /// Await a packed (`set_output_pack`) readback and hand `out` the mapped
-    /// slice, to copy from before it is unmapped (on WebGPU straight from its
-    /// ArrayBuffer: `get_mapped_range` would copy it into the wasm heap first).
+    /// buffer, to copy from before it is unmapped. `get_mapped_range` copies
+    /// into the wasm heap (which never shrinks), so `out` should take it in
+    /// strips (`buffer.slice(a..b)`, offsets multiple of 8, views dropped
+    /// before returning) rather than the whole frame at once.
     #[cfg(target_arch = "wasm32")]
-    pub async fn take_readback_packed<F: FnOnce(wgpu::BufferSlice<'_>)>(&self, out: F) -> Option<()> {
+    pub async fn take_readback_packed<F: FnOnce(&wgpu::Buffer)>(&self, out: F) -> Option<()> {
         let pending = self.pending_readback.lock().unwrap().take()?;
         if !pending.packed {
             return None;
@@ -557,7 +657,7 @@ impl WgpuBackend {
             release_frame_buffers();
             return None;
         }
-        out(pending.buffer.slice(..));
+        out(&pending.buffer);
         pending.buffer.unmap();
         release_frame_buffers();
         Some(())
@@ -1181,10 +1281,12 @@ impl WgpuBackend {
 
         let n_pixels = image.pixel_count() as u32;
         let img_bytes = n_pixels as usize * 3 * 4;
+        pool_batching(true);
 
         // Ping-pong image buffers (each holds H*W*3 f32 values).
         let make_img_buf = |label: &str| {
-            self.device.create_buffer_t(&wgpu::BufferDescriptor {
+            // Fully written (input pass / front pass / upload) before any read.
+            self.device.create_buffer_overwritten_t(&wgpu::BufferDescriptor {
                 label: Some(label),
                 size: img_bytes as u64,
                 usage: wgpu::BufferUsages::STORAGE
@@ -1242,7 +1344,7 @@ impl WgpuBackend {
             if mappable {
                 usage |= wgpu::BufferUsages::MAP_READ;
             }
-            self.device.create_buffer_t(&wgpu::BufferDescriptor {
+            self.device.create_buffer_overwritten_t(&wgpu::BufferDescriptor {
                 label: Some("img_b"),
                 size: img_bytes as u64,
                 usage,
@@ -1251,14 +1353,7 @@ impl WgpuBackend {
         };
 
         // Static (LUT) buffers — uploaded once.
-        let mk_storage = |label: &str, bytes: &[u8]| {
-            self.device
-                .create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
-                    label: Some(label),
-                    contents: bytes,
-                    usage: wgpu::BufferUsages::STORAGE,
-                })
-        };
+        let mk_storage = |label: &'static str, bytes: &[u8]| self.static_storage(label, bytes);
         let mk_uniform = |label: &str, bytes: &[u8]| {
             self.device
                 .create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
@@ -1510,8 +1605,7 @@ impl WgpuBackend {
         // tuple to outlive the encoder on the hanatos arm.
         let (front_pipe, bg_front, _front_tc_lut) = match &p.front {
             crate::FrontPass::Hanatos2025 { tc_lut, .. } => {
-                let tc_lut_f32: Vec<f32> = tc_lut.data.iter().map(|&v| v as f32).collect();
-                let tc_lut_buf = mk_storage("tc_lut", bytemuck::cast_slice(&tc_lut_f32));
+                let tc_lut_buf = self.static_storage_f64("tc_lut", &tc_lut.data);
                 let pipe = self.cached_pipeline(
                     include_str!("../../spektrafilm-shaders/wgsl/hanatos2025_rgb_to_raw.wgsl"),
                     &[
@@ -1755,7 +1849,8 @@ impl WgpuBackend {
         // avoids allocating a second full-image buffer per frame.
         let readback_bytes = if pack_req.is_some() { n_pixels as u64 * 4 } else { img_bytes as u64 };
         let readback = (!mappable || pack_req.is_some()).then(|| {
-            self.device.create_buffer_t(&wgpu::BufferDescriptor {
+            // Fully overwritten by the copy below.
+            self.device.create_buffer_overwritten_t(&wgpu::BufferDescriptor {
                 label: Some("readback"),
                 size: readback_bytes,
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
@@ -1921,6 +2016,7 @@ impl WgpuBackend {
 
         // ── Single command buffer chaining everything ────────────────────
         let mut encoder = self.device.create_command_encoder(&Default::default());
+        flush_pending_clears(&mut encoder);
         if let Some(req) = input_req.as_ref() {
             self.encode_input_pass(&mut encoder, req, &buf_a, image.width, image.height);
         }
@@ -5284,16 +5380,11 @@ fn build_gamut_state(
     });
     // aces_rgc carries no table — bind a 1-element placeholder (the shader
     // never reads it on that mode; wgpu requires a non-empty binding).
-    let cmax_f32: Vec<f32> = if gp.cmax.is_empty() {
-        vec![0.0]
+    let cmax_buf = if gp.cmax.is_empty() {
+        backend.static_storage("gamut_cmax", bytemuck::cast_slice(&[0.0f32]))
     } else {
-        gp.cmax.iter().map(|&v| v as f32).collect()
+        backend.static_storage_f64("gamut_cmax", gp.cmax)
     };
-    let cmax_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
-        label: Some("gamut_cmax"),
-        contents: bytemuck::cast_slice(&cmax_f32),
-        usage: wgpu::BufferUsages::STORAGE,
-    });
     let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("gamut_bg"),
         layout: &pipe.layout,
