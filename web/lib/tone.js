@@ -192,9 +192,14 @@ export function buildTone(T, { look, ev, rolloff = 0.6 }) {
 // lifted +6–8 L* (cast shadows in those scans are ~1.5 stops under the sunlit
 // side, not ~3: luminous, open), and the lift fades out by L* ~65. The steep
 // stretch between the deep black and the lifted shadows is the soft
-// "detachment" between shadows and mids. Highlights are untouched.
+// "detachment" between shadows and mids. Highlights are untouched up to L* ~92;
+// above, a short shoulder puts paper white at L* 98 (the scans' brightest areas
+// sit at 94–96, 3 of 4 never reach 100). Unclipped photo white only reaches
+// ~95.5 here (the inversion's guard below paper white); the rest is light the
+// phone clipped (CLIP_GAIN, common.js), which used to jump 95.5 → 100 between
+// input 250 and 252: a hard contour around blown skies. Now 95.1 → 97.9.
 const SCAN_PTS = [[0, 0], [7.2, 2.5], [11.8, 9], [13.2, 14], [14.7, 19], [16.6, 23], [18.9, 27],
-  [25.3, 33], [33.2, 39], [41.1, 45], [52.8, 54.5], [64, 64.5], [76.6, 76.6], [100, 100]];
+  [25.3, 33], [33.2, 39], [41.1, 45], [52.8, 54.5], [64, 64.5], [76.6, 76.6], [88, 88], [95.5, 95.2], [100, 98]];
 const scanCurve = monotoneSpline(SCAN_PTS, SCAN_PTS.map(() => null));
 const toLstar = (Y) => (Y > 0.008856 ? 116 * Math.cbrt(Y) - 16 : 903.3 * Y);
 const fromLstar = (L) => (L > 8 ? ((L + 16) / 116) ** 3 : Math.max(0, L) / 903.3);
