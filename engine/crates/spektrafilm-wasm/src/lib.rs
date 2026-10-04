@@ -186,8 +186,21 @@ impl Engine {
         }
         Ok(wasm_bindgen_futures::future_to_promise(async move {
             // Not get_mapped_range_as_array_buffer: in wgpu 24 it leaves a mapped
-            // view registered and the unmap that follows panics.
-            gpu.take_readback_packed(|mapped| out.copy_from(&mapped.get_mapped_range()))
+            // view registered and the unmap that follows panics. get_mapped_range
+            // copies into the wasm heap, so take it 1 MiB at a time (each view
+            // dropped before the next): the heap never holds the whole frame.
+            gpu.take_readback_packed(|buf| {
+                const STRIP: u64 = 1 << 20; // multiple of 8, as map offsets must be
+                let len = out.length() as u64;
+                let mut off = 0;
+                while off < len {
+                    let end = (off + STRIP).min(len);
+                    let view = buf.slice(off..end).get_mapped_range();
+                    out.subarray(off as u32, end as u32).copy_from(&view);
+                    drop(view);
+                    off = end;
+                }
+            })
                 .await
                 .ok_or_else(|| JsValue::from_str("GPU readback failed"))?;
             Ok(JsValue::UNDEFINED)
