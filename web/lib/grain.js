@@ -62,7 +62,7 @@ fn lattice(p: vec2<i32>, s: u32) -> f32 {      // ~N(0,1): sum of two uniforms, 
 }
 fn vnoise(p: vec2<f32>, s: u32) -> f32 {       // value noise, smooth interpolation, unit variance everywhere
   let i = vec2<i32>(floor(p)); let f = fract(p); let u = f * f * (3.0 - 2.0 * f);
-  let w = (1.0 - u) * (1.0 - u) + u * u;       // Σ weights² per axis: plain value noise is 4× weaker mid-cell
+  let w = (1.0 - u) * (1.0 - u) + u * u;       // Σ weights² per axis: plain value noise has 4× less variance mid-cell
   return mix(mix(lattice(i, s), lattice(i + vec2<i32>(1, 0), s), u.x),
              mix(lattice(i + vec2<i32>(0, 1), s), lattice(i + vec2<i32>(1, 1), s), u.x), u.y) * inverseSqrt(w.x * w.y);
 }
