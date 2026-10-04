@@ -20,11 +20,30 @@
 //     box-average of the field, 1/√(1 + 0.59 (px/cell)²) (fit, ±3%), so the
 //     grain reads the same at preview size and at 12 MP once viewed at the
 //     same size (before: the 12 MP export, downsized, was 1.45× the preview);
-//   - two scales: fine grain plus larger clumps (dye clouds coalesce), the
-//     clumps carrying most of the energy: scanned grain is soft, ACF(1 px)
-//     ≈ 0.7 on the KG200 scans at ~13–15 µm/px, not pixel-crisp;
-//   - three dye layers grain independently: part of the noise is per
-//     channel (chromatic), more so in the shadows, where it shows on scans.
+//   - the grain's size follows the exposure, as in a two-speed emulsion: the
+//     fast layer's coarse grains (clumps 2.3×, mottle 5× the grain size)
+//     carry the shadows, the slow layer's fine grain the mids and
+//     highlights. Measured on the palms scan (13.5 µm/px, flat areas, DoG
+//     octaves 0.5–1|1–2|2–4|4–8 px): L* 50–75 falls 1.38:1:0.53:0.26 (fine),
+//     the shadows rise toward the coarse octaves; the old mix was the same
+//     at every L* (mids 1.06:1:0.64:0.40, now 1.29:1:0.64:0.38);
+//   - the fine grain clusters (its amplitude rides the clump field, as dye
+//     clouds bunch): grain residuals on the scans are heavy-tailed, kurtosis
+//     3.8–4.2 in the mids (palms, shop), the old grain 2.7–2.8; now 4.0–4.2,
+//     skew still ~0;
+//   - colour grain is coarse mottle, not per-pixel speckle: on every scan
+//     the R−G / B−G residual octaves are flat or rise toward 2–8 px (palms
+//     L* 50–75 0.37:0.37:0.51:0.48; women, 4:4:4 JPEG, the same), and the
+//     fine residuals of the channels correlate 0.9–0.96. The old per-pixel
+//     chroma fell 1.36:1:0.58:0.26 (a phone's colour noise); now 6× cells,
+//     0.58:1:1.45:1.22, fine correlation 0.94;
+//   - amplitude stays luminance-driven, the same in R, G, B: in the scans'
+//     blue skies σR/σB = 1.00 (palms, shop, women), so no per-layer
+//     amplitude from each channel's own density (tried: 1.8, wrong).
+// No spatial filtering here: edge spread on the palms scan (10–90% 27 µm,
+// overshoot ~12% over ~4 px) already matches the app's (tree export: 28 µm,
+// same profile within 0.02), so a film MTF / adjacency step would only add
+// taps and drift from the scans.
 
 const FRAME_UM = 36000;
 
@@ -72,6 +91,12 @@ fn lstar(c: vec3<f32>) -> f32 {
   return select(903.3 * y, 116.0 * pow(y, 1.0 / 3.0) - 16.0, y > 0.008856);
 }
 fn sstep(a: f32, b: f32, x: f32) -> f32 { let t = clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
+// A pixel integrates the grain over its area: σ of a field with cells k × P[9] µm
+// falls as 1/√(1 + 0.59 r²), r = pixel / cell (fit of box-averaged value noise),
+// so every resolution shows the same grain once viewed at the same size.
+fn bpx(k: f32) -> f32 { let r = P[7] / (P[9] * k); return inverseSqrt(1.0 + 0.59 * r * r); }
+// Grain field with cells k × P[9] µm (never smaller than a pixel), as one pixel sees it.
+fn grainField(um: vec2<f32>, k: f32, o: f32, s: u32) -> f32 { return bpx(k) * vnoise(um / max(P[9] * k, P[7]) + o, s); }
 
 fn dec(v: vec3<f32>) -> vec3<f32> { return select(pow((v + 0.055) / 1.055, vec3<f32>(2.4)), v / 12.92, v <= vec3<f32>(0.04045)); }
 fn encs(v: vec3<f32>) -> vec3<f32> { return select(1.055 * pow(max(v, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055, 12.92 * v, v <= vec3<f32>(0.0031308)); }
@@ -148,21 +173,21 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   if (P[8] > 0.0) {
     let w = u32(P[4]);
     let um = (vec2<f32>(f32(i % w), f32(i / w)) + vec2<f32>(P[5], P[6]) + 0.5) * P[7];
-    let c1 = max(P[9], P[7]);                  // grain cell, never smaller than a pixel
-    let c2 = max(P[9] * 2.3, P[7]);            // clump cell
-    // A pixel integrates the grain over its area: σ falls as 1/√(1 + 0.59 r²),
-    // r = pixel / cell (fit of box-averaged value noise), so every resolution
-    // shows the same grain once viewed at the same size.
-    let r1 = P[7] / P[9]; let r2 = r1 / 2.3;
-    let b1 = inverseSqrt(1.0 + 0.59 * r1 * r1); let b2 = inverseSqrt(1.0 + 0.59 * r2 * r2);
     let s = u32(P[10]);
-    let p = um / c1;
     let L = lstar(c);
     // GRAIN_SHAPE: measured on real scans (see grain.js).
     let shape = (0.6 + 0.4 * sstep(2.0, 22.0, L)) * (1.0 - 0.85 * sstep(55.0, 85.0, L));
-    let chroma = mix(0.55, 0.2, sstep(10.0, 50.0, L));
-    let mono = 0.47 * b1 * vnoise(p, s) + 0.7 * b2 * vnoise(um / c2 + 17.0, s + 1u);
-    let n = b1 * vec3<f32>(vnoise(p + 31.0, s + 2u), vnoise(p + 57.0, s + 3u), vnoise(p + 83.0, s + 4u));
+    // Emulsion layers (see grain.js): the fast, coarse one carries the shadows,
+    // the slow, fine one the mids and highlights.
+    let sh = 1.0 - sstep(10.0, 50.0, L);
+    let wF = 0.8 - 0.25 * sh; let wC = 0.35 + 0.1 * sh; let wK = 0.05 + 0.35 * sh;
+    let vC = vnoise(um / max(P[9] * 2.3, P[7]) + 17.0, s + 1u);   // clump field, also the clustering of the fine grain
+    let fine = grainField(um, 1.0, 0.0, s) * (1.0 + 0.2121 * (vC * vC - 1.0)) * 0.9578;
+    let mono = 0.85 * inverseSqrt(wF * wF + wC * wC + wK * wK)
+             * (wF * fine + wC * bpx(2.3) * vC + wK * grainField(um, 5.0, 41.0, s + 5u));
+    // Colour grain: the dye layers' coarse, independent mottle, not per-pixel speckle.
+    let chroma = 0.3 * (1.0 - 0.5 * sstep(10.0, 50.0, L));
+    let n = vec3<f32>(grainField(um, 6.0, 31.0, s + 2u), grainField(um, 6.0, 57.0, s + 3u), grainField(um, 6.0, 83.0, s + 4u));
     c += (P[8] / 255.0) * shape * (mono + chroma * n);
   }
   // Soft floor at the paper black: unchanged a few levels above it, approaching
