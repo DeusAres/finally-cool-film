@@ -60,6 +60,8 @@ const SKY_LMS = { p3: [0.4813798, 0.4621184, 0.0565018, 0.228832, 0.6532168, 0.1
 const SKY_RGB = { p3: [3.1277694, -2.2571362, 0.1293668, -1.0910094, 2.413332, -0.3223227, -0.0260108, -0.5080414, 1.5340521],
   srgb: [4.0767417, -3.3077116, 0.2309699, -1.268438, 2.6097574, -0.3413194, -0.0041961, -0.7034186, 1.7076147] };
 const OK_LAB = [0.2104542553, 0.7936177850, -0.0040720468, 1.9779984951, -2.4285922050, 0.4505937099, 0.0259040371, 0.7827717662, -0.8086757660];
+// Scanner saturation (vib): chroma ramp-in (greys untouched) and fade-out (saturated untouched).
+const VIB = { c0: 0.008, c1: 0.022, f0: 0.025, f1: 0.2 };
 const OK_LMS = [1, 0.3963377774, 0.2158037573, 1, -0.1055613458, -0.0638541728, 1, -0.0894841775, -1.2914855480];
 
 export const GRAIN_WGSL = /* wgsl */`
@@ -72,7 +74,8 @@ export const GRAIN_WGSL = /* wgsl */`
 // P[11] = 1: the chain output is Rec.2020 → convert to Display P3 here, with
 // ACES-style per-channel soft gamut compression (see toP3); P[12] the paper
 // black (8-bit / 255): grain softly floors there instead of clipping to 0;
-// P[13] = 1: grey balance curves (tone.js greyBalance) from P[16], applied first.
+// P[13] = 1: grey balance curves (tone.js greyBalance) from P[16], applied first;
+// P[14] scanner saturation strength (vib, 0 = off).
 
 fn bal(c: u32, v: f32) -> f32 {             // grey balance (tone.js greyBalance), P[16..]
   let f = clamp(v, 0.0, 1.0) * 1024.0; let i = u32(f); let base = 16u + c * 1025u;
@@ -137,38 +140,60 @@ fn toP3(e: vec3<f32>) -> vec3<f32> {
   }
   return encs(p);
 }
+// OKLab helpers shared by skyHue and vib. The working space is P3 when P[11] = 1, else sRGB.
+fn toOk(l: vec3<f32>) -> vec3<f32> {          // linear RGB → OKLab (L, a, b)
+  var lms: vec3<f32>;
+  if (P[11] > 0.5) {
+    lms = l * ${wm3(SKY_LMS.p3)};
+  } else {
+    lms = l * ${wm3(SKY_LMS.srgb)};
+  }
+  return pow(max(lms, vec3<f32>(0.0)), vec3<f32>(1.0 / 3.0)) * ${wm3(OK_LAB)};
+}
+fn fromOk(lab: vec3<f32>) -> vec3<f32> {      // OKLab → linear RGB (unclamped)
+  let m = lab * ${wm3(OK_LMS)};
+  var r: vec3<f32>;
+  if (P[11] > 0.5) {
+    r = (m * m * m) * ${wm3(SKY_RGB.p3)};
+  } else {
+    r = (m * m * m) * ${wm3(SKY_RGB.srgb)};
+  }
+  return r;
+}
+// Step from l towards r (both linear), stopping at the gamut edge; sRGB-encoded.
+fn toGamut(l: vec3<f32>, r: vec3<f32>) -> vec3<f32> {
+  let lo = select(vec3<f32>(1.0), l / (l - r), r < vec3<f32>(0.0));
+  let hi = select(vec3<f32>(1.0), (1.0 - l) / (r - l), r > vec3<f32>(1.0));
+  let t = min(min(min(lo.x, lo.y), lo.z), min(min(hi.x, hi.y), hi.z));
+  return encs(l + t * (r - l));
+}
 // Partial sky-blue correction (CPU twin: skyHueCPU): the film turns blue skies
 // cyan (tree: CIELAB hue 257° → 243°); rotate blues/cyans back ~5.5° in OKLab at
 // constant L and C. Weight: raised cosine over ±60° around OKLab hue 235°, times
 // smoothstep(0.015, 0.045, C) so neutrals, skin, greens and yellows are untouched.
 // The step towards the rotated colour stops at the gamut edge (never leaves it).
 fn skyHue(e: vec3<f32>) -> vec3<f32> {
-  let p3 = P[11] > 0.5;
   let l = dec(clamp(e, vec3<f32>(0.0), vec3<f32>(1.0)));
-  var lms: vec3<f32>;
-  if (p3) {
-    lms = l * ${wm3(SKY_LMS.p3)};
-  } else {
-    lms = l * ${wm3(SKY_LMS.srgb)};
-  }
-  let lab = pow(max(lms, vec3<f32>(0.0)), vec3<f32>(1.0 / 3.0)) * ${wm3(OK_LAB)};
+  let lab = toOk(l);
   let C = length(lab.yz);
   let d = acos(clamp(dot(lab.yz, vec2<f32>(${wf(SKY.dir[0])}, ${wf(SKY.dir[1])})) / max(C, 1e-6), -1.0, 1.0));   // radians from 235°
   let w = select(0.0, 0.5 + 0.5 * cos(3.0 * d), d < ${wf(SKY.width)}) * sstep(${wf(SKY.c0)}, ${wf(SKY.c1)}, C);
   if (w <= 0.0) { return e; }
   let th = ${wf(SKY.theta)} * w;
   let cs = cos(th); let sn = sin(th);
-  let m = vec3<f32>(lab.x, cs * lab.y - sn * lab.z, sn * lab.y + cs * lab.z) * ${wm3(OK_LMS)};
-  var r: vec3<f32>;
-  if (p3) {
-    r = (m * m * m) * ${wm3(SKY_RGB.p3)};
-  } else {
-    r = (m * m * m) * ${wm3(SKY_RGB.srgb)};
-  }
-  let lo = select(vec3<f32>(1.0), l / (l - r), r < vec3<f32>(0.0));
-  let hi = select(vec3<f32>(1.0), (1.0 - l) / (r - l), r > vec3<f32>(1.0));
-  let t = min(min(min(lo.x, lo.y), lo.z), min(min(hi.x, hi.y), hi.z));
-  return encs(l + t * (r - l));
+  return toGamut(l, fromOk(vec3<f32>(lab.x, cs * lab.y - sn * lab.z, sn * lab.y + cs * lab.z)));
+}
+// Scanner saturation (CPU twin: vibCPU), strength P[14] from scanSaturation():
+// OKLab chroma gain 1 + P[14]·g(C) at constant L and hue. g ramps in over
+// C 0.008–0.022 (greys stay grey) and fades out by C 0.2 (saturated colours
+// keep theirs); C·(1 + s·g) stays monotonic in C for s ≤ 1. Same gamut clamp as skyHue.
+fn vib(e: vec3<f32>) -> vec3<f32> {
+  let l = dec(clamp(e, vec3<f32>(0.0), vec3<f32>(1.0)));
+  let lab = toOk(l);
+  let C = length(lab.yz);
+  let g = P[14] * sstep(${wf(VIB.c0)}, ${wf(VIB.c1)}, C) * (1.0 - sstep(${wf(VIB.f0)}, ${wf(VIB.f1)}, C));
+  if (g <= 0.0) { return e; }
+  return toGamut(l, fromOk(vec3<f32>(lab.x, lab.yz * (1.0 + g))));
 }
 
 @compute @workgroup_size(256)
@@ -179,6 +204,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   if (P[13] > 0.5) { e = vec3<f32>(bal(0u, e.x), bal(1u, e.y), bal(2u, e.z)); }
   if (P[11] > 0.5) { e = toP3(e); }
   e = skyHue(e);
+  if (P[14] > 0.0) { e = vib(e); }
   var c = vec3<f32>(q(e.x), q(e.y), q(e.z));
   if (P[8] > 0.0) {
     let w = u32(P[4]);
@@ -214,11 +240,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
  * Params for GRAIN_WGSL: region (x0, y0, w) of a frame whose long side is
  * `frameLong` px; `amount` is the Grana slider (0 = off), `seed` per photo.
  */
-export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false, black = 0, balance = null) {
+export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false, black = 0, balance = null, vibrance = 0) {
   const umPerPx = FRAME_UM / frameLong;
   // Size grows a little with the amount (a coarser-looking stock); 12 µm at 1.
   const size = 12 * (0.75 + 0.25 * amount);
-  const head = [w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0, black / 255, balance ? 1 : 0, 0, 0];
+  const head = [w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0, black / 255, balance ? 1 : 0, vibrance, 0];   // vibrance → P[14]
   const p = new Float32Array(head.length + (balance ? balance.length : 0));
   p.set(head); if (balance) p.set(balance, head.length);   // balance starts at P[16]
   return p;
@@ -231,7 +257,7 @@ const GRAIN_LEVELS = 13;
 // for the no-WebGPU path: `px` is one engine output pixel (sRGB-encoded), in place.
 const RGC_SCL = (RGC.lim - RGC.thr) / (((1 - RGC.thr) / (RGC.lim - RGC.thr)) ** -RGC.pw - 1) ** (1 / RGC.pw);
 const rgcCPU = (d) => { if (d < RGC.thr) return d; const x = (d - RGC.thr) / RGC_SCL; return RGC.thr + RGC_SCL * x / (1 + x ** RGC.pw) ** (1 / RGC.pw); };
-export function outputColourCPU(px, rec2020ToP3, balance) {
+export function outputColourCPU(px, rec2020ToP3, balance, vibrance = 0) {
   if (balance) {
     for (let c = 0; c < 3; c++) {
       const f = Math.min(1, Math.max(0, px[c])) * 1024, i = f | 0, base = c * 1025;
@@ -247,27 +273,69 @@ export function outputColourCPU(px, rec2020ToP3, balance) {
     px[0] = linearToSrgb(p0); px[1] = linearToSrgb(p1); px[2] = linearToSrgb(p2);
   }
   skyHueCPU(px, rec2020ToP3);
+  if (vibrance > 0) vibCPU(px, rec2020ToP3, vibrance);
 }
 
-// CPU twin of skyHue in GRAIN_WGSL (same constants).
+// CPU twins of skyHue and vib in GRAIN_WGSL (same constants, same helpers).
 const m3 = (m, x, y, z) => [m[0] * x + m[1] * y + m[2] * z, m[3] * x + m[4] * y + m[5] * z, m[6] * x + m[7] * y + m[8] * z];
-function skyHueCPU(px, p3) {
-  const sp = p3 ? 'p3' : 'srgb';
-  const l = [0, 1, 2].map((c) => srgbToLinear(Math.min(1, Math.max(0, px[c]))));
+const sstepCPU = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const linCPU = (px) => [0, 1, 2].map((c) => srgbToLinear(Math.min(1, Math.max(0, px[c]))));
+function toOkCPU(l, sp) {
   const lms = m3(SKY_LMS[sp], l[0], l[1], l[2]);
-  const [L, a, b] = m3(OK_LAB, Math.cbrt(Math.max(lms[0], 0)), Math.cbrt(Math.max(lms[1], 0)), Math.cbrt(Math.max(lms[2], 0)));
-  const C = Math.hypot(a, b);
-  const d = Math.acos(Math.min(1, Math.max(-1, (a * SKY.dir[0] + b * SKY.dir[1]) / Math.max(C, 1e-6))));
-  const t0 = Math.min(1, Math.max(0, (C - SKY.c0) / (SKY.c1 - SKY.c0)));
-  const w = (d < SKY.width ? 0.5 + 0.5 * Math.cos(3 * d) : 0) * t0 * t0 * (3 - 2 * t0);
-  if (w <= 0) return;
-  const th = SKY.theta * w, cs = Math.cos(th), sn = Math.sin(th);
-  const m = m3(OK_LMS, L, cs * a - sn * b, sn * a + cs * b);
-  const r = m3(SKY_RGB[sp], m[0] ** 3, m[1] ** 3, m[2] ** 3);
+  return m3(OK_LAB, Math.cbrt(Math.max(lms[0], 0)), Math.cbrt(Math.max(lms[1], 0)), Math.cbrt(Math.max(lms[2], 0)));
+}
+function fromOkCPU(L, a, b, sp) { const m = m3(OK_LMS, L, a, b); return m3(SKY_RGB[sp], m[0] ** 3, m[1] ** 3, m[2] ** 3); }
+function toGamutCPU(px, l, r) {
   let t = 1;
   for (let c = 0; c < 3; c++) {
     if (r[c] < 0) t = Math.min(t, l[c] / (l[c] - r[c]));
     if (r[c] > 1) t = Math.min(t, (1 - l[c]) / (r[c] - l[c]));
   }
   for (let c = 0; c < 3; c++) px[c] = linearToSrgb(l[c] + t * (r[c] - l[c]));
+}
+function skyHueCPU(px, p3) {
+  const sp = p3 ? 'p3' : 'srgb';
+  const l = linCPU(px);
+  const [L, a, b] = toOkCPU(l, sp);
+  const C = Math.hypot(a, b);
+  const d = Math.acos(Math.min(1, Math.max(-1, (a * SKY.dir[0] + b * SKY.dir[1]) / Math.max(C, 1e-6))));
+  const w = (d < SKY.width ? 0.5 + 0.5 * Math.cos(3 * d) : 0) * sstepCPU(SKY.c0, SKY.c1, C);
+  if (w <= 0) return;
+  const th = SKY.theta * w, cs = Math.cos(th), sn = Math.sin(th);
+  toGamutCPU(px, l, fromOkCPU(L, cs * a - sn * b, sn * a + cs * b, sp));
+}
+/** CPU twin of vib: `px` sRGB-encoded in P3 (p3) or sRGB, in place; s = strength. */
+export function vibCPU(px, p3, s) {
+  const sp = p3 ? 'p3' : 'srgb';
+  const l = linCPU(px);
+  const [L, a, b] = toOkCPU(l, sp);
+  const C = Math.hypot(a, b);
+  const g = s * sstepCPU(VIB.c0, VIB.c1, C) * (1 - sstepCPU(VIB.f0, VIB.f1, C));
+  if (g <= 0) return;
+  toGamutCPU(px, l, fromOkCPU(L, a * (1 + g), b * (1 + g), sp));
+}
+
+// Per-frame scanner saturation, as a lab scanner operator sets it: measured
+// once on the preview (8-bit RGBA, P3 or sRGB, as rendered before levels and
+// vib), returns the vib strength (0 = untouched). Colourfulness = √(p50·p90)
+// of OKLab C over a pixel subsample. Measured: normal iPhone frames through the
+// pipeline 0.049–0.13, KG200 scans 0.039–0.096, flat hazy frames 0.018–0.036.
+// Only frames below SAT_NORMAL are lifted, proportionally to the deficit, and
+// never beyond SAT_MAX (≈ ×1.7 chroma at most, only for low-chroma colours).
+const SAT_NORMAL = 0.045, SAT_GAIN = 1.6, SAT_MAX = 0.8;
+export function scanSaturation(rgba, p3) {
+  const sp = p3 ? 'p3' : 'srgb';
+  const lin = new Float64Array(256).map((_, i) => srgbToLinear(i / 255));
+  const n = rgba.length >> 2, step = Math.max(1, Math.floor(n / 100000));
+  const Cs = new Float32Array(Math.ceil(n / step));
+  let k = 0;
+  for (let i = 0; i < n; i += step) {
+    const [, a, b] = toOkCPU([lin[rgba[4 * i]], lin[rgba[4 * i + 1]], lin[rgba[4 * i + 2]]], sp);
+    Cs[k++] = Math.hypot(a, b);
+  }
+  const c = Cs.subarray(0, k).sort();
+  if (!k) return 0;
+  const q = (p) => c[Math.floor(p * (k - 1))];
+  const score = Math.sqrt(q(0.5) * q(0.9));
+  return Math.min(SAT_MAX, Math.max(0, SAT_GAIN * (1 - score / SAT_NORMAL)));
 }
