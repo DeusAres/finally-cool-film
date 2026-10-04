@@ -166,7 +166,7 @@ export function autoTone(Ys) {
  *   out8[j]     engine output (sRGB-encoded, j/4095) → display 8-bit after the white stretch
  * `packed` is gain ++ scene, as the WebGPU lens stage reads it.
  */
-export function buildTone(T, { look, ev, rolloff = 0.6 }) {
+export function buildTone(T, { look, ev, rolloff = 0.6, levels }) {
   const curve = displayCurve(ev, rolloff);
   const gain = new Float32Array(SQRT_N + 1), scene = new Float32Array(SQRT_N + 1);
   for (let i = 0; i <= SQRT_N; i++) {
@@ -177,9 +177,13 @@ export function buildTone(T, { look, ev, rolloff = 0.6 }) {
   // White stretch, a soft floor at the paper black (scanner sharpening and
   // grain can undershoot locally, but a print is never darker than its Dmax),
   // then the scanner curve (SCAN_CURVE).
+  // With `levels` (scanLevels), the frame's own black/white points are set
+  // first, on the pre-floor L*, so the paper-black floor still holds after.
   const out8 = new Uint8ClampedArray(4096), f = T.floor * 0.85;
+  const lv = levels && levelsCurve(levels.black, levels.white);
   for (let j = 0; j < 4096; j++) {
-    const x = Math.min(1, lin(j / 4095) / T.white);
+    let x = Math.min(1, lin(j / 4095) / T.white);
+    if (lv) x = fromLstar(lv(toLstar(x)));
     out8[j] = Math.round(255 * enc(fromLstar(scanCurve(toLstar(Math.min(1, Math.sqrt(x * x + f * f)))))));
   }
   const packed = new Float32Array(2 * (SQRT_N + 1));
@@ -206,6 +210,57 @@ const SCAN_PTS = [[0, 0], [7.2, 2.5], [11.8, 9], [13.2, 14], [14.7, 19], [16.6, 
 const scanCurve = monotoneSpline(SCAN_PTS, SCAN_PTS.map(() => null));
 const toLstar = (Y) => (Y > 0.008856 ? 116 * Math.cbrt(Y) - 16 : 903.3 * Y);
 const fromLstar = (L) => (L > 8 ? ((L + 16) / 116) ** 3 : Math.max(0, L) / 903.3);
+
+/**
+ * Per-frame black/white points, as a lab scanner sets them, but only for what
+ * the frame lacks. Measured on the output L* (after SCAN_PTS) of the preview:
+ * robust p1 (black) and p99.9 (white: specular-proof, ~3000 px on a 3 MP preview,
+ * and it separates the flat iPhone frames, 91.8–93.9, from normal ones, 95.0–98.0,
+ * which p99 does not). Targets from the KG200 refs: p1 2.8–3.1 (→ 3.5, the top of
+ * our normal frames, so they stay put); p99.9 95.5–100 (→ 95.5). Caps in output
+ * L*: black lift removed ≤ 8, white raised ≤ 6. A hazy frame (p1 ~16) keeps half
+ * its veil: the scene's own aerial perspective, not a stretch into mud.
+ * Returns { black, white } in pre-scan L* (scanCurve's input) for buildTone.
+ */
+const LV = { black: 3.5, white: 95.5, maxBlack: 8, maxWhite: 6, pBlack: 0.01, pWhite: 0.999 };
+export function scanLevels(L) {
+  const B = 2000, h = new Uint32Array(B + 1);
+  for (const v of L) h[Math.max(0, Math.min(B, Math.round(v * B / 100)))]++;
+  const q = (p) => { const k = p * (L.length - 1); let c = 0;
+    for (let i = 0; i <= B; i++) if ((c += h[i]) > k) return i * 100 / B; return 100; };
+  const p1 = q(LV.pBlack), pw = q(LV.pWhite);
+  const t1 = p1 > LV.black ? Math.max(LV.black, p1 - LV.maxBlack) : p1;
+  const tw = pw < LV.white ? Math.min(LV.white, pw + LV.maxWhite) : pw;
+  if (t1 === p1 && tw === pw) return { black: 0, white: 100 };
+  const x1 = scanInverse(p1), xw = scanInverse(pw), y1 = scanInverse(t1), yw = scanInverse(tw);
+  // Linear through (x1 → y1, xw → yw), then correct for the toe/shoulder bend.
+  let e1 = y1, ew = yw, black = 0, white = 100;
+  for (let it = 0; it < 30; it++) {
+    const a = (ew - e1) / (xw - x1);
+    black = x1 - e1 / a; white = black + 100 / a;
+    const R = levelsCurve(black, white);
+    e1 -= R(x1) - y1; ew -= R(xw) - yw;
+  }
+  return { black, white };
+}
+
+// scanCurve⁻¹ by bisection (scanCurve is monotone; its top is paper white 98).
+function scanInverse(L) {
+  let a = 0, b = 100;
+  if (L >= scanCurve(100)) return 100;
+  for (let i = 0; i < 50; i++) { const m = (a + b) / 2; if (scanCurve(m) < L) a = m; else b = m; }
+  return (a + b) / 2;
+}
+
+// Pre-scan L* remap: linear black → 0, white → 100, with a smooth toe below
+// output 12 and shoulder above 92 (monotone Hermite, C1), so nothing clips:
+// the frame's deepest tones and blown lights are compressed, not cut.
+function levelsCurve(black, white) {
+  const a = 100 / (white - black), xT = black + 12 / a, xS = black + 92 / a;
+  if (!(xT > 0.5 && xS < 99.5 && xS > xT)) return (x) => Math.max(0, Math.min(100, a * (x - black)));
+  const s = monotoneSpline([[0, 0], [xT, 12], [xS, 92], [100, 100]], [null, a, a, null]);
+  return (x) => (x <= 0 ? 0 : s(x));
+}
 
 /**
  * Grey balance, as a lab scanner sets it: three curves over the engine's
