@@ -4,8 +4,9 @@
 //
 // Why not the engine's own grain: measured on real Kodak Gold 200 scans
 // (shopfront, cliffs, palms, two people on grass), grain is strongest in the
-// shadows and low mids (L* ~20–60), fades in the deep blacks and is nearly
-// gone in the highlights (the print/scan shoulder flattens it). The engine's
+// shadows and low mids (L* ~20–60), fades in the deep blacks and falls to
+// ~10% of its peak in the highlights (L* 78–96, structure-free flat patches:
+// 8–16% of peak; the print/scan shoulder flattens it). The engine's
 // grain, after our tone inversion (which places display highlights mid-curve
 // on the film), did the opposite: strongest at L* 60–90, weak in the shadows.
 //
@@ -13,10 +14,15 @@
 //   - amplitude follows that measured response, GRAIN_SHAPE(L*) below;
 //   - noise lives in µm on the 36 mm frame, so preview and every export tile
 //     draw the same grain;
-//   - a pixel larger than a grain averages several: amplitude scales with
-//     grain size / pixel size (RMS granularity ∝ 1/√area), so the grain reads
-//     the same at preview size and at 12 MP once viewed at the same size;
-//   - two scales: fine grain plus larger clumps (dye clouds coalesce);
+//   - value noise normalised to unit variance at every point (plain value
+//     noise is 2× weaker mid-cell than on the lattice: a faint grid ripple);
+//   - a pixel integrates the grain over its area: each scale's σ is the
+//     box-average of the field, 1/√(1 + 0.59 (px/cell)²) (fit, ±3%), so the
+//     grain reads the same at preview size and at 12 MP once viewed at the
+//     same size (before: the 12 MP export, downsized, was 1.45× the preview);
+//   - two scales: fine grain plus larger clumps (dye clouds coalesce), the
+//     clumps carrying most of the energy: scanned grain is soft, ACF(1 px)
+//     ≈ 0.7 on the KG200 scans at ~13–15 µm/px, not pixel-crisp;
 //   - three dye layers grain independently: part of the noise is per
 //     channel (chromatic), more so in the shadows, where it shows on scans.
 
@@ -54,10 +60,11 @@ fn lattice(p: vec2<i32>, s: u32) -> f32 {      // ~N(0,1): sum of two uniforms, 
   let b = f32(h >> 16u) / 65535.0;
   return (a + b - 1.0) * 2.45;
 }
-fn vnoise(p: vec2<f32>, s: u32) -> f32 {       // value noise, smooth interpolation
+fn vnoise(p: vec2<f32>, s: u32) -> f32 {       // value noise, smooth interpolation, unit variance everywhere
   let i = vec2<i32>(floor(p)); let f = fract(p); let u = f * f * (3.0 - 2.0 * f);
+  let w = (1.0 - u) * (1.0 - u) + u * u;       // Σ weights² per axis: plain value noise is 4× weaker mid-cell
   return mix(mix(lattice(i, s), lattice(i + vec2<i32>(1, 0), s), u.x),
-             mix(lattice(i + vec2<i32>(0, 1), s), lattice(i + vec2<i32>(1, 1), s), u.x), u.y);
+             mix(lattice(i + vec2<i32>(0, 1), s), lattice(i + vec2<i32>(1, 1), s), u.x), u.y) * inverseSqrt(w.x * w.y);
 }
 fn lstar(c: vec3<f32>) -> f32 {
   let l = select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
@@ -105,17 +112,22 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   if (P[8] > 0.0) {
     let w = u32(P[4]);
     let um = (vec2<f32>(f32(i % w), f32(i / w)) + vec2<f32>(P[5], P[6]) + 0.5) * P[7];
-    let size = max(P[9], P[7]);                // a cell is never smaller than a pixel
-    let avg = P[9] / size;                     // averaging over larger pixels
+    let c1 = max(P[9], P[7]);                  // grain cell, never smaller than a pixel
+    let c2 = max(P[9] * 2.3, P[7]);            // clump cell
+    // A pixel integrates the grain over its area: σ falls as 1/√(1 + 0.59 r²),
+    // r = pixel / cell (fit of box-averaged value noise), so every resolution
+    // shows the same grain once viewed at the same size.
+    let r1 = P[7] / P[9]; let r2 = r1 / 2.3;
+    let b1 = inverseSqrt(1.0 + 0.59 * r1 * r1); let b2 = inverseSqrt(1.0 + 0.59 * r2 * r2);
     let s = u32(P[10]);
-    let p = um / size;
+    let p = um / c1;
     let L = lstar(c);
     // GRAIN_SHAPE: measured on real scans (see grain.js).
-    let shape = (0.6 + 0.4 * sstep(2.0, 22.0, L)) * (1.0 - 0.95 * sstep(55.0, 88.0, L));
+    let shape = (0.6 + 0.4 * sstep(2.0, 22.0, L)) * (1.0 - 0.85 * sstep(55.0, 85.0, L));
     let chroma = mix(0.55, 0.2, sstep(10.0, 50.0, L));
-    let mono = 0.8 * vnoise(p, s) + 0.6 * vnoise(p / 2.3 + 17.0, s + 1u);
-    let n = vec3<f32>(vnoise(p + 31.0, s + 2u), vnoise(p + 57.0, s + 3u), vnoise(p + 83.0, s + 4u));
-    c += (P[8] / 255.0) * avg * shape * (mono + chroma * n);
+    let mono = 0.47 * b1 * vnoise(p, s) + 0.7 * b2 * vnoise(um / c2 + 17.0, s + 1u);
+    let n = b1 * vec3<f32>(vnoise(p + 31.0, s + 2u), vnoise(p + 57.0, s + 3u), vnoise(p + 83.0, s + 4u));
+    c += (P[8] / 255.0) * shape * (mono + chroma * n);
   }
   // Soft floor at the paper black: unchanged a few levels above it, approaching
   // it below (softplus), so grain never punches pure-black specks into the
