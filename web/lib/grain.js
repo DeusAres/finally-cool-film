@@ -45,7 +45,22 @@
 // same profile within 0.02), so a film MTF / adjacency step would only add
 // taps and drift from the scans.
 
-const FRAME_UM = 36000;
+import { FRAME_UM, wf, wv3, wm3 } from './util.js';
+import { srgbToLinear, linearToSrgb, REC2020_TO_P3, LUMA_SRGB } from './color.js';
+
+// Constants shared by GRAIN_WGSL and its CPU twin (outputColourCPU): one source,
+// the WGSL gets them by interpolation.
+// ACES-style soft gamut compression (rgc): threshold, the distance that maps to the edge, power.
+const RGC = { thr: 0.9, lim: 1.3, pw: 1.2 };
+// Sky-blue rotation (skyHue): OKLab hue 235° direction, half-width (60°), rotation (5.5°), chroma ramp.
+const SKY = { dir: [-0.5735764, -0.8191520], width: 1.0471976, theta: 0.0959931, c0: 0.015, c1: 0.045 };
+// Rows: linear RGB → LMS (OKLab M1 composed with the primaries, rows normalised so white has a = b = 0), and back.
+const SKY_LMS = { p3: [0.4813798, 0.4621184, 0.0565018, 0.228832, 0.6532168, 0.1179512, 0.0839458, 0.2241653, 0.691889],
+  srgb: [0.4122215, 0.5363325, 0.051446, 0.2119035, 0.6806995, 0.107397, 0.0883025, 0.2817188, 0.6299787] };
+const SKY_RGB = { p3: [3.1277694, -2.2571362, 0.1293668, -1.0910094, 2.413332, -0.3223227, -0.0260108, -0.5080414, 1.5340521],
+  srgb: [4.0767417, -3.3077116, 0.2309699, -1.268438, 2.6097574, -0.3413194, -0.0041961, -0.7034186, 1.7076147] };
+const OK_LAB = [0.2104542553, 0.7936177850, -0.0040720468, 1.9779984951, -2.4285922050, 0.4505937099, 0.0259040371, 0.7827717662, -0.8086757660];
+const OK_LMS = [1, 0.3963377774, 0.2158037573, 1, -0.1055613458, -0.0638541728, 1, -0.0894841775, -1.2914855480];
 
 export const GRAIN_WGSL = /* wgsl */`
 @group(0) @binding(0) var<storage, read> src: array<f32>;
@@ -86,8 +101,7 @@ fn vnoise(p: vec2<f32>, s: u32) -> f32 {       // value noise, smooth interpolat
              mix(lattice(i + vec2<i32>(0, 1), s), lattice(i + vec2<i32>(1, 1), s), u.x), u.y) * inverseSqrt(w.x * w.y);
 }
 fn lstar(c: vec3<f32>) -> f32 {
-  let l = select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
-  let y = dot(l, vec3<f32>(0.2126, 0.7152, 0.0722));
+  let y = dot(dec(c), ${wv3(LUMA_SRGB)});
   return select(903.3 * y, 116.0 * pow(y, 1.0 / 3.0) - 16.0, y > 0.008856);
 }
 fn sstep(a: f32, b: f32, x: f32) -> f32 { let t = clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
@@ -96,14 +110,15 @@ fn sstep(a: f32, b: f32, x: f32) -> f32 { let t = clamp((x - a) / (b - a), 0.0, 
 // so every resolution shows the same grain once viewed at the same size.
 fn bpx(k: f32) -> f32 { let r = P[7] / (P[9] * k); return inverseSqrt(1.0 + 0.59 * r * r); }
 // Grain field with cells k × P[9] µm (never smaller than a pixel), as one pixel sees it.
-fn grainField(um: vec2<f32>, k: f32, o: f32, s: u32) -> f32 { return bpx(k) * vnoise(um / max(P[9] * k, P[7]) + o, s); }
+fn cell(um: vec2<f32>, k: f32, o: f32, s: u32) -> f32 { return vnoise(um / max(P[9] * k, P[7]) + o, s); }
+fn grainField(um: vec2<f32>, k: f32, o: f32, s: u32) -> f32 { return bpx(k) * cell(um, k, o, s); }
 
 fn dec(v: vec3<f32>) -> vec3<f32> { return select(pow((v + 0.055) / 1.055, vec3<f32>(2.4)), v / 12.92, v <= vec3<f32>(0.04045)); }
 fn encs(v: vec3<f32>) -> vec3<f32> { return select(1.055 * pow(max(v, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055, 12.92 * v, v <= vec3<f32>(0.0031308)); }
 // One channel's distance from the achromatic axis compressed beyond THR so that
 // LIM (the farthest a film colour lands outside P3) maps exactly to the gamut edge.
 fn rgc(d: f32) -> f32 {
-  let thr = 0.9; let lim = 1.3; let pw = 1.2;
+  let thr = ${wf(RGC.thr)}; let lim = ${wf(RGC.lim)}; let pw = ${wf(RGC.pw)};
   if (d < thr) { return d; }
   let scl = (lim - thr) / pow(pow((1.0 - thr) / (lim - thr), -pw) - 1.0, 1.0 / pw);
   let x = (d - thr) / scl;
@@ -114,10 +129,7 @@ fn rgc(d: f32) -> f32 {
 // channel instead of clipping to 0, which would rotate the hue and flatten them.
 fn toP3(e: vec3<f32>) -> vec3<f32> {
   let l = dec(e);
-  var p = vec3<f32>(
-    dot(vec3<f32>(1.3435783, -0.2821797, -0.0613986), l),
-    dot(vec3<f32>(-0.0652975, 1.0757879, -0.0104905), l),
-    dot(vec3<f32>(0.0028218, -0.0195985, 1.0167767), l));
+  var p = vec3<f32>(${REC2020_TO_P3.map((r) => `dot(${wv3(r)}, l)`).join(', ')});
   let a = max(p.x, max(p.y, p.z));
   if (a > 0.0) {
     let d = (vec3<f32>(a) - p) / a;
@@ -135,25 +147,23 @@ fn skyHue(e: vec3<f32>) -> vec3<f32> {
   let l = dec(clamp(e, vec3<f32>(0.0), vec3<f32>(1.0)));
   var lms: vec3<f32>;
   if (p3) {
-    lms = l * mat3x3<f32>(vec3<f32>(0.4813798, 0.4621184, 0.0565018), vec3<f32>(0.228832, 0.6532168, 0.1179512), vec3<f32>(0.0839458, 0.2241653, 0.691889));
+    lms = l * ${wm3(SKY_LMS.p3)};
   } else {
-    lms = l * mat3x3<f32>(vec3<f32>(0.4122215, 0.5363325, 0.051446), vec3<f32>(0.2119035, 0.6806995, 0.107397), vec3<f32>(0.0883025, 0.2817188, 0.6299787));
+    lms = l * ${wm3(SKY_LMS.srgb)};
   }
-  let lab = pow(max(lms, vec3<f32>(0.0)), vec3<f32>(1.0 / 3.0)) * mat3x3<f32>(vec3<f32>(0.2104542553, 0.7936177850, -0.0040720468),
-    vec3<f32>(1.9779984951, -2.4285922050, 0.4505937099), vec3<f32>(0.0259040371, 0.7827717662, -0.8086757660));
+  let lab = pow(max(lms, vec3<f32>(0.0)), vec3<f32>(1.0 / 3.0)) * ${wm3(OK_LAB)};
   let C = length(lab.yz);
-  let d = acos(clamp(dot(lab.yz, vec2<f32>(-0.5735764, -0.8191520)) / max(C, 1e-6), -1.0, 1.0));   // radians from 235°
-  let w = select(0.0, 0.5 + 0.5 * cos(3.0 * d), d < 1.0471976) * sstep(0.015, 0.045, C);
+  let d = acos(clamp(dot(lab.yz, vec2<f32>(${wf(SKY.dir[0])}, ${wf(SKY.dir[1])})) / max(C, 1e-6), -1.0, 1.0));   // radians from 235°
+  let w = select(0.0, 0.5 + 0.5 * cos(3.0 * d), d < ${wf(SKY.width)}) * sstep(${wf(SKY.c0)}, ${wf(SKY.c1)}, C);
   if (w <= 0.0) { return e; }
-  let th = 0.0959931 * w;                      // 5.5°
+  let th = ${wf(SKY.theta)} * w;
   let cs = cos(th); let sn = sin(th);
-  let m = vec3<f32>(lab.x, cs * lab.y - sn * lab.z, sn * lab.y + cs * lab.z) * mat3x3<f32>(vec3<f32>(1.0, 0.3963377774, 0.2158037573),
-    vec3<f32>(1.0, -0.1055613458, -0.0638541728), vec3<f32>(1.0, -0.0894841775, -1.2914855480));
+  let m = vec3<f32>(lab.x, cs * lab.y - sn * lab.z, sn * lab.y + cs * lab.z) * ${wm3(OK_LMS)};
   var r: vec3<f32>;
   if (p3) {
-    r = (m * m * m) * mat3x3<f32>(vec3<f32>(3.1277694, -2.2571362, 0.1293668), vec3<f32>(-1.0910094, 2.413332, -0.3223227), vec3<f32>(-0.0260108, -0.5080414, 1.5340521));
+    r = (m * m * m) * ${wm3(SKY_RGB.p3)};
   } else {
-    r = (m * m * m) * mat3x3<f32>(vec3<f32>(4.0767417, -3.3077116, 0.2309699), vec3<f32>(-1.268438, 2.6097574, -0.3413194), vec3<f32>(-0.0041961, -0.7034186, 1.7076147));
+    r = (m * m * m) * ${wm3(SKY_RGB.srgb)};
   }
   let lo = select(vec3<f32>(1.0), l / (l - r), r < vec3<f32>(0.0));
   let hi = select(vec3<f32>(1.0), (1.0 - l) / (r - l), r > vec3<f32>(1.0));
@@ -181,7 +191,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // the slow, fine one the mids and highlights.
     let sh = 1.0 - sstep(10.0, 50.0, L);
     let wF = 0.8 - 0.25 * sh; let wC = 0.35 + 0.1 * sh; let wK = 0.05 + 0.35 * sh;
-    let vC = vnoise(um / max(P[9] * 2.3, P[7]) + 17.0, s + 1u);   // clump field, also the clustering of the fine grain
+    let vC = cell(um, 2.3, 17.0, s + 1u);   // clump field, also the clustering of the fine grain
     let fine = grainField(um, 1.0, 0.0, s) * (1.0 + 0.2121 * (vC * vC - 1.0)) * 0.9578;
     let mono = 0.95 * inverseSqrt(wF * wF + wC * wC + wK * wK)
              * (wF * fine + wC * bpx(2.3) * vC + wK * grainField(um, 5.0, 41.0, s + 5u));
@@ -219,10 +229,8 @@ const GRAIN_LEVELS = 13;
 
 // CPU twin of the colour steps of GRAIN_WGSL (grey balance, then Rec.2020 → P3),
 // for the no-WebGPU path: `px` is one engine output pixel (sRGB-encoded), in place.
-const decs = (v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
-const encsCPU = (v) => (v <= 0.0031308 ? 12.92 * v : 1.055 * Math.max(v, 0) ** (1 / 2.4) - 0.055);
-const RGC_SCL = (1.3 - 0.9) / (((1 - 0.9) / (1.3 - 0.9)) ** -1.2 - 1) ** (1 / 1.2);
-const rgcCPU = (d) => { if (d < 0.9) return d; const x = (d - 0.9) / RGC_SCL; return 0.9 + RGC_SCL * x / (1 + x ** 1.2) ** (1 / 1.2); };
+const RGC_SCL = (RGC.lim - RGC.thr) / (((1 - RGC.thr) / (RGC.lim - RGC.thr)) ** -RGC.pw - 1) ** (1 / RGC.pw);
+const rgcCPU = (d) => { if (d < RGC.thr) return d; const x = (d - RGC.thr) / RGC_SCL; return RGC.thr + RGC_SCL * x / (1 + x ** RGC.pw) ** (1 / RGC.pw); };
 export function outputColourCPU(px, rec2020ToP3, balance) {
   if (balance) {
     for (let c = 0; c < 3; c++) {
@@ -231,37 +239,28 @@ export function outputColourCPU(px, rec2020ToP3, balance) {
     }
   }
   if (rec2020ToP3) {
-    const r = decs(px[0]), g = decs(px[1]), b = decs(px[2]);
-    let p0 = 1.3435783 * r - 0.2821797 * g - 0.0613986 * b;
-    let p1 = -0.0652975 * r + 1.0757879 * g - 0.0104905 * b;
-    let p2 = 0.0028218 * r - 0.0195985 * g + 1.0167767 * b;
+    const r = srgbToLinear(px[0]), g = srgbToLinear(px[1]), b = srgbToLinear(px[2]);
+    let [p0, p1, p2] = REC2020_TO_P3.map(([x, y, z]) => x * r + y * g + z * b);
     const a = Math.max(p0, p1, p2);
     if (a > 0) { p0 = a - rgcCPU((a - p0) / a) * a; p1 = a - rgcCPU((a - p1) / a) * a; p2 = a - rgcCPU((a - p2) / a) * a; }
-    px[0] = encsCPU(p0); px[1] = encsCPU(p1); px[2] = encsCPU(p2);
+    px[0] = linearToSrgb(p0); px[1] = linearToSrgb(p1); px[2] = linearToSrgb(p2);
   }
   skyHueCPU(px, rec2020ToP3);
 }
 
-// CPU twin of skyHue in GRAIN_WGSL (same constants). Rows: linear RGB → LMS (OKLab M1 composed
-// with the primaries, rows normalised so white has a = b = 0), and back.
-const SKY_LMS = { p3: [0.4813798, 0.4621184, 0.0565018, 0.228832, 0.6532168, 0.1179512, 0.0839458, 0.2241653, 0.691889],
-  srgb: [0.4122215, 0.5363325, 0.051446, 0.2119035, 0.6806995, 0.107397, 0.0883025, 0.2817188, 0.6299787] };
-const SKY_RGB = { p3: [3.1277694, -2.2571362, 0.1293668, -1.0910094, 2.413332, -0.3223227, -0.0260108, -0.5080414, 1.5340521],
-  srgb: [4.0767417, -3.3077116, 0.2309699, -1.268438, 2.6097574, -0.3413194, -0.0041961, -0.7034186, 1.7076147] };
-const OK_LAB = [0.2104542553, 0.7936177850, -0.0040720468, 1.9779984951, -2.4285922050, 0.4505937099, 0.0259040371, 0.7827717662, -0.8086757660];
-const OK_LMS = [1, 0.3963377774, 0.2158037573, 1, -0.1055613458, -0.0638541728, 1, -0.0894841775, -1.2914855480];
+// CPU twin of skyHue in GRAIN_WGSL (same constants).
 const m3 = (m, x, y, z) => [m[0] * x + m[1] * y + m[2] * z, m[3] * x + m[4] * y + m[5] * z, m[6] * x + m[7] * y + m[8] * z];
 function skyHueCPU(px, p3) {
   const sp = p3 ? 'p3' : 'srgb';
-  const l = [0, 1, 2].map((c) => decs(Math.min(1, Math.max(0, px[c]))));
+  const l = [0, 1, 2].map((c) => srgbToLinear(Math.min(1, Math.max(0, px[c]))));
   const lms = m3(SKY_LMS[sp], l[0], l[1], l[2]);
   const [L, a, b] = m3(OK_LAB, Math.cbrt(Math.max(lms[0], 0)), Math.cbrt(Math.max(lms[1], 0)), Math.cbrt(Math.max(lms[2], 0)));
   const C = Math.hypot(a, b);
-  const d = Math.acos(Math.min(1, Math.max(-1, (a * -0.5735764 + b * -0.8191520) / Math.max(C, 1e-6))));
-  const t0 = Math.min(1, Math.max(0, (C - 0.015) / 0.03));
-  const w = (d < 1.0471976 ? 0.5 + 0.5 * Math.cos(3 * d) : 0) * t0 * t0 * (3 - 2 * t0);
+  const d = Math.acos(Math.min(1, Math.max(-1, (a * SKY.dir[0] + b * SKY.dir[1]) / Math.max(C, 1e-6))));
+  const t0 = Math.min(1, Math.max(0, (C - SKY.c0) / (SKY.c1 - SKY.c0)));
+  const w = (d < SKY.width ? 0.5 + 0.5 * Math.cos(3 * d) : 0) * t0 * t0 * (3 - 2 * t0);
   if (w <= 0) return;
-  const th = 0.0959931 * w, cs = Math.cos(th), sn = Math.sin(th);
+  const th = SKY.theta * w, cs = Math.cos(th), sn = Math.sin(th);
   const m = m3(OK_LMS, L, cs * a - sn * b, sn * a + cs * b);
   const r = m3(SKY_RGB[sp], m[0] ** 3, m[1] ** 3, m[2] ** 3);
   let t = 1;
@@ -269,5 +268,5 @@ function skyHueCPU(px, p3) {
     if (r[c] < 0) t = Math.min(t, l[c] / (l[c] - r[c]));
     if (r[c] > 1) t = Math.min(t, (1 - l[c]) / (r[c] - l[c]));
   }
-  for (let c = 0; c < 3; c++) px[c] = encsCPU(l[c] + t * (r[c] - l[c]));
+  for (let c = 0; c < 3; c++) px[c] = linearToSrgb(l[c] + t * (r[c] - l[c]));
 }

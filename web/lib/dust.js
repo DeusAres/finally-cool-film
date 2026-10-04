@@ -24,7 +24,8 @@
 // Marks thinner than ~0.8 px are drawn 0.8 px wide with proportionally lower
 // opacity (same light blocked), so they read the same at preview and 12 MP.
 
-const FRAME_UM = 36000;              // long side of the frame
+import { FRAME_UM } from './util.js';
+
 const PAPER = [252, 250, 246];       // paper base, as the print shows it
 
 // Counts at amount 1 (a frame that has been handled carelessly).

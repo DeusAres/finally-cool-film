@@ -24,7 +24,7 @@
 // to all three channels (hue and saturation survive a brighter exposure, as with
 // a real exposure change); only the inversion is per channel, which keeps the
 // film's colour response.
-import { LIN8 } from './color.js';
+import { LIN8, srgbToLinear as lin, linearToSrgb as enc, LUMA_SRGB } from './color.js';
 
 const LO = -12, HI = 8, N = 81;      // patch exposures: log2(s / 0.18), EV
 const PATCH = 64, COLS = 9;          // 9×9 grid of 64 px patches, one engine run
@@ -32,8 +32,6 @@ const KNEE = 0.85, TOP = 0.985;      // numerical guard only: F is flat near pap
 const XW = Math.log2(1 / 0.18);      // display white, EV above mid grey (2.47)
 const SQRT_N = 1024;                 // LUT over sqrt(display linear) for interpolated samples
 
-const lin = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-const enc = (v) => (v <= 0.0031308 ? 12.92 * v : 1.055 * Math.max(v, 0) ** (1 / 2.4) - 0.055);
 
 /** Grey chart for measuring F: N uniform patches, scene-linear (neutral, any RGB space). */
 export function transferChart() {
@@ -57,7 +55,7 @@ export function readTransfer(out, w) {
     for (let y = cy - 8; y < cy + 8; y++) for (let x = cx - 8; x < cx + 8; x++) {
       const i = (y * w + x) * 3;
       for (let c = 0; c < 3; c++) sc[c] += lin(out[i + c]);
-      s += 0.2126 * lin(out[i]) + 0.7152 * lin(out[i + 1]) + 0.0722 * lin(out[i + 2]); n++;
+      s += LUMA_SRGB[0] * lin(out[i]) + LUMA_SRGB[1] * lin(out[i + 1]) + LUMA_SRGB[2] * lin(out[i + 2]); n++;
     }
     logS.push(LO + (HI - LO) * k / (N - 1));
     Y.push(Math.max(s / n, k ? Y[k - 1] + 1e-7 : 1e-7));   // keep F strictly increasing

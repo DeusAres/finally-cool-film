@@ -1,5 +1,5 @@
 import { sleep } from './lib/util.js';
-import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, SRGB_INPUT, inputParams, readPixels } from './lib/common.js';
+import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, SRGB_INPUT, inputParams, readPixels, run } from './lib/common.js';
 
 const $ = (id) => document.getElementById(id);
 const report = { ua: navigator.userAgent, when: new Date().toISOString() };
@@ -54,10 +54,6 @@ async function boot() {
   renderReport();
 }
 
-async function run(eng, rgb, w, h, useGpu) {
-  return useGpu ? await eng.process_gpu(rgb, w, h) : eng.process(rgb, w, h);
-}
-
 // Deterministic test image: hue sweep × lightness ramp, plus skin-ish and neutral patches.
 function syntheticImage(mp) {
   const w = Math.round(Math.sqrt(mp * 1e6 * 1.5)), h = Math.round(w / 1.5);
@@ -97,7 +93,7 @@ async function bench() {
       try {
         for (let i = 0; i < (mode === 'cpu' ? 1 : 4); i++) {
           const t = now();
-          await run(eng, rgb, w, h, mode === 'gpu');
+          await run(eng, { rgb, w, h }, mode === 'gpu');
           times.push(Math.round(now() - t));
         }
         const row = { mode, mp, w, h, first_ms: times[0], median_ms: median(times.slice(1).length ? times.slice(1) : times) };
@@ -127,7 +123,7 @@ async function onPhoto(file) {
     status(`Sviluppo ${w}×${h}…`);
     await sleep(30);
     t = now();
-    const out = await run(engine(p3 ? 'p3' : 'srgb-linear'), rgb, w, h, gpuOk);
+    const out = await run(engine(p3 ? 'p3' : 'srgb-linear'), { rgb, w, h }, gpuOk);
     const process_ms = Math.round(now() - t);
     const after = new ImageData(w, h);
     for (let i = 0, j = 0; i < after.data.length; i += 4, j += 3) {

@@ -1,9 +1,9 @@
 // Shared by the app and the benchmark page: engine boot + photo decoding.
 import init, * as sf from '../pkg/spektrafilm_wasm.js';
-import { srgbToLinear, LIN8, P3_TO_REC2020 } from './color.js';
+import { LIN8, P3_TO_REC2020 } from './color.js';
 import { applyTone } from './tone.js';
 
-export { sf, srgbToLinear };
+export { sf };
 
 export const FILM = 'kodak_gold_200';
 export const PAPER = 'kodak_portra_endura';
@@ -28,6 +28,9 @@ export async function bootEngine() {
   }));
   return !!navigator.gpu && await sf.init_gpu();
 }
+
+/** One engine render: the GPU chain (async) or the CPU path, always a promise. */
+export const run = (eng, { rgb, w, h }, gpu) => (gpu ? eng.process_gpu(rgb, w, h) : Promise.resolve(eng.process(rgb, w, h)));
 
 export function deepMerge(...objs) {
   const out = {};
@@ -135,13 +138,6 @@ export function clipMask(bitmap, w, h, longCap = 4096) {
     add(full.data, full.w, full.h, 0, full.h);
   }
   return Uint8Array.from(sum, (s, k) => Math.round(s / cnt[k]));
-}
-
-/** Copy of RGBA `data` with `mask` as alpha (the frame uploaded to the GPU). */
-export function withAlpha(data, mask) {
-  const out = new Uint8Array(data);
-  for (let k = 0; k < mask.length; k++) out[k * 4 + 3] = mask[k];
-  return out;
 }
 
 /**
