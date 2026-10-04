@@ -50,6 +50,10 @@ fn gam(c: vec3<f32>) -> f32 {                 // luminance, gamma-encoded (where
   return pow(max(dot(c, LW), 0.0) + 0.001, 1.0 / 2.2);
 }
 fn gamAt(pos: vec2<f32>) -> f32 { return gam(at(pos).rgb); }
+fn box4(q: vec2<f32>, o: f32) -> vec3<f32> {   // four diagonal bilinear taps at ±o, averaged
+  return 0.25 * (at(q + vec2<f32>(o, o)).rgb + at(q + vec2<f32>(-o, o)).rgb
+               + at(q + vec2<f32>(o, -o)).rgb + at(q + vec2<f32>(-o, -o)).rgb);
+}
 fn coverage(u: f32) -> f32 {                   // 0 on the axis, 1 at the farthest corner
   let raw = pow(1.0 + (u * ${VIG_T}) * (u * ${VIG_T}), -2.0);
   let r1 = pow(1.0 + ${VIG_T} * ${VIG_T}, -2.0);
@@ -69,6 +73,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let r = length(d);
   let g = coverage(min(r / p.rMax, 1.0));      // one curve drives both effects
   var c: vec3<f32>;
+  var clipA = at(pos).a;                       // clipped-highlight weight (halo pixels lose it below)
   if (p.dR > 0.0 && r > 0.5) {
     let u = vec2<f32>(d.x / r, d.y / r * ${ANISO_Y});
     let oR = p.dR * g; let oB = p.dB * g; let L = p.blur * g;
@@ -94,16 +99,24 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   // on film has neither. 18 taps; reach 80 µm (≤ 10 px at 12 MP, inside the tile pad).
   if (p.opt.y > 0.0) {
     let k = p.opt.x;
-    let c0 = at(pos).rgb;
+    let s0 = at(pos);
+    var c0 = s0.rgb;
     // 1. Taking lens: Gaussian-equivalent sigma OPT_LENS_UM. Four diagonal bilinear
     //    taps at ±o make the separable kernel [o/2, 1-o, o/2] (variance o per axis);
     //    blended by a for variance a*o = sigma² (px). Linear light, as optics.
     let s2 = (${wf(OPT_LENS_UM)} * k) * (${wf(OPT_LENS_UM)} * k);
     let o = clamp(s2, 0.5, 1.0);
-    let a = min(s2 / o, 1.0) * p.opt.y;
-    let bx = at(pos + vec2<f32>(o, o)).rgb + at(pos + vec2<f32>(-o, o)).rgb
-           + at(pos + vec2<f32>(o, -o)).rgb + at(pos + vec2<f32>(-o, -o)).rgb;
-    c += (bx * 0.25 - c0) * a;
+    // Not on clipped light (alpha): blurring a thin clipped source would drain the
+    // halation it feeds, more at 12 MP than in the preview.
+    let a = min(s2 / o, 1.0) * p.opt.y * (1.0 - s0.a);
+    var bx = box4(pos, o);
+    if (p.dR > 0.0 && r > 0.5) {               // CA: R and B were sampled elsewhere, blur them there
+      let u = vec2<f32>(d.x / r, d.y / r * ${ANISO_Y});
+      let qR = pos + u * (p.dR * g); let qB = pos + u * (p.dB * g);
+      c0 = vec3<f32>(at(qR).r, c0.g, at(qB).b);
+      bx = vec3<f32>(box4(qR, o).r, bx.g, box4(qB, o).b);
+    }
+    c += (bx - c0) * a;
     // 2. Halo removal. Edge normal from the first harmonic of an 8-tap ring;
     //    plateaus 50 / 80 µm out on each side; a pixel beyond the plateau
     //    envelope [lo, hi] is pulled back onto it. Not a halo (kept): no real
@@ -132,6 +145,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let E = max(G0, max(nA, nB)) - hi; let D = hi - min(lo, min(nA, nB));
         let w = gate(E, D, plateau);
         Gn = G0 - (G0 - hi) * w * p.opt.y;
+        clipA *= 1.0 - w * p.opt.y;               // a removed halo must not come back as halation
       } else if (G0 < lo) {
         let E = lo - min(G0, min(nA, nB)); let D = max(hi, max(nA, nB)) - lo;
         let w = gate(E, D, plateau);
@@ -165,7 +179,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   c = vec3<f32>(lut(S, c.r * k), lut(S, c.g * k), lut(S, c.b * k));
   // Clipped highlights (alpha = clipped fraction of the pixel, common.js): that
   // fraction of the light was really much brighter; it feeds halation/scatter.
-  c *= 1.0 + ${CLIP_GAIN}.0 * at(pos).a;
+  c *= 1.0 + ${CLIP_GAIN}.0 * clipA;
   var gainOut = p.scale;
   if (p.depth > 0.0) {
     let lost = p.depth * g;                    // fraction of light the lens loses here
