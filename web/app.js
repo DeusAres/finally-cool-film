@@ -8,7 +8,7 @@ import { iccSegment } from './lib/icc.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, inputUniform } from './lib/lens-gpu.js';
 import { dustField, drawDust, compositeDust } from './lib/dust.js';
-import { GRAIN_WGSL, grainParams, outputColourCPU } from './lib/grain.js';
+import { GRAIN_WGSL, grainParams, outputColourCPU, scanSaturation } from './lib/grain.js';
 
 const PREVIEW_LONG_SIDE = 2000;   // display canvas cap (bigger canvases make iOS compositing crash when zoomed)
 const GRAIN_AREA_UM2 = 0.2;       // engine default AgX particle area
@@ -168,7 +168,7 @@ async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, textur
   if (gpu) {
     return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lens, texture),
       tone.packed, w, h, tone.out8,
-      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0], tone.balance), target);
+      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0], tone.balance, photo.vibrance || 0), target);
   }
   const rgb = lensActive(lens)
     ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lensGeometry(frame.w, frame.h, lens), tone)
@@ -178,7 +178,7 @@ async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, textur
   const px = new Float32Array(3), p3 = outP3();
   for (let p = 0, j = 0; p < w * h; p++, j += 3) {
     px[0] = out[j]; px[1] = out[j + 1]; px[2] = out[j + 2];
-    outputColourCPU(px, p3, tone.balance);
+    outputColourCPU(px, p3, tone.balance, photo.vibrance || 0);
     d32[p] = (to8(px[0], tone.out8) | (to8(px[1], tone.out8) << 8) | (to8(px[2], tone.out8) << 16) | 0xff000000) >>> 0;
   }
 }
@@ -476,12 +476,13 @@ async function runAuto() {
   const a = autoFromPhoto();
   $('ev').value = a.ev; $('look').value = a.look;
   syncOutputs();
-  photo.levels = undefined;
-  await render();                                   // as rendered without levels
+  photo.levels = undefined; photo.vibrance = 0;
+  await render();                                   // as rendered without levels / saturation
   if (!photo?.after) return;
   const lv = scanLevels(outputLstar(photo.after));
   photo.levels = lv.black === 0 && lv.white === 100 ? undefined : lv;   // full-range frame: untouched
-  log(`auto: ev ${a.ev}, look ${a.look}, levels ${lv.black.toFixed(1)}..${lv.white.toFixed(1)}`);
+  photo.vibrance = scanSaturation(photo.after.data, photo.after.colorSpace === 'display-p3');   // 0: colourful enough
+  log(`auto: ev ${a.ev}, look ${a.look}, levels ${lv.black.toFixed(1)}..${lv.white.toFixed(1)}, sat ${photo.vibrance.toFixed(2)}`);
   await render();
 }
 
