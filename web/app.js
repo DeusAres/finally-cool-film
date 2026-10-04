@@ -1,7 +1,7 @@
 import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, to8, clipMask, writeClipAlpha, run } from './lib/common.js';
 import { transferChart, readTransfer, buildTone, autoTone } from './lib/tone.js';
 import { sleep, store } from './lib/util.js';
-import { LIN8 } from './lib/color.js';
+import { LIN8, LUMA_P3, LUMA_SRGB } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
 import { iccSegment } from './lib/icc.js';
@@ -187,7 +187,7 @@ async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, textur
 
 function autoFromPhoto() {
   const { data, p3 } = photo.preview;
-  const [kr, kg, kb] = p3 ? [0.2290, 0.6917, 0.0793] : [0.2126, 0.7152, 0.0722];   // P3 / sRGB luminance
+  const [kr, kg, kb] = p3 ? LUMA_P3 : LUMA_SRGB;
   const Ys = new Float32Array(Math.ceil(data.length / 32));
   for (let i = 0, k = 0; i < data.length; i += 32, k++) Ys[k] = kr * LIN8[data[i]] + kg * LIN8[data[i + 1]] + kb * LIN8[data[i + 2]];
   return autoTone(Ys);

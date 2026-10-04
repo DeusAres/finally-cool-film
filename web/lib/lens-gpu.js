@@ -6,10 +6,10 @@
 // every bilinear tap is interpolated in linear light, as in the CPU path.
 // Output: linear Rec.2020 (p3) or linear sRGB floats, interleaved RGB, for the region.
 import { LENS_CONST, lensGeometry } from './lens.js';
-import { P3_TO_REC2020 } from './color.js';
+import { P3_TO_REC2020, LUMA_P3 } from './color.js';
 import { TONE_SQRT_N } from './tone.js';
 import { CLIP_GAIN } from './common.js';
-import { FRAME_UM } from './util.js';
+import { FRAME_UM, wf, wv3 } from './util.js';
 
 const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
 
@@ -18,7 +18,6 @@ const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
 // = 0.96 / 0.85 / 0.70 / 0.53 at 10 / 20 / 30 / 40 cy/mm (MTF50 42 cy/mm).
 // The film's own MTF (emulsion scatter) belongs to the output pass, not here.
 const OPT_LENS_UM = 4.5, OPT_RING_UM = 40, OPT_NEAR_UM = 18, OPT_FAR1_UM = 50, OPT_FAR2_UM = 80;
-const f1 = (v) => v.toFixed(1);
 
 export const INPUT_WGSL = /* wgsl */`
 struct P {
@@ -46,9 +45,11 @@ fn lut(base: u32, v: f32) -> f32 {             // same lookup as tone.js
 fn at(pos: vec2<f32>) -> vec4<f32> {           // pos in frame pixel coords (pixel centres at integers)
   return textureSampleLevel(tex, smp, (pos + 0.5) / p.frame, 0.0);
 }
+const LW = ${wv3(LUMA_P3)};
 fn gam(c: vec3<f32>) -> f32 {                 // luminance, gamma-encoded (where phone ISPs sharpen)
-  return pow(max(dot(c, vec3<f32>(0.2290, 0.6917, 0.0793)), 0.0) + 0.001, 1.0 / 2.2);
+  return pow(max(dot(c, LW), 0.0) + 0.001, 1.0 / 2.2);
 }
+fn gamAt(pos: vec2<f32>) -> f32 { return gam(at(pos).rgb); }
 fn coverage(u: f32) -> f32 {                   // 0 on the axis, 1 at the farthest corner
   let raw = pow(1.0 + (u * ${VIG_T}) * (u * ${VIG_T}), -2.0);
   let r1 = pow(1.0 + ${VIG_T} * ${VIG_T}, -2.0);
@@ -56,6 +57,9 @@ fn coverage(u: f32) -> f32 {                   // 0 on the axis, 1 at the farthe
   let t = clamp((u - ${VIG_KNEE}) / (1.0 - ${VIG_KNEE}), 0.0, 1.0);
   return soft + (t * t * (3.0 - 2.0 * t) - soft) * p.falloff;
 }
+
+// A halo is only removed where the step D is a real edge and the excursion E a modest part of it.
+fn gate(E: f32, D: f32, plateau: f32) -> f32 { return smoothstep(0.03, 0.08, D) * (1.0 - smoothstep(0.3, 0.55, E / max(D, 1e-4))) * plateau; }
 
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -94,7 +98,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // 1. Taking lens: Gaussian-equivalent sigma OPT_LENS_UM. Four diagonal bilinear
     //    taps at ±o make the separable kernel [o/2, 1-o, o/2] (variance o per axis);
     //    blended by a for variance a*o = sigma² (px). Linear light, as optics.
-    let s2 = (${f1(OPT_LENS_UM)} * k) * (${f1(OPT_LENS_UM)} * k);
+    let s2 = (${wf(OPT_LENS_UM)} * k) * (${wf(OPT_LENS_UM)} * k);
     let o = clamp(s2, 0.5, 1.0);
     let a = min(s2 / o, 1.0) * p.opt.y;
     let bx = at(pos + vec2<f32>(o, o)).rgb + at(pos + vec2<f32>(-o, o)).rgb
@@ -107,18 +111,18 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     //    an excursion that is a large fraction of the step (a real rim light or
     //    thin line; the near taps make the whole feature share one decision).
     var gv = vec2<f32>(0.0);
-    let rg = max(${f1(OPT_RING_UM)} * k, 1.5);
+    let rg = max(${wf(OPT_RING_UM)} * k, 1.5);
     for (var i = 0; i < 8; i++) {
       let dir = vec2<f32>(cos(f32(i) * 0.7853982), sin(f32(i) * 0.7853982));
-      gv += dir * gam(at(pos + dir * rg).rgb);
+      gv += dir * gamAt(pos + dir * rg);
     }
     let gm = length(gv);
     if (gm > 1e-4) {
       let n = gv / gm;
-      let r1 = max(${f1(OPT_FAR1_UM)} * k, 2.5); let r2 = max(${f1(OPT_FAR2_UM)} * k, 4.0); let rn = max(${f1(OPT_NEAR_UM)} * k, 1.0);
-      let A1 = gam(at(pos - n * r1).rgb); let A2 = gam(at(pos - n * r2).rgb);
-      let B1 = gam(at(pos + n * r1).rgb); let B2 = gam(at(pos + n * r2).rgb);
-      let nA = gam(at(pos - n * rn).rgb); let nB = gam(at(pos + n * rn).rgb);
+      let r1 = max(${wf(OPT_FAR1_UM)} * k, 2.5); let r2 = max(${wf(OPT_FAR2_UM)} * k, 4.0); let rn = max(${wf(OPT_NEAR_UM)} * k, 1.0);
+      let A1 = gamAt(pos - n * r1); let A2 = gamAt(pos - n * r2);
+      let B1 = gamAt(pos + n * r1); let B2 = gamAt(pos + n * r2);
+      let nA = gamAt(pos - n * rn); let nB = gamAt(pos + n * rn);
       let A = 0.5 * (A1 + A2); let B = 0.5 * (B1 + B2);
       let lo = min(A, B); let hi = max(A, B);
       let plateau = 1.0 - smoothstep(0.2, 0.5, (abs(A1 - A2) + abs(B1 - B2)) / max(hi - lo, 1e-4));
@@ -126,11 +130,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
       var Gn = G0;
       if (G0 > hi) {
         let E = max(G0, max(nA, nB)) - hi; let D = hi - min(lo, min(nA, nB));
-        let w = smoothstep(0.03, 0.08, D) * (1.0 - smoothstep(0.3, 0.55, E / max(D, 1e-4))) * plateau;
+        let w = gate(E, D, plateau);
         Gn = G0 - (G0 - hi) * w * p.opt.y;
       } else if (G0 < lo) {
         let E = lo - min(G0, min(nA, nB)); let D = max(hi, max(nA, nB)) - lo;
-        let w = smoothstep(0.03, 0.08, D) * (1.0 - smoothstep(0.3, 0.55, E / max(D, 1e-4))) * plateau;
+        let w = gate(E, D, plateau);
         Gn = G0 + (lo - G0) * w * p.opt.y;
       }
       c *= pow(Gn / G0, 2.2);
@@ -142,14 +146,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   // barely count, so strong edges get no halo; texture gets the lift. Taps
   // read the full-frame texture in frame coordinates: tiles stay seamless.
   if (p.clar.y > 0.0) {
-    let lw = vec3<f32>(0.2290, 0.6917, 0.0793);
-    let l0 = log2(max(dot(c, lw), 1e-5));
+    let l0 = log2(max(dot(c, LW), 1e-5));
     var sw = 1.0; var sl = l0;
     for (var t = 0; t < 24; t++) {                // 3 rings × 8, staggered
       let ring = t / 8;
       let ang = f32(t) * 0.7853982 + f32(ring) * 0.2617994;
       let q = pos + vec2<f32>(cos(ang), sin(ang)) * (0.5 + 0.65 * f32(ring)) * p.clar.x;
-      let lq = log2(max(dot(at(q).rgb, lw), 1e-5));
+      let lq = log2(max(dot(at(q).rgb, LW), 1e-5));
       let d = lq - l0;
       let w = exp(-d * d * 0.4);
       sw += w; sl += w * lq;

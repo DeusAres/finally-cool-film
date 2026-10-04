@@ -20,3 +20,7 @@ export const REC2020_TO_P3 = [
   [-0.0652975, 1.0757879, -0.0104905],
   [0.0028218, -0.0195985, 1.0167767],
 ];
+
+// Luminance weights (Y of linear RGB) of Display P3 and sRGB, at the precision the look was tuned with.
+export const LUMA_P3 = [0.2290, 0.6917, 0.0793];
+export const LUMA_SRGB = [0.2126, 0.7152, 0.0722];

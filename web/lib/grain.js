@@ -45,8 +45,8 @@
 // same profile within 0.02), so a film MTF / adjacency step would only add
 // taps and drift from the scans.
 
-import { FRAME_UM } from './util.js';
-import { srgbToLinear, linearToSrgb, REC2020_TO_P3 } from './color.js';
+import { FRAME_UM, wf, wv3, wm3 } from './util.js';
+import { srgbToLinear, linearToSrgb, REC2020_TO_P3, LUMA_SRGB } from './color.js';
 
 // Constants shared by GRAIN_WGSL and its CPU twin (outputColourCPU): one source,
 // the WGSL gets them by interpolation.
@@ -61,10 +61,6 @@ const SKY_RGB = { p3: [3.1277694, -2.2571362, 0.1293668, -1.0910094, 2.413332, -
   srgb: [4.0767417, -3.3077116, 0.2309699, -1.268438, 2.6097574, -0.3413194, -0.0041961, -0.7034186, 1.7076147] };
 const OK_LAB = [0.2104542553, 0.7936177850, -0.0040720468, 1.9779984951, -2.4285922050, 0.4505937099, 0.0259040371, 0.7827717662, -0.8086757660];
 const OK_LMS = [1, 0.3963377774, 0.2158037573, 1, -0.1055613458, -0.0638541728, 1, -0.0894841775, -1.2914855480];
-// WGSL literals (a float always has its point).
-const wf = (n) => (Number.isInteger(n) ? n.toFixed(1) : String(n));
-const wv3 = (a) => `vec3<f32>(${a.map(wf).join(', ')})`;
-const wm3 = (m) => `mat3x3<f32>(${[0, 3, 6].map((i) => wv3(m.slice(i, i + 3))).join(', ')})`;   // m: row-major; columns of the WGSL matrix = rows of m, for `v * M`
 
 export const GRAIN_WGSL = /* wgsl */`
 @group(0) @binding(0) var<storage, read> src: array<f32>;
@@ -105,7 +101,7 @@ fn vnoise(p: vec2<f32>, s: u32) -> f32 {       // value noise, smooth interpolat
              mix(lattice(i + vec2<i32>(0, 1), s), lattice(i + vec2<i32>(1, 1), s), u.x), u.y) * inverseSqrt(w.x * w.y);
 }
 fn lstar(c: vec3<f32>) -> f32 {
-  let y = dot(dec(c), vec3<f32>(0.2126, 0.7152, 0.0722));
+  let y = dot(dec(c), ${wv3(LUMA_SRGB)});
   return select(903.3 * y, 116.0 * pow(y, 1.0 / 3.0) - 16.0, y > 0.008856);
 }
 fn sstep(a: f32, b: f32, x: f32) -> f32 { let t = clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
