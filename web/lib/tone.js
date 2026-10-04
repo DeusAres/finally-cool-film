@@ -151,7 +151,12 @@ export function autoTone(Ys) {
   // lifting the mids there just washes the lights out.
   let bright = 0; for (const y of v) if (y > 0.5) bright++;
   const hold = Math.max(0, 1 - 2.5 * bright / v.length);
-  const ev = Math.max(-1, Math.min(1.5, 0.6 * Math.log2(0.2 / median) * (median < 0.2 ? hold : 1)));
+  // A dark frame whose highlights already sit near white (p99 ≥ L* 90) was metered
+  // for them: low key on purpose (room lit by a window, bamboo against the sky).
+  // Lift it at most +1 EV; the full +1.5 only where nothing in the frame is bright.
+  const t = Math.max(0, Math.min(1, (q(0.99) - 0.683) / (0.766 - 0.683)));   // p99 L* 86 → 90
+  const top = 1.5 - 0.5 * t * t * (3 - 2 * t);
+  const ev = Math.max(-1, Math.min(top, 0.6 * Math.log2(0.2 / median) * (median < 0.2 ? hold : 1)));
   const look = Math.max(0.2, Math.min(0.75, 0.4 + 0.12 * (2.5 - spread)));
   return { ev: Math.round(ev * 10) / 10, look: Math.round(look * 20) / 20 };
 }

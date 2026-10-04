@@ -100,6 +100,41 @@ fn toP3(e: vec3<f32>) -> vec3<f32> {
   }
   return encs(p);
 }
+// Partial sky-blue correction (CPU twin: skyHueCPU): the film turns blue skies
+// cyan (tree: CIELAB hue 257° → 243°); rotate blues/cyans back ~5.5° in OKLab at
+// constant L and C. Weight: raised cosine over ±60° around OKLab hue 235°, times
+// smoothstep(0.015, 0.045, C) so neutrals, skin, greens and yellows are untouched.
+// The step towards the rotated colour stops at the gamut edge (never leaves it).
+fn skyHue(e: vec3<f32>) -> vec3<f32> {
+  let p3 = P[11] > 0.5;
+  let l = dec(clamp(e, vec3<f32>(0.0), vec3<f32>(1.0)));
+  var lms: vec3<f32>;
+  if (p3) {
+    lms = l * mat3x3<f32>(vec3<f32>(0.4813798, 0.4621184, 0.0565018), vec3<f32>(0.228832, 0.6532168, 0.1179512), vec3<f32>(0.0839458, 0.2241653, 0.691889));
+  } else {
+    lms = l * mat3x3<f32>(vec3<f32>(0.4122215, 0.5363325, 0.051446), vec3<f32>(0.2119035, 0.6806995, 0.107397), vec3<f32>(0.0883025, 0.2817188, 0.6299787));
+  }
+  let lab = pow(max(lms, vec3<f32>(0.0)), vec3<f32>(1.0 / 3.0)) * mat3x3<f32>(vec3<f32>(0.2104542553, 0.7936177850, -0.0040720468),
+    vec3<f32>(1.9779984951, -2.4285922050, 0.4505937099), vec3<f32>(0.0259040371, 0.7827717662, -0.8086757660));
+  let C = length(lab.yz);
+  let d = acos(clamp(dot(lab.yz, vec2<f32>(-0.5735764, -0.8191520)) / max(C, 1e-6), -1.0, 1.0));   // radians from 235°
+  let w = select(0.0, 0.5 + 0.5 * cos(3.0 * d), d < 1.0471976) * sstep(0.015, 0.045, C);
+  if (w <= 0.0) { return e; }
+  let th = 0.0959931 * w;                      // 5.5°
+  let cs = cos(th); let sn = sin(th);
+  let m = vec3<f32>(lab.x, cs * lab.y - sn * lab.z, sn * lab.y + cs * lab.z) * mat3x3<f32>(vec3<f32>(1.0, 0.3963377774, 0.2158037573),
+    vec3<f32>(1.0, -0.1055613458, -0.0638541728), vec3<f32>(1.0, -0.0894841775, -1.2914855480));
+  var r: vec3<f32>;
+  if (p3) {
+    r = (m * m * m) * mat3x3<f32>(vec3<f32>(3.1277694, -2.2571362, 0.1293668), vec3<f32>(-1.0910094, 2.413332, -0.3223227), vec3<f32>(-0.0260108, -0.5080414, 1.5340521));
+  } else {
+    r = (m * m * m) * mat3x3<f32>(vec3<f32>(4.0767417, -3.3077116, 0.2309699), vec3<f32>(-1.268438, 2.6097574, -0.3413194), vec3<f32>(-0.0041961, -0.7034186, 1.7076147));
+  }
+  let lo = select(vec3<f32>(1.0), l / (l - r), r < vec3<f32>(0.0));
+  let hi = select(vec3<f32>(1.0), (1.0 - l) / (r - l), r > vec3<f32>(1.0));
+  let t = min(min(min(lo.x, lo.y), lo.z), min(min(hi.x, hi.y), hi.z));
+  return encs(l + t * (r - l));
+}
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -108,6 +143,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   var e = vec3<f32>(src[3u * i], src[3u * i + 1u], src[3u * i + 2u]);
   if (P[13] > 0.5) { e = vec3<f32>(bal(0u, e.x), bal(1u, e.y), bal(2u, e.z)); }
   if (P[11] > 0.5) { e = toP3(e); }
+  e = skyHue(e);
   var c = vec3<f32>(q(e.x), q(e.y), q(e.z));
   if (P[8] > 0.0) {
     let w = u32(P[4]);
@@ -178,4 +214,35 @@ export function outputColourCPU(px, rec2020ToP3, balance) {
     if (a > 0) { p0 = a - rgcCPU((a - p0) / a) * a; p1 = a - rgcCPU((a - p1) / a) * a; p2 = a - rgcCPU((a - p2) / a) * a; }
     px[0] = encsCPU(p0); px[1] = encsCPU(p1); px[2] = encsCPU(p2);
   }
+  skyHueCPU(px, rec2020ToP3);
+}
+
+// CPU twin of skyHue in GRAIN_WGSL (same constants). Rows: linear RGB → LMS (OKLab M1 composed
+// with the primaries, rows normalised so white has a = b = 0), and back.
+const SKY_LMS = { p3: [0.4813798, 0.4621184, 0.0565018, 0.228832, 0.6532168, 0.1179512, 0.0839458, 0.2241653, 0.691889],
+  srgb: [0.4122215, 0.5363325, 0.051446, 0.2119035, 0.6806995, 0.107397, 0.0883025, 0.2817188, 0.6299787] };
+const SKY_RGB = { p3: [3.1277694, -2.2571362, 0.1293668, -1.0910094, 2.413332, -0.3223227, -0.0260108, -0.5080414, 1.5340521],
+  srgb: [4.0767417, -3.3077116, 0.2309699, -1.268438, 2.6097574, -0.3413194, -0.0041961, -0.7034186, 1.7076147] };
+const OK_LAB = [0.2104542553, 0.7936177850, -0.0040720468, 1.9779984951, -2.4285922050, 0.4505937099, 0.0259040371, 0.7827717662, -0.8086757660];
+const OK_LMS = [1, 0.3963377774, 0.2158037573, 1, -0.1055613458, -0.0638541728, 1, -0.0894841775, -1.2914855480];
+const m3 = (m, x, y, z) => [m[0] * x + m[1] * y + m[2] * z, m[3] * x + m[4] * y + m[5] * z, m[6] * x + m[7] * y + m[8] * z];
+function skyHueCPU(px, p3) {
+  const sp = p3 ? 'p3' : 'srgb';
+  const l = [0, 1, 2].map((c) => decs(Math.min(1, Math.max(0, px[c]))));
+  const lms = m3(SKY_LMS[sp], l[0], l[1], l[2]);
+  const [L, a, b] = m3(OK_LAB, Math.cbrt(Math.max(lms[0], 0)), Math.cbrt(Math.max(lms[1], 0)), Math.cbrt(Math.max(lms[2], 0)));
+  const C = Math.hypot(a, b);
+  const d = Math.acos(Math.min(1, Math.max(-1, (a * -0.5735764 + b * -0.8191520) / Math.max(C, 1e-6))));
+  const t0 = Math.min(1, Math.max(0, (C - 0.015) / 0.03));
+  const w = (d < 1.0471976 ? 0.5 + 0.5 * Math.cos(3 * d) : 0) * t0 * t0 * (3 - 2 * t0);
+  if (w <= 0) return;
+  const th = 0.0959931 * w, cs = Math.cos(th), sn = Math.sin(th);
+  const m = m3(OK_LMS, L, cs * a - sn * b, sn * a + cs * b);
+  const r = m3(SKY_RGB[sp], m[0] ** 3, m[1] ** 3, m[2] ** 3);
+  let t = 1;
+  for (let c = 0; c < 3; c++) {
+    if (r[c] < 0) t = Math.min(t, l[c] / (l[c] - r[c]));
+    if (r[c] > 1) t = Math.min(t, (1 - l[c]) / (r[c] - l[c]));
+  }
+  for (let c = 0; c < 3; c++) px[c] = encsCPU(l[c] + t * (r[c] - l[c]));
 }
