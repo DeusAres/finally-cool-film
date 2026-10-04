@@ -1,3 +1,4 @@
+import { sleep } from './lib/util.js';
 import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, SRGB_INPUT, inputParams, readPixels } from './lib/common.js';
 
 const $ = (id) => document.getElementById(id);
@@ -90,7 +91,7 @@ async function bench() {
   for (const mode of modes) {
     for (const mp of mode === 'cpu' ? [0.5] : sizes) {
       status(`Benchmark ${mode.toUpperCase()} ${mp} MP…`);
-      await new Promise((r) => setTimeout(r, 30));
+      await sleep(30);
       const { rgb, w, h } = syntheticImage(mp);
       const times = [];
       try {
@@ -124,7 +125,7 @@ async function onPhoto(file) {
     const { rgb, w, h, p3, before } = readPixels(bitmap, +$('longSide').value);
     const decode_ms = Math.round(now() - t);
     status(`Sviluppo ${w}×${h}…`);
-    await new Promise((r) => setTimeout(r, 30));
+    await sleep(30);
     t = now();
     const out = await run(engine(p3 ? 'p3' : 'srgb-linear'), rgb, w, h, gpuOk);
     const process_ms = Math.round(now() - t);
