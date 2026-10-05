@@ -4,6 +4,7 @@ import { sleep, store } from './lib/util.js';
 import { LIN8, LUMA_P3, LUMA_SRGB } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
+import { isRaw, loadRaw, uploadRaw, rawAuto, rawPreviewRGBA } from './lib/raw.js';
 import { iccSegment } from './lib/icc.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, inputUniform } from './lib/lens-gpu.js';
@@ -153,7 +154,19 @@ async function ensureTone(u) {
   }
   const levels = photo?.levels;
   const key = `${transferKey}|${u.look}|${u.ev}|${u.rolloff}|${levels ? `${levels.black}|${levels.white}` : ''}`;
-  if (key !== toneKey) { tone = buildTone(transfer, { look: u.look, ev: u.ev, rolloff: u.rolloff, levels }); toneKey = key; }
+  const raw = photo?.preview.raw;
+  const key2 = raw ? `${key}|raw${raw.baseline}` : key;
+  if (key2 !== toneKey) {
+    tone = buildTone(transfer, { look: u.look, ev: u.ev, rolloff: u.rolloff, levels });
+    if (raw) {
+      // A raw frame is already scene-linear (sensor clip = 1): no phone curve to
+      // invert, only exposure (BaselineExposure + Esposizione). Gain LUT 1, scene
+      // LUT = G·x on the same sqrt-spaced index as tone.js.
+      const n = tone.packed.length / 2 - 1, G = 2 ** (raw.baseline + u.ev);
+      for (let i = 0; i <= n; i++) { tone.packed[i] = 1; tone.packed[n + 1 + i] = G * (i / n) ** 2; }
+    }
+    toneKey = key2;
+  }
 }
 
 // ---------- lens ----------
@@ -166,7 +179,7 @@ async function ensureTone(u) {
 /** 8-bit render of a region of `frame` into `target` (RGBA, w×h×4 bytes). */
 async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, texture = 0, print = 0) {
   if (gpu) {
-    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lens, texture),
+    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3 && !frame.raw, x0, y0, w, h, 1, lens, texture, frame.raw ? 0 : 1),
       tone.packed, w, h, tone.out8,
       GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0], tone.balance, photo.vibrance || 0, print), target);
   }
@@ -192,6 +205,7 @@ async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, textur
 // Starting Esposizione / Contrasto from the photo's own luminance (tone.js autoTone).
 
 function autoFromPhoto() {
+  if (photo.preview.raw) return { ev: rawAuto(photo.preview.raw).ev, look: +$('look').value };
   const { data, p3 } = photo.preview;
   const [kr, kg, kb] = p3 ? LUMA_P3 : LUMA_SRGB;
   const Ys = new Float32Array(Math.ceil(data.length / 32));
@@ -436,18 +450,32 @@ async function loadPhoto(file) {
   status('Decodifica…');
   try {
     log(`photo: ${file.name} ${file.type} ${(file.size / 1e6).toFixed(1)} MB`);
-    const bitmap = await createImageBitmap(file);
-    // A render or export in flight still uses the current photo, engine and GPU frame.
-    while (rendering || exporting) await sleep(20);
-    const preview = decodeRGBA(bitmap, PREVIEW_LONG_SIDE);
-    preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
-    log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
-    photo?.bitmap.close();   // full-resolution decode of the previous photo
-    photo = { file, bitmap, preview, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
-    if (gpu) {
-      preview.clip = clipMask(bitmap, preview.w, preview.h);   // full-res clipping, see common.js
-      uploadFrame(preview.data, preview.w, preview.h, preview.clip);
+    if (await isRaw(file)) {
+      // DNG (raw.js): scene-linear Rec.2020, half-float frame; output in Display P3.
+      if (!gpu) throw new Error('I file DNG richiedono WebGPU');
+      const t = performance.now(), raw = await loadRaw(file, PREVIEW_LONG_SIDE);
+      while (rendering || exporting) await sleep(20);
+      const preview = { data: rawPreviewRGBA(raw), w: raw.w, h: raw.h, p3: true, raw };
+      preview.before = new ImageData(preview.data, preview.w, preview.h, { colorSpace: 'display-p3' });
+      log(`DNG ${raw.fullW}x${raw.fullH}, preview ${raw.w}x${raw.h}, orientation ${raw.orientation}, baseline ${raw.baseline} EV, ${Math.round(performance.now() - t)} ms`);
+      photo?.bitmap?.close();
+      photo = { file, bitmap: null, preview, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
+      uploadRaw(sf, raw);
+    } else {
+      const bitmap = await createImageBitmap(file);
+      // A render or export in flight still uses the current photo, engine and GPU frame.
+      while (rendering || exporting) await sleep(20);
+      const preview = decodeRGBA(bitmap, PREVIEW_LONG_SIDE);
+      preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
+      log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
+      photo?.bitmap?.close();   // full-resolution decode of the previous photo
+      photo = { file, bitmap, preview, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
+      if (gpu) {
+        preview.clip = clipMask(bitmap, preview.w, preview.h);   // full-res clipping, see common.js
+        uploadFrame(preview.data, preview.w, preview.h, preview.clip);
+      }
     }
+    const { preview } = photo;
     engine?.free(); engine = null;
     view.width = preview.w; view.height = preview.h;
     view.style.width = preview.w + 'px'; view.style.height = preview.h + 'px';
@@ -527,12 +555,18 @@ async function exportFull() {
   const u = ui(), dust = dustAmount(), marks = dustMarks();   // fixed for every strip
   const t0 = performance.now();
   try {
-    const { bitmap } = photo;
-    const scale = Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (bitmap.width * bitmap.height)));
-    const longCap = Math.max(bitmap.width, bitmap.height) * scale;
+    const { bitmap } = photo, rawPv = photo.preview.raw;
+    const fw = rawPv ? rawPv.fullW : bitmap.width, fh = rawPv ? rawPv.fullH : bitmap.height;
+    const scale = Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (fw * fh)));
+    const longCap = Math.max(fw, fh) * scale;
     status('Esporto: decodifica…');
-    let frame;   // { data (CPU path only), w, h, p3 }
-    if (gpu && scale === 1) {
+    let frame;   // { data (CPU path only), w, h, p3, raw }
+    if (rawPv) {
+      // Full-resolution raw decode, uploaded as half-float strips, then dropped.
+      const raw = await loadRaw(photo.file, scale < 1 ? Math.round(longCap) : undefined);
+      uploadRaw(sf, raw);
+      frame = { data: null, w: raw.w, h: raw.h, p3: true, raw: true };
+    } else if (gpu && scale === 1) {
       // Native size: decoded and uploaded a strip at a time, so the full
       // frame (~50 MB at 12 MP, plus its canvas) is never in memory.
       frame = { data: null, w: bitmap.width, h: bitmap.height, p3: false };
@@ -606,7 +640,10 @@ async function exportFull() {
     if (dustStripCanvas) { dustStripCanvas.width = dustStripCanvas.height = 0; dustStripCanvas = null; }   // release the backing store
     $('export').disabled = false;
     try {
-      if (gpu) uploadFrame(photo.preview.data, photo.preview.w, photo.preview.h, photo.preview.clip);   // back to the preview frame
+      if (gpu) {   // back to the preview frame
+        if (photo.preview.raw) uploadRaw(sf, photo.preview.raw);
+        else uploadFrame(photo.preview.data, photo.preview.w, photo.preview.h, photo.preview.clip);
+      }
     } catch (e) { log('preview re-upload failed: ' + (e?.stack || e)); }
     if (engine) updateEngine(renderParamsJson(ui()));   // back to preview params
     if (dirty) render();   // sliders moved during the export
