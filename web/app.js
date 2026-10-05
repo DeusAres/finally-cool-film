@@ -39,7 +39,7 @@ let rendering = false, dirty = false, exporting = false, renderCount = 0;
 const ui = () => ({
   ev: +$('ev').value, look: +$('look').value, rolloff: +$('rolloff').value,
   mshift: +$('mshift').value, yshift: +$('yshift').value,
-  grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, print: +$('print').value,
+  grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value, print: +$('print').value,
   ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value,
 });
 // CA slider is quadratic: realistic (subtle) amounts get most of the travel.
@@ -177,9 +177,9 @@ async function ensureTone(u) {
 // below (no WebGPU): float input built here, float output converted here.
 
 /** 8-bit render of a region of `frame` into `target` (RGBA, w×h×4 bytes). */
-async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, texture = 0, print = 0) {
+async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, texture = 0, clarity = 0, print = 0) {
   if (gpu) {
-    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3 && !frame.raw, x0, y0, w, h, 1, lens, texture, frame.raw ? 0 : 1),
+    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3 && !frame.raw, x0, y0, w, h, 1, lens, clarity, frame.raw ? 0 : 1, texture),
       tone.packed, w, h, tone.out8,
       GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0], tone.balance, photo.vibrance || 0, print), target);
   }
@@ -230,7 +230,7 @@ async function render() {
       updateEngine(renderParamsJson(u));
       const cs = outP3() ? 'display-p3' : 'srgb';
       if (photo.after?.width !== pv.w || photo.after?.height !== pv.h || photo.after.colorSpace !== cs) photo.after = new ImageData(pv.w, pv.h, { colorSpace: cs });
-      await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), lensOf(u), u.grain, u.texture, photo.measuring ? 0 : u.print);
+      await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), lensOf(u), u.grain, u.texture, u.clarity, photo.measuring ? 0 : u.print);
       const t1 = performance.now();
       if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); }
       const t2 = performance.now(), ms = (v) => Math.round(v);
@@ -603,7 +603,7 @@ async function exportFull() {
         const tw = Math.min(w, tx + EXPORT_TILE + EXPORT_PAD) - x0, th = Math.min(h, ty + EXPORT_TILE + EXPORT_PAD) - y0;
         updateEngine(renderParamsJson(u, false, FILM_FORMAT_MM * Math.max(tw, th) / longSide));
         const tile = (tileBuf = tileBuf?.length >= tw * th * 4 ? tileBuf : new Uint8Array(tw * th * 4)).subarray(0, tw * th * 4);
-        await renderRegion(frame, x0, y0, tw, th, tile, lensOf(u), u.grain, u.texture, u.print);
+        await renderRegion(frame, x0, y0, tw, th, tile, lensOf(u), u.grain, u.texture, u.clarity, u.print);
         const cw = Math.min(EXPORT_TILE, w - tx);
         const t32 = new Uint32Array(tile.buffer, tile.byteOffset, tw * th);
         for (let y = 0; y < ch; y++) {   // RGBA tile → RGB strip (one 32-bit read per pixel; little-endian, as the CPU path)
@@ -680,9 +680,9 @@ const FORMAT = {
   grain: mult, halation: mult,
   ca: pctOff, vignette: pctOff,
   falloff: pct,
-  texture: pctOff, dust: pctOff, print: pctOff,
+  texture: (v) => (v === 0 ? '0' : `${sign(v)}${Math.round(v * 100)}`), clarity: pctOff, dust: pctOff, print: pctOff,
 };
-const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 1, halation: 1, texture: 0.25, print: 1, ca: 0, vignette: 0, falloff: 0.4, dust: 0 };
+const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 1, halation: 1, texture: -0.3, clarity: 0.35, print: 1, ca: 0, vignette: 0, falloff: 0.4, dust: 0 };
 const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }
 
