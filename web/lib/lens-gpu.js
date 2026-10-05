@@ -39,7 +39,7 @@ struct P {
   dR: f32, dB: f32, blur: f32, depth: f32,
   scale: f32, p3: f32, regionW: f32, regionH: f32,
   m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, // P3 → Rec.2020 rows (xyz)
-  clar: vec4<f32>,                             // clarity: radius (frame px), strength
+  clar: vec4<f32>,                             // clarity: radius (frame px), strength; texture: radius, strength
   opt: vec4<f32>,                              // optical restore: frame px per µm, strength; fine-detail strength
 };
 @group(0) @binding(0) var tex: texture_2d<f32>;
@@ -185,12 +185,30 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     c *= exp2((sl / sw - l0) * p.opt.z);
   }
+  // Texture (TEXTURE_UM, Lightroom's sense): fine-scale detail in log luminance,
+  // + adds micro-contrast, − smooths fine texture (skin, fabric) leaving shapes
+  // and edges alone. Tighter edge-awareness than clarity (fine scale: a step of
+  // ~0.6 stop already counts as an edge). 8 taps.
+  if (p.clar.w != 0.0) {
+    let l0 = log2(max(dot(c, LW), 1e-5));
+    var sw = 1.0; var sl = l0;
+    for (var t = 0; t < 8; t++) {
+      let ang = f32(t) * 0.7853982 + 0.3926991;
+      let lq = log2(max(dot(at(pos + vec2<f32>(cos(ang), sin(ang)) * p.clar.z).rgb, LW), 1e-5));
+      let d = lq - l0;
+      let w = exp(-d * d * 1.5);
+      sw += w; sl += w * lq;
+    }
+    c *= exp2(clamp((l0 - sl / sw) * p.clar.w, -0.4, 0.4));
+  }
   // Film adjacency / clarity (CLARITY_UM): local contrast in log luminance at
   // the scale where colour negative's MTF rises above 100% (developer and DIR
   // inhibitor diffusion at edges). Edge-aware: taps more than ~1 stop away
   // barely count, so strong edges get no halo; texture gets the lift. Taps
   // read the full-frame texture in frame coordinates: tiles stay seamless.
-  if (p.clar.y > 0.0) {
+  // Negative clarity pulls each pixel towards its edge-aware local mean: the soft,
+  // low-local-contrast look of an analog print, without halos at strong edges.
+  if (p.clar.y != 0.0) {
     let l0 = log2(max(dot(c, LW), 1e-5));
     var sw = 1.0; var sl = l0;
     for (var t = 0; t < 24; t++) {                // 3 rings × 8, staggered
@@ -243,11 +261,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
  * by `scale`; same contract as lens.js extractLens. `restore` (0..1): optical
  * restore strength (halo removal + taking lens), on by default.
  */
-// Clarity scale on the 36 mm frame, and strength at Texture = 1.
-const CLARITY_UM = 250;
-export const CLARITY_MAX = 1.0;
+// Clarity / texture scales on the 36 mm frame, and strengths at slider ±1.
+const CLARITY_UM = 250, TEXTURE_UM = 25;
+export const CLARITY_MAX = 1.0, TEXTURE_MAX = 1.0;
 
-export function inputUniform(W, H, p3, x0, y0, w, h, scale, lens, clarity = 0, restore = 1) {
+export function inputUniform(W, H, p3, x0, y0, w, h, scale, lens, clarity = 0, restore = 1, texture = 0) {
   const geo = lensGeometry(W, H, lens), M = P3_TO_REC2020;
   return new Float32Array([
     W, H, x0, y0,
@@ -255,7 +273,8 @@ export function inputUniform(W, H, p3, x0, y0, w, h, scale, lens, clarity = 0, r
     geo.dR, geo.dB, geo.blur, geo.depth,
     scale, p3 ? 1 : 0, w, h,
     ...M[0], 0, ...M[1], 0, ...M[2], 0,
-    CLARITY_UM / (FRAME_UM / Math.max(W, H)), clarity * CLARITY_MAX, 0, 0,
+    CLARITY_UM / (FRAME_UM / Math.max(W, H)), clarity * CLARITY_MAX,
+    Math.max(0.75, TEXTURE_UM / (FRAME_UM / Math.max(W, H))), texture * TEXTURE_MAX,
     Math.max(W, H) / FRAME_UM, restore, restore * FINE_STRENGTH, 0,
   ]);
 }
