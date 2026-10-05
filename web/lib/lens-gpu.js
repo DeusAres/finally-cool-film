@@ -18,6 +18,19 @@ const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
 // = 0.96 / 0.85 / 0.70 / 0.53 at 10 / 20 / 30 / 40 cy/mm (MTF50 42 cy/mm).
 // The film's own MTF (emulsion scatter) belongs to the output pass, not here.
 const OPT_LENS_UM = 4.5, OPT_RING_UM = 40, OPT_NEAR_UM = 18, OPT_FAR1_UM = 50, OPT_FAR2_UM = 80;
+// Fine-detail compression (INPUT_WGSL), µm on the 36 mm frame: bilateral mean in
+// log luminance on two 8-tap rings at FINE_R1/R2_UM (the 15-60 µm band); range
+// weight exp(-FINE_K d²), d in stops (sigma 0.5 stop): texture of a few tenths of
+// a stop (ISP crunch, waxy NR, sharpening texture) is pulled FINE_STRENGTH of the
+// way to the mean, edges over ~1.5 stops keep their full step. Grain re-supplies
+// fine texture. Node twin (scratchpad/micro/twin.mjs), fine/mid band-energy
+// ratio: tuxcat 0.54 → 0.39, room 0.88 → 0.69 (with Texture 0.5 → 0.25).
+const FINE_R1_UM = 20, FINE_R2_UM = 45, FINE_K = 2, FINE_STRENGTH = 0.8;
+// Clipped-highlight gate: 8 taps alternating CLIP_R1/R2_UM. A clipped pixel
+// whose UNclipped surround is near-white (gamma luma > ~0.85) is a surface just
+// over the clip (white fabric, overcast sky), not a light source: its boost goes.
+// A lamp / window / sun has a darker surround (or is all clipped) and keeps it.
+const CLIP_R1_UM = 200, CLIP_R2_UM = 450;
 
 export const INPUT_WGSL = /* wgsl */`
 struct P {
@@ -27,7 +40,7 @@ struct P {
   scale: f32, p3: f32, regionW: f32, regionH: f32,
   m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, // P3 → Rec.2020 rows (xyz)
   clar: vec4<f32>,                             // clarity: radius (frame px), strength
-  opt: vec4<f32>,                              // optical restore: frame px per µm, strength
+  opt: vec4<f32>,                              // optical restore: frame px per µm, strength; fine-detail strength
 };
 @group(0) @binding(0) var tex: texture_2d<f32>;
 @group(0) @binding(1) var smp: sampler;
@@ -154,6 +167,24 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
       c *= pow(Gn / G0, 2.2);
     }
   }
+  // Fine-detail compression (FINE_*_UM): film + scan render 15-60 µm texture soft
+  // and creamy while edges stay sharp; a phone's ISP leaves crunch there.
+  // Edge-aware: taps over ~1.5 stops away barely count. 16 taps; reach 45 µm.
+  if (p.opt.z > 0.0) {
+    let k = p.opt.x;
+    let l0 = log2(dot(c, LW) + 0.004);           // +0.004: shadow noise is not edges
+    var sw = 1.0; var sl = l0;
+    for (var t = 0; t < 16; t++) {
+      let ring = t / 8;
+      let ang = f32(t) * 0.7853982 + f32(ring) * 0.3926991;
+      let rad = select(max(${wf(FINE_R1_UM)} * k, 0.75), max(${wf(FINE_R2_UM)} * k, 1.5), ring == 1);
+      let lq = log2(dot(at(pos + vec2<f32>(cos(ang), sin(ang)) * rad).rgb, LW) + 0.004);
+      let dd = lq - l0;
+      let w = exp(-dd * dd * ${wf(FINE_K)}) * select(1.0, 0.7, ring == 1);
+      sw += w; sl += w * lq;
+    }
+    c *= exp2((sl / sw - l0) * p.opt.z);
+  }
   // Film adjacency / clarity (CLARITY_UM): local contrast in log luminance at
   // the scale where colour negative's MTF rises above 100% (developer and DIR
   // inhibitor diffusion at edges). Edge-aware: taps more than ~1 stop away
@@ -179,6 +210,21 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   c = vec3<f32>(lut(S, c.r * k), lut(S, c.g * k), lut(S, c.b * k));
   // Clipped highlights (alpha = clipped fraction of the pixel, common.js): that
   // fraction of the light was really much brighter; it feeds halation/scatter.
+  // Gate (CLIP_R*_UM): partly clipped white fabric must not turn into patchy
+  // +5 EV islands. 8 taps, only on clipped pixels; reach 450 µm (100 px at 48 MP).
+  if (clipA > 0.0) {
+    let k = p.opt.x;
+    var nb = 0.0; var nd = 1.0;
+    for (var t = 0; t < 8; t++) {
+      let rad = select(${wf(CLIP_R1_UM)}, ${wf(CLIP_R2_UM)}, (t & 1) == 1) * k;
+      let ang = f32(t) * 0.7853982 + 0.3926991;
+      let s = at(pos + vec2<f32>(cos(ang), sin(ang)) * rad);
+      let free = 1.0 - s.a;
+      let br = smoothstep(0.80, 0.93, gam(s.rgb));
+      nb += free * br; nd += free * (1.0 - br);
+    }
+    clipA *= 1.0 - smoothstep(0.25, 0.6, nb / (nb + nd));
+  }
   c *= 1.0 + ${CLIP_GAIN}.0 * clipA;
   var gainOut = p.scale;
   if (p.depth > 0.0) {
@@ -210,6 +256,6 @@ export function inputUniform(W, H, p3, x0, y0, w, h, scale, lens, clarity = 0, r
     scale, p3 ? 1 : 0, w, h,
     ...M[0], 0, ...M[1], 0, ...M[2], 0,
     CLARITY_UM / (FRAME_UM / Math.max(W, H)), clarity * CLARITY_MAX, 0, 0,
-    Math.max(W, H) / FRAME_UM, restore, 0, 0,
+    Math.max(W, H) / FRAME_UM, restore, restore * FINE_STRENGTH, 0,
   ]);
 }
