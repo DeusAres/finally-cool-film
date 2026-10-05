@@ -12,7 +12,8 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  # The debug branch's redeploy run has its own group: the deploy it dispatches must not cancel it.
+  group: pages${{ github.ref_name == 'claude/spektrafilm-debug' && '-redeploy' || '' }}
   cancel-in-progress: true
 
 jobs:
