@@ -9,7 +9,7 @@ import { iccSegment } from './lib/icc.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, inputUniform } from './lib/lens-gpu.js';
 import { dustField, drawDust, compositeDust } from './lib/dust.js';
-import { GRAIN_WGSL, grainParams, outputColourCPU, scanSaturation, printLookCPU } from './lib/grain.js';
+import { GRAIN_WGSL, grainParams, outputColourCPU, scanSaturation, printLookCPU, fadeCPU } from './lib/grain.js';
 
 const PREVIEW_LONG_SIDE = 2000;   // display canvas cap (bigger canvases make iOS compositing crash when zoomed)
 const GRAIN_AREA_UM2 = 0.2;       // engine default AgX particle area
@@ -39,7 +39,7 @@ let rendering = false, dirty = false, exporting = false, renderCount = 0;
 const ui = () => ({
   ev: +$('ev').value, look: +$('look').value, rolloff: +$('rolloff').value,
   mshift: +$('mshift').value, yshift: +$('yshift').value,
-  grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value, print: +$('print').value,
+  grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value, print: +$('print').value, fade: +$('fade').value,
   ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value,
 });
 // CA slider is quadratic: realistic (subtle) amounts get most of the travel.
@@ -177,11 +177,11 @@ async function ensureTone(u) {
 // below (no WebGPU): float input built here, float output converted here.
 
 /** 8-bit render of a region of `frame` into `target` (RGBA, w×h×4 bytes). */
-async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, texture = 0, clarity = 0, print = 0) {
+async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, texture = 0, clarity = 0, print = 0, fade = 0) {
   if (gpu) {
     return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3 && !frame.raw, x0, y0, w, h, 1, lens, clarity, frame.raw ? 0 : 1, texture),
       tone.packed, w, h, tone.out8,
-      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0], tone.balance, photo.vibrance || 0, print), target);
+      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0], tone.balance, photo.vibrance || 0, print, fade), target);
   }
   const rgb = lensActive(lens)
     ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lensGeometry(frame.w, frame.h, lens), tone)
@@ -193,8 +193,10 @@ async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, textur
     px[0] = out[j]; px[1] = out[j + 1]; px[2] = out[j + 2];
     outputColourCPU(px, p3, tone.balance, photo.vibrance || 0);
     let r8 = to8(px[0], tone.out8), g8 = to8(px[1], tone.out8), b8 = to8(px[2], tone.out8);
-    if (print > 0) {   // same post-LUT step as the GPU output pass (grain.js printLook)
-      px[0] = r8 / 255; px[1] = g8 / 255; px[2] = b8 / 255; printLookCPU(px, p3, print);
+    if (print > 0 || fade > 0) {   // same post-LUT steps as the GPU output pass (grain.js printLook, Nero)
+      px[0] = r8 / 255; px[1] = g8 / 255; px[2] = b8 / 255;
+      if (print > 0) printLookCPU(px, p3, print);
+      if (fade > 0) fadeCPU(px, fade);
       r8 = Math.round(px[0] * 255); g8 = Math.round(px[1] * 255); b8 = Math.round(px[2] * 255);
     }
     d32[p] = (r8 | (g8 << 8) | (b8 << 16) | 0xff000000) >>> 0;
@@ -230,7 +232,7 @@ async function render() {
       updateEngine(renderParamsJson(u));
       const cs = outP3() ? 'display-p3' : 'srgb';
       if (photo.after?.width !== pv.w || photo.after?.height !== pv.h || photo.after.colorSpace !== cs) photo.after = new ImageData(pv.w, pv.h, { colorSpace: cs });
-      await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), lensOf(u), u.grain, u.texture, u.clarity, photo.measuring ? 0 : u.print);
+      await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), lensOf(u), u.grain, u.texture, u.clarity, photo.measuring ? 0 : u.print, photo.measuring ? 0 : u.fade);
       const t1 = performance.now();
       if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); }
       const t2 = performance.now(), ms = (v) => Math.round(v);
@@ -603,7 +605,7 @@ async function exportFull() {
         const tw = Math.min(w, tx + EXPORT_TILE + EXPORT_PAD) - x0, th = Math.min(h, ty + EXPORT_TILE + EXPORT_PAD) - y0;
         updateEngine(renderParamsJson(u, false, FILM_FORMAT_MM * Math.max(tw, th) / longSide));
         const tile = (tileBuf = tileBuf?.length >= tw * th * 4 ? tileBuf : new Uint8Array(tw * th * 4)).subarray(0, tw * th * 4);
-        await renderRegion(frame, x0, y0, tw, th, tile, lensOf(u), u.grain, u.texture, u.clarity, u.print);
+        await renderRegion(frame, x0, y0, tw, th, tile, lensOf(u), u.grain, u.texture, u.clarity, u.print, u.fade);
         const cw = Math.min(EXPORT_TILE, w - tx);
         const t32 = new Uint32Array(tile.buffer, tile.byteOffset, tw * th);
         for (let y = 0; y < ch; y++) {   // RGBA tile → RGB strip (one 32-bit read per pixel; little-endian, as the CPU path)
@@ -680,9 +682,9 @@ const FORMAT = {
   grain: mult, halation: mult,
   ca: pctOff, vignette: pctOff,
   falloff: pct,
-  texture: (v) => `${sign(v)}${pct(v)}`, clarity: pctOff, dust: pctOff, print: pctOff,
+  texture: (v) => `${sign(v)}${pct(v)}`, clarity: pctOff, dust: pctOff, print: pctOff, fade: pctOff,
 };
-const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 1, halation: 1, texture: 0.3, clarity: 0.3, print: 1, ca: 0, vignette: 0, falloff: 0.4, dust: 0 };
+const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 1, halation: 1, texture: 0.3, clarity: 0.3, print: 1, fade: 0.6, ca: 0, vignette: 0, falloff: 0.4, dust: 0 };
 const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }
 

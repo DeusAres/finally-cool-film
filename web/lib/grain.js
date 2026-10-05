@@ -54,6 +54,8 @@ import { srgbToLinear, linearToSrgb, REC2020_TO_P3, LUMA_SRGB } from './color.js
 const RGC = { thr: 0.9, lim: 1.3, pw: 1.2 };
 // Smallest grain cell, in output pixels (see cell() in GRAIN_WGSL).
 const GRAIN_MIN_PX = 1.6;
+// Nero (fade): black lift (display-encoded) at slider 1 (0.15 → L* ~13), toe exponent.
+const FADE_MAX = 0.15, FADE_P = 3.5;
 // Sky-blue rotation (skyHue): OKLab hue 235° direction, half-width (60°), rotation (5.5°), chroma ramp.
 const SKY = { dir: [-0.5735764, -0.8191520], width: 1.0471976, theta: 0.0959931, c0: 0.015, c1: 0.045 };
 // Rows: linear RGB → LMS (OKLab M1 composed with the primaries, rows normalised so white has a = b = 0), and back.
@@ -81,11 +83,11 @@ export const GRAIN_WGSL = /* wgsl */`
 // P[11] = 1: the chain output is Rec.2020 → convert to Display P3 here, with
 // ACES-style per-channel soft gamut compression (see toP3); P[12] the paper
 // black (8-bit / 255): grain softly floors there instead of clipping to 0;
-// P[13] = 1: grey balance curves (tone.js greyBalance) from P[16], applied first;
+// P[13] = 1: grey balance curves (tone.js greyBalance) from P[17], applied first;
 // P[14] scanner saturation strength (vib, 0 = off).
 
 fn bal(c: u32, v: f32) -> f32 {             // grey balance (tone.js greyBalance), P[16..]
-  let f = clamp(v, 0.0, 1.0) * 1024.0; let i = u32(f); let base = 16u + c * 1025u;
+  let f = clamp(v, 0.0, 1.0) * 1024.0; let i = u32(f); let base = 17u + c * 1025u;
   if (i >= 1024u) { return P[base + 1024u]; }
   return mix(P[base + i], P[base + i + 1u], f - f32(i));
 }
@@ -244,6 +246,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   if (P[14] > 0.0) { e = vib(e); }
   var c = vec3<f32>(q(e.x), q(e.y), q(e.z));
   if (P[15] > 0.0) { c = printLook(c, P[15]); }
+  // Nero (fade, P[16]): lifted, matte-print blacks; the toe term (1 - c)^FADE_P
+  // leaves mids and highlights almost where they are (black → ~23/255, L* ~7, mid grey +2 levels at default).
+  if (P[16] > 0.0) { c += P[16] * pow(max(vec3<f32>(1.0) - c, vec3<f32>(0.0)), vec3<f32>(${wf(FADE_P)})); }
   if (P[8] > 0.0) {
     let w = u32(P[4]);
     let um = (vec2<f32>(f32(i % w), f32(i / w)) + vec2<f32>(P[5], P[6]) + 0.5) * P[7];
@@ -278,18 +283,24 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
  * Params for GRAIN_WGSL: region (x0, y0, w) of a frame whose long side is
  * `frameLong` px; `amount` is the Grana slider (0 = off), `seed` per photo.
  */
-export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false, black = 0, balance = null, vibrance = 0, print = 0) {
+export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false, black = 0, balance = null, vibrance = 0, print = 0, fade = 0) {
   const umPerPx = FRAME_UM / frameLong;
   // Size grows a little with the amount (a coarser-looking stock); 12 µm at 1.
   const size = 12 * (0.75 + 0.25 * amount);
-  const head = [w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0, black / 255, balance ? 1 : 0, vibrance, print];   // vibrance → P[14]
+  const head = [w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0, black / 255, balance ? 1 : 0, vibrance, print, fade * FADE_MAX];   // vibrance → P[14]
   const p = new Float32Array(head.length + (balance ? balance.length : 0));
-  p.set(head); if (balance) p.set(balance, head.length);   // balance starts at P[16]
+  p.set(head); if (balance) p.set(balance, head.length);   // balance starts at P[17]
   return p;
 }
 
 // Peak amplitude (8-bit levels, per unit of noise) at amount 1.
 const GRAIN_LEVELS = 13;
+
+// CPU twin of the Nero fade in GRAIN_WGSL; px display-encoded 0..1, in place.
+export function fadeCPU(px, fade) {
+  const b = fade * FADE_MAX;
+  for (let c = 0; c < 3; c++) px[c] += b * Math.max(1 - px[c], 0) ** FADE_P;
+}
 
 // CPU twin of the colour steps of GRAIN_WGSL (grey balance, then Rec.2020 → P3),
 // for the no-WebGPU path: `px` is one engine output pixel (sRGB-encoded), in place.
