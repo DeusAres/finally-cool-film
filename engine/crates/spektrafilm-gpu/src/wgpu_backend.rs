@@ -477,6 +477,16 @@ impl WgpuBackend {
 
     /// New (zeroed) width × height frame texture, filled by `set_frame_rows`.
     pub fn alloc_frame(&self, width: u32, height: u32) {
+        self.alloc_frame_as(width, height, wgpu::TextureFormat::Rgba8UnormSrgb);
+    }
+
+    /// As `alloc_frame`, half-float linear RGBA (a scene-linear raw frame, values
+    /// above 1 kept), filled by `set_frame_rows_f16`; the sampler reads it as is.
+    pub fn alloc_frame_f16(&self, width: u32, height: u32) {
+        self.alloc_frame_as(width, height, wgpu::TextureFormat::Rgba16Float);
+    }
+
+    fn alloc_frame_as(&self, width: u32, height: u32, format: wgpu::TextureFormat) {
         let mut io = self.io.lock().unwrap();
         if let Some(t) = io.frame.take() {
             t.destroy();
@@ -488,7 +498,7 @@ impl WgpuBackend {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         }));
@@ -508,6 +518,23 @@ impl WgpuBackend {
             wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
             &rgba[..rows as usize * width as usize * 4],
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width * 4), rows_per_image: Some(rows) },
+            wgpu::Extent3d { width, height: rows, depth_or_array_layers: 1 },
+        );
+    }
+
+    /// Rows of a half-float frame (`alloc_frame_f16`): 4 × f16 bits per pixel.
+    pub fn set_frame_rows_f16(&self, rgba: &[u16], y0: u32) {
+        let io = self.io.lock().unwrap();
+        let tex = io.frame.as_ref().expect("alloc_frame_f16 before set_frame_rows_f16");
+        let width = tex.width();
+        let rows = (rgba.len() / (width as usize * 4)) as u32;
+        if rows == 0 {
+            return;
+        }
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
+            bytemuck::cast_slice(&rgba[..rows as usize * width as usize * 4]),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width * 8), rows_per_image: Some(rows) },
             wgpu::Extent3d { width, height: rows, depth_or_array_layers: 1 },
         );
     }

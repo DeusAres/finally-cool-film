@@ -59,6 +59,20 @@ pub fn set_frame_rows(rgba: &[u8], y0: u32) -> Result<(), JsError> {
     Ok(())
 }
 
+/// Start a half-float (scene-linear raw) frame, filled by `set_frame_rows_f16`.
+#[wasm_bindgen]
+pub fn alloc_frame_f16(width: u32, height: u32) -> Result<(), JsError> {
+    gpu()?.alloc_frame_f16(width, height);
+    Ok(())
+}
+
+/// Upload whole rows of a half-float frame (RGBA, f16 bits) from row `y0`.
+#[wasm_bindgen]
+pub fn set_frame_rows_f16(rgba: &[u16], y0: u32) -> Result<(), JsError> {
+    gpu()?.set_frame_rows_f16(rgba, y0);
+    Ok(())
+}
+
 /// Make a data file visible to the engine, e.g. `data/profiles/kodak_gold_200.json`.
 #[wasm_bindgen]
 pub fn register_file(path: &str, bytes: Vec<u8>) {
