@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
   pages: write
   id-token: write
 
@@ -15,7 +16,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The github-pages environment only accepts deploys from the normal branch: a push to
+  # the debug branch re-runs this workflow there, which also builds /debug/.
+  redeploy:
+    if: github.ref_name == 'claude/spektrafilm-debug'
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh workflow run pages.yml --repo "${{ github.repository }}" --ref claude/spektrafilm-mobile-web-har40e
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   build:
+    if: github.ref_name != 'claude/spektrafilm-debug'
     runs-on: ubuntu-latest
     steps:
       # Site root: the pushed branch, or the normal branch when the debug branch is pushed.
