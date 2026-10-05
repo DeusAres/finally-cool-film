@@ -62,6 +62,11 @@ const SKY_RGB = { p3: [3.1277694, -2.2571362, 0.1293668, -1.0910094, 2.413332, -
 const OK_LAB = [0.2104542553, 0.7936177850, -0.0040720468, 1.9779984951, -2.4285922050, 0.4505937099, 0.0259040371, 0.7827717662, -0.8086757660];
 // Scanner saturation (vib): chroma ramp-in (greys untouched) and fade-out (saturated untouched).
 const VIB = { c0: 0.008, c1: 0.022, f0: 0.025, f1: 0.2 };
+// Print character (printLook), chosen by eye on A/B variants: a dense Frontier-style
+// print (steeper mids around OKLab L 0.55, deeper toe, richer mid chroma) with
+// Gold's warmth (cream highlights, warm mids). OKLab units; all scaled by P[15].
+const PRINT = { piv: 0.55, con: 0.30, toe: -0.012, cLo: 0.95, cMid: 1.15, cHi: 0.92,
+  shA: 0.001, shB: 0.0, hiA: 0.005, hiB: 0.016, warm: 0.010 };
 const OK_LMS = [1, 0.3963377774, 0.2158037573, 1, -0.1055613458, -0.0638541728, 1, -0.0894841775, -1.2914855480];
 
 export const GRAIN_WGSL = /* wgsl */`
@@ -196,6 +201,22 @@ fn vib(e: vec3<f32>) -> vec3<f32> {
   return toGamut(l, fromOk(vec3<f32>(lab.x, lab.yz * (1.0 + g))));
 }
 
+// Print character (PRINT, CPU twin printLookCPU) on the display-encoded output, strength s.
+fn printLook(c: vec3<f32>, s: f32) -> vec3<f32> {
+  let l = dec(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)));
+  let lab = toOk(l);
+  let d = lab.x - ${wf(PRINT.piv)};
+  var L = lab.x + s * ${wf(PRINT.con)} * d * (1.0 - min(1.0, abs(d) / ${wf(PRINT.piv)}));
+  L = clamp(L + s * ${wf(PRINT.toe)} * (1.0 - sstep(0.0, 0.45, lab.x)), 0.0, 1.0);
+  let lo = 1.0 - sstep(0.25, 0.45, L); let hi = sstep(0.75, 0.95, L); let mid = max(0.0, 1.0 - lo - hi);
+  let k = ${wf(PRINT.cLo)} * lo + ${wf(PRINT.cMid)} * mid + ${wf(PRINT.cHi)} * hi;
+  let kv = k + (1.0 - k) * sstep(0.12, 0.2, length(lab.yz)) * 0.6;   // vivid colours keep most of their bite
+  var ab = lab.yz * (1.0 + s * (kv - 1.0));
+  ab += s * (vec2<f32>(${wf(PRINT.shA)}, ${wf(PRINT.shB)}) * lo + vec2<f32>(${wf(PRINT.hiA)}, ${wf(PRINT.hiB)}) * hi
+             + vec2<f32>(0.25, 0.6 * mid) * ${wf(PRINT.warm)});
+  return toGamut(l, fromOk(vec3<f32>(L, ab)));
+}
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = id.x + id.y * u32(P[1]);
@@ -206,6 +227,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   e = skyHue(e);
   if (P[14] > 0.0) { e = vib(e); }
   var c = vec3<f32>(q(e.x), q(e.y), q(e.z));
+  if (P[15] > 0.0) { c = printLook(c, P[15]); }
   if (P[8] > 0.0) {
     let w = u32(P[4]);
     let um = (vec2<f32>(f32(i % w), f32(i / w)) + vec2<f32>(P[5], P[6]) + 0.5) * P[7];
@@ -240,11 +262,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
  * Params for GRAIN_WGSL: region (x0, y0, w) of a frame whose long side is
  * `frameLong` px; `amount` is the Grana slider (0 = off), `seed` per photo.
  */
-export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false, black = 0, balance = null, vibrance = 0) {
+export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false, black = 0, balance = null, vibrance = 0, print = 0) {
   const umPerPx = FRAME_UM / frameLong;
   // Size grows a little with the amount (a coarser-looking stock); 12 µm at 1.
   const size = 12 * (0.75 + 0.25 * amount);
-  const head = [w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0, black / 255, balance ? 1 : 0, vibrance, 0];   // vibrance → P[14]
+  const head = [w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0, black / 255, balance ? 1 : 0, vibrance, print];   // vibrance → P[14]
   const p = new Float32Array(head.length + (balance ? balance.length : 0));
   p.set(head); if (balance) p.set(balance, head.length);   // balance starts at P[16]
   return p;
@@ -338,4 +360,21 @@ export function scanSaturation(rgba, p3) {
   const q = (p) => c[Math.floor(p * (k - 1))];
   const score = Math.sqrt(q(0.5) * q(0.9));
   return Math.min(SAT_MAX, Math.max(0, SAT_GAIN * (1 - score / SAT_NORMAL)));
+}
+
+/** CPU twin of printLook: `px` display-encoded (P3 or sRGB), in place; s = strength. */
+export function printLookCPU(px, p3, s) {
+  const sp = p3 ? 'p3' : 'srgb';
+  const l = linCPU(px);
+  const [L0, a0, b0] = toOkCPU(l, sp);
+  const d = L0 - PRINT.piv;
+  let L = L0 + s * PRINT.con * d * (1 - Math.min(1, Math.abs(d) / PRINT.piv));
+  L = Math.min(1, Math.max(0, L + s * PRINT.toe * (1 - sstepCPU(0, 0.45, L0))));
+  const lo = 1 - sstepCPU(0.25, 0.45, L), hi = sstepCPU(0.75, 0.95, L), mid = Math.max(0, 1 - lo - hi);
+  const k = PRINT.cLo * lo + PRINT.cMid * mid + PRINT.cHi * hi;
+  const kv = k + (1 - k) * sstepCPU(0.12, 0.2, Math.hypot(a0, b0)) * 0.6;
+  const g = 1 + s * (kv - 1);
+  const a = a0 * g + s * (PRINT.shA * lo + PRINT.hiA * hi + 0.25 * PRINT.warm);
+  const b = b0 * g + s * (PRINT.shB * lo + PRINT.hiB * hi + 0.6 * mid * PRINT.warm);
+  toGamutCPU(px, l, fromOkCPU(L, a, b, sp));
 }
