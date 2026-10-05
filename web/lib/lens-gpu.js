@@ -21,7 +21,7 @@ const OPT_LENS_UM = 4.5, OPT_RING_UM = 40, OPT_NEAR_UM = 18, OPT_FAR1_UM = 50, O
 // Fine-detail compression (INPUT_WGSL), µm on the 36 mm frame: bilateral mean in
 // log luminance on two 8-tap rings at FINE_R1/R2_UM (the 15-60 µm band); range
 // weight exp(-FINE_K d²), d in stops (sigma 0.5 stop): texture of a few tenths of
-// a stop (ISP crunch, waxy NR, sharpening texture) is pulled (Texture slider) of the
+// a stop (ISP crunch, waxy NR, sharpening texture) is pulled FINE_STRENGTH of the
 // way to the mean, edges over ~1.5 stops keep their full step. Grain re-supplies
 // fine texture. Node twin (scratchpad/micro/twin.mjs), fine/mid band-energy
 // ratio: tuxcat 0.54 → 0.39, room 0.88 → 0.69 (with Texture 0.5 → 0.25).
@@ -31,15 +31,13 @@ const FINE_R1_UM = 20, FINE_R2_UM = 45, FINE_K = 2;
 // over the clip (white fabric, overcast sky), not a light source: its boost goes.
 // A lamp / window / sun has a darker surround (or is all clipped) and keeps it.
 const CLIP_R1_UM = 200, CLIP_R2_UM = 450;
-// Clarity (CLARITY_UM, film adjacency scale): strength at Clarity = 1, range k (per stop²), midtone width (stops).
-const CLARITY_UM = 150, CLARITY_K = 0.4, CLARITY_MID_STOPS = 2.5;
-export const CLARITY_MAX = 1.0;
-// Texture (-1..1) → fine-detail strength: restore base, minus TEXTURE_SPAN per unit.
-// Below 0 the range weight also widens (TEXTURE_SOFT_K): edges soften a little too, as a vintage lens does.
-const TEXTURE_BASE = 0.6, TEXTURE_SPAN = 0.7, TEXTURE_SOFT_K = 0.6;
-// Optical softness (sigma): scanner optics in output pixels, and the vintage-lens
-// blur at Texture = -1 in µm on the frame (MTF50 ~ 0.19 / sigma: 12 µm → 16 cy/mm).
-const SCAN_PX = 0.6, SOFT_UM = 12;
+// Slider mapping (Texture, Chiarezza) and the stages they drive, in µm on the 36 mm frame.
+// Texture = micro-contrast: scale (µm), range k (per stop²), midtone width (stops), strength at ±1.
+const MICRO_UM = 60, MICRO_K = 0.4, MICRO_MID_STOPS = 2.5, MICRO_MAX = 0.8;
+// Chiarezza = glow: blur radius (µm), symmetric veil and one-sided bleed of light at 1.
+const GLOW_UM = 220, GLOW_VEIL = 0.25, GLOW_BLEED = 0.6;
+// Fine-detail compression strength (ISP crunch, with restore). Scanner optics sigma (output px).
+const FINE_STRENGTH = 0.6, SCAN_PX = 0.6;
 
 
 export const INPUT_WGSL = /* wgsl */`
@@ -49,7 +47,7 @@ struct P {
   dR: f32, dB: f32, blur: f32, depth: f32,
   scale: f32, p3: f32, regionW: f32, regionH: f32,
   m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, // P3 → Rec.2020 rows (xyz)
-  clar: vec4<f32>,                             // clarity: radius (frame px), strength; optical blur variance (px²)
+  clar: vec4<f32>,                             // micro-contrast radius (px), strength (Texture); optical blur variance (px²); glow (Chiarezza)
   opt: vec4<f32>,                              // optical restore: frame px per µm, strength; fine-detail strength, range k
 };
 @group(0) @binding(0) var tex: texture_2d<f32>;
@@ -130,8 +128,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   }
   // Optical softness, linear light, edges included (a phone frame is pixel-crisp; film is
   // not): taking lens (OPT_LENS_UM, with restore) + scanner optics (SCAN_PX, in output
-  // pixels: a scan is never crisp at its own pixel) + vintage softness (Texture < 0,
-  // SOFT_UM). Gaussian-equivalent variance p.clar.z (px²), computed in inputUniform.
+  // pixels: a scan is never crisp at its own pixel). Gaussian-equivalent variance p.clar.z (px²), computed in inputUniform.
   // Not on clipped light (alpha): blurring a thin clipped source would drain the halation it feeds.
   if (p.clar.z > 0.0) {
     let s0 = at(pos);
@@ -208,14 +205,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let lim = select(8.0, 0.5, p.opt.z < 0.0);   // negative strength (Texture > 0) lifts detail: capped
     c *= exp2(clamp((sl / sw - l0) * p.opt.z, -lim, lim));
   }
-  // Film adjacency / clarity (CLARITY_UM): local contrast in log luminance at
-  // the scale where colour negative's MTF rises above 100% (developer and DIR
-  // inhibitor diffusion at edges). Edge-aware: taps more than ~1 stop away
-  // barely count, so strong edges get no halo; texture gets the lift. Taps
-  // read the full-frame texture in frame coordinates: tiles stay seamless.
-  if (p.clar.y != 0.0) {                       // < 0: towards the edge-aware local mean, the soft analog print look
+  // Texture = micro-contrast (MICRO_UM): local contrast in log luminance at the
+  // scale of film adjacency (developer / DIR inhibitor diffusion at edges).
+  // Edge-aware (taps over ~1 stop away barely count: no halos), midtone-weighted,
+  // prefiltered taps (no aliasing at 48 MP). Bipolar: < 0 flattens micro-tones.
+  if (p.clar.y != 0.0) {
     let l0 = log2(max(dot(c, LW), 1e-5));
-    let o = max(0.35 * p.clar.x, 0.5);            // prefilter: each tap is a 4-tap box, no aliasing at 48 MP
+    let o = max(0.35 * p.clar.x, 0.5);
     var sw = 1.0; var sl = l0;
     for (var t = 0; t < 24; t++) {                // 3 rings × 8, staggered
       let ring = t / 8;
@@ -223,11 +219,28 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
       let q = pos + vec2<f32>(cos(ang), sin(ang)) * (0.5 + 0.65 * f32(ring)) * p.clar.x;
       let lq = log2(max(dot(box4(q, o), LW), 1e-5));
       let d = lq - l0;
-      let w = exp(-d * d * ${wf(CLARITY_K)});
+      let w = exp(-d * d * ${wf(MICRO_K)});
       sw += w; sl += w * lq;
     }
-    let mid = exp(-pow((l0 + 2.47) / ${wf(CLARITY_MID_STOPS)}, 2.0));   // midtones (log2 0.18 = -2.47): deep shadows / highlights untouched
+    let mid = exp(-pow((l0 + 2.47) / ${wf(MICRO_MID_STOPS)}, 2.0));   // midtones (log2 0.18 = -2.47)
     c *= exp2(clamp((l0 - sl / sw) * p.clar.y * mid, -0.4, 0.4));
+  }
+  // Chiarezza = dreamy glow (GLOW_UM, linear light, Orton-style): a wide blur
+  // whose light bleeds into darker neighbours (halo round bright shapes) plus a
+  // small symmetric veil; flat areas and detail inside them stay as they are.
+  if (p.clar.w > 0.0) {
+    let R = ${wf(GLOW_UM)} * p.opt.x;
+    let o = max(0.35 * R, 0.5);
+    var acc = box4(pos, o); var wt = 1.0;
+    for (var t = 0; t < 24; t++) {
+      let ring = t / 8;
+      let ang = f32(t) * 0.7853982 + f32(ring) * 0.2617994;
+      let wr = select(select(0.3, 0.6, ring == 1), 1.0, ring == 0);
+      acc += wr * box4(pos + vec2<f32>(cos(ang), sin(ang)) * (0.5 + 0.65 * f32(ring)) * R, o);
+      wt += wr;
+    }
+    let gl = acc / wt - c;
+    c += p.clar.w * (${wf(GLOW_VEIL)} * gl + ${wf(GLOW_BLEED)} * max(gl, vec3<f32>(0.0)));
   }
   // tone.js applyTone: display curve on max(R,G,B) as a common gain, then per-channel scene LUT.
   let k = lut(0u, max(c.r, max(c.g, c.b)));
@@ -270,7 +283,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
  */
 export function inputUniform(W, H, p3, x0, y0, w, h, scale, lens, clarity = 0, restore = 1, texture = 0) {
   const kpx = Math.max(W, H) / FRAME_UM;   // frame px per µm
-  const fine = Math.min(Math.max(restore * TEXTURE_BASE - TEXTURE_SPAN * texture, -0.8), 1);
   const geo = lensGeometry(W, H, lens), M = P3_TO_REC2020;
   return new Float32Array([
     W, H, x0, y0,
@@ -278,8 +290,8 @@ export function inputUniform(W, H, p3, x0, y0, w, h, scale, lens, clarity = 0, r
     geo.dR, geo.dB, geo.blur, geo.depth,
     scale, p3 ? 1 : 0, w, h,
     ...M[0], 0, ...M[1], 0, ...M[2], 0,
-    CLARITY_UM / (FRAME_UM / Math.max(W, H)), clarity * CLARITY_MAX,
-    restore * (OPT_LENS_UM * kpx) ** 2 + SCAN_PX ** 2 + (SOFT_UM * Math.max(-texture, 0) * kpx) ** 2, 0,
-    Math.max(W, H) / FRAME_UM, restore, fine, FINE_K * (1 - TEXTURE_SOFT_K * Math.max(-texture, 0)),
+    MICRO_UM * kpx, texture * MICRO_MAX,
+    restore * (OPT_LENS_UM * kpx) ** 2 + SCAN_PX ** 2, clarity,
+    kpx, restore, restore * FINE_STRENGTH, FINE_K,
   ]);
 }

@@ -28,11 +28,11 @@ di pellicola → stampa → scansione, nel browser via WebAssembly + WebGPU. Foc
 - **Pipeline GPU**: la foto va sulla GPU una volta, come texture 8-bit; lens + ricostruzione tono + matrice colore girano
   come primo pass della catena del motore (shader in `lens-gpu.js`, `Engine.process_frame`) e l'uscita torna già RGBA 8-bit
   tramite la LUT di stampa. Nessun frame float attraversa JS↔wasm: ~4 ms di CPU per frame invece di ~100.
-- **Texture** (−1..+1, dettaglio fine 15–60 µm): sotto zero il micro-dettaglio da ISP viene compresso verso una media
-  edge-aware, e il peso di range si allarga così che anche i bordi si ammorbidiscono un po', come con una lente vintage;
-  sopra zero il dettaglio viene restituito, con un limite.
-- **Chiarezza** (−1..+1, adiacenza della pellicola, ~150 µm; negativa = resa morbida da stampa analogica): contrasto locale in luminanza log, con tap prefiltrati (niente aliasing
-  né rumore all'export), pesi che ignorano i bordi forti (niente aloni) e maschera sui mezzitoni (ombre e alte luci invariate).
+- **Texture** (−1..+1): microcontrasto in luminanza log a ~60 µm (adiacenza della pellicola), edge-aware (niente aloni),
+  solo sui mezzitoni, tap prefiltrati (niente aliasing all'export). Negativa = micro-toni più piatti.
+- **Chiarezza** (0..1): bagliore dreamy in luce lineare (stile Orton, ~220 µm): la luce delle forme chiare si spande
+  sui vicini più scuri, più un velo leggero; i dettagli restano. Sempre attivi: morbidezza ottica di lente + scanner
+  (0.6 px) e compressione del crunch da ISP (15–60 µm).
 - **Polvere e graffi** (`web/lib/dust.js`): procedurali, niente texture. Granelli irregolari (alcuni sfocati), fibre a curvatura
   casuale, rari graffi lungo lo scorrimento della pellicola, in µm sul fotogramma 36 mm, quindi identici in anteprima ed export.
   Stanno sul negativo, quindi in stampa sono bianco carta. Layer separato: slider e **Rimescola** non ri-renderizzano nulla.

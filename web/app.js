@@ -680,9 +680,9 @@ const FORMAT = {
   grain: mult, halation: mult,
   ca: pctOff, vignette: pctOff,
   falloff: pct,
-  texture: (v) => `${sign(v)}${pct(v)}`, clarity: (v) => `${sign(v)}${pct(v)}`, dust: pctOff, print: pctOff,
+  texture: (v) => `${sign(v)}${pct(v)}`, clarity: pctOff, dust: pctOff, print: pctOff,
 };
-const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 1, halation: 1, texture: -0.3, clarity: 0.35, print: 1, ca: 0, vignette: 0, falloff: 0.4, dust: 0 };
+const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 1, halation: 1, texture: 0.3, clarity: 0.3, print: 1, ca: 0, vignette: 0, falloff: 0.4, dust: 0 };
 const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }
 
