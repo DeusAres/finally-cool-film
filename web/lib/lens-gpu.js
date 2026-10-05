@@ -37,6 +37,9 @@ export const CLARITY_MAX = 1.0;
 // Texture (-1..1) → fine-detail strength: restore base, minus TEXTURE_SPAN per unit.
 // Below 0 the range weight also widens (TEXTURE_SOFT_K): edges soften a little too, as a vintage lens does.
 const TEXTURE_BASE = 0.6, TEXTURE_SPAN = 0.7, TEXTURE_SOFT_K = 0.6;
+// Optical softness (sigma): scanner optics in output pixels, and the vintage-lens
+// blur at Texture = -1 in µm on the frame (MTF50 ~ 0.19 / sigma: 12 µm → 16 cy/mm).
+const SCAN_PX = 0.6, SOFT_UM = 12;
 
 
 export const INPUT_WGSL = /* wgsl */`
@@ -46,7 +49,7 @@ struct P {
   dR: f32, dB: f32, blur: f32, depth: f32,
   scale: f32, p3: f32, regionW: f32, regionH: f32,
   m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, // P3 → Rec.2020 rows (xyz)
-  clar: vec4<f32>,                             // clarity: radius (frame px), strength
+  clar: vec4<f32>,                             // clarity: radius (frame px), strength; optical blur variance (px²)
   opt: vec4<f32>,                              // optical restore: frame px per µm, strength; fine-detail strength, range k
 };
 @group(0) @binding(0) var tex: texture_2d<f32>;
@@ -73,6 +76,18 @@ fn gamAt(pos: vec2<f32>) -> f32 { return gam(at(pos).rgb); }
 fn box4(q: vec2<f32>, o: f32) -> vec3<f32> {   // four diagonal bilinear taps at ±o, averaged
   return 0.25 * (at(q + vec2<f32>(o, o)).rgb + at(q + vec2<f32>(-o, o)).rgb
                + at(q + vec2<f32>(o, -o)).rgb + at(q + vec2<f32>(-o, -o)).rgb);
+}
+// Gaussian-equivalent blur of variance s2 (px² per axis). Up to 1 px²: four diagonal
+// bilinear taps at ±o make the separable kernel [o/2, 1-o, o/2] (variance o), blended
+// by s2/o. Beyond: two such boxes at 0.6σ and 1.28σ (mean variance σ²), 8 taps.
+fn soft(q: vec2<f32>, s2: f32) -> vec3<f32> {
+  if (s2 <= 1.0) {
+    let o = clamp(s2, 0.5, 1.0);
+    let c = at(q).rgb;
+    return c + (box4(q, o) - c) * min(s2 / o, 1.0);
+  }
+  let s = sqrt(s2);
+  return 0.5 * (box4(q, 0.6 * s) + box4(q, 1.28 * s));
 }
 fn coverage(u: f32) -> f32 {                   // 0 on the axis, 1 at the farthest corner
   let raw = pow(1.0 + (u * ${VIG_T}) * (u * ${VIG_T}), -2.0);
@@ -113,30 +128,30 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   } else {
     c = at(pos).rgb;
   }
-  // Optical restore (OPT_* in µm on the 36 mm frame). A phone frame carries its ISP's
-  // signature: unsharp-mask halos (bench: in-focus edges +6..9% overshoot,
-  // -9% undershoot, MTF > 1 at 5-15 cy/mm) and pixel-crisp edges. A camera lens
-  // on film has neither. 18 taps; reach 80 µm (≤ 10 px at 12 MP, inside the tile pad).
-  if (p.opt.y > 0.0) {
-    let k = p.opt.x;
+  // Optical softness, linear light, edges included (a phone frame is pixel-crisp; film is
+  // not): taking lens (OPT_LENS_UM, with restore) + scanner optics (SCAN_PX, in output
+  // pixels: a scan is never crisp at its own pixel) + vintage softness (Texture < 0,
+  // SOFT_UM). Gaussian-equivalent variance p.clar.z (px²), computed in inputUniform.
+  // Not on clipped light (alpha): blurring a thin clipped source would drain the halation it feeds.
+  if (p.clar.z > 0.0) {
     let s0 = at(pos);
     var c0 = s0.rgb;
-    // 1. Taking lens: Gaussian-equivalent sigma OPT_LENS_UM. Four diagonal bilinear
-    //    taps at ±o make the separable kernel [o/2, 1-o, o/2] (variance o per axis);
-    //    blended by a for variance a*o = sigma² (px). Linear light, as optics.
-    let s2 = (${wf(OPT_LENS_UM)} * k) * (${wf(OPT_LENS_UM)} * k);
-    let o = clamp(s2, 0.5, 1.0);
-    // Not on clipped light (alpha): blurring a thin clipped source would drain the
-    // halation it feeds, more at 12 MP than in the preview.
-    let a = min(s2 / o, 1.0) * p.opt.y * (1.0 - s0.a);
-    var bx = box4(pos, o);
+    let a = 1.0 - s0.a;
+    var bx = soft(pos, p.clar.z);
     if (p.dR > 0.0 && r > 0.5) {               // CA: R and B were sampled elsewhere, blur them there
       let u = vec2<f32>(d.x / r, d.y / r * ${ANISO_Y});
       let qR = pos + u * (p.dR * g); let qB = pos + u * (p.dB * g);
       c0 = vec3<f32>(at(qR).r, c0.g, at(qB).b);
-      bx = vec3<f32>(box4(qR, o).r, bx.g, box4(qB, o).b);
+      bx = vec3<f32>(soft(qR, p.clar.z).r, bx.g, soft(qB, p.clar.z).b);
     }
     c += (bx - c0) * a;
+  }
+  // Halo removal (OPT_* in µm on the 36 mm frame). A phone frame carries its ISP's
+  // signature: unsharp-mask halos (bench: in-focus edges +6..9% overshoot,
+  // -9% undershoot, MTF > 1 at 5-15 cy/mm). A camera lens on film has none.
+  // 18 taps; reach 80 µm (≤ 10 px at 12 MP, inside the tile pad).
+  if (p.opt.y > 0.0) {
+    let k = p.opt.x;
     // 2. Halo removal. Edge normal from the first harmonic of an 8-tap ring;
     //    plateaus 50 / 80 µm out on each side; a pixel beyond the plateau
     //    envelope [lo, hi] is pulled back onto it. Not a halo (kept): no real
@@ -254,6 +269,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
  * restore strength (halo removal + taking lens), on by default.
  */
 export function inputUniform(W, H, p3, x0, y0, w, h, scale, lens, clarity = 0, restore = 1, texture = 0) {
+  const kpx = Math.max(W, H) / FRAME_UM;   // frame px per µm
   const fine = Math.min(Math.max(restore * TEXTURE_BASE - TEXTURE_SPAN * texture, -0.8), 1);
   const geo = lensGeometry(W, H, lens), M = P3_TO_REC2020;
   return new Float32Array([
@@ -262,7 +278,8 @@ export function inputUniform(W, H, p3, x0, y0, w, h, scale, lens, clarity = 0, r
     geo.dR, geo.dB, geo.blur, geo.depth,
     scale, p3 ? 1 : 0, w, h,
     ...M[0], 0, ...M[1], 0, ...M[2], 0,
-    CLARITY_UM / (FRAME_UM / Math.max(W, H)), clarity * CLARITY_MAX, 0, 0,
+    CLARITY_UM / (FRAME_UM / Math.max(W, H)), clarity * CLARITY_MAX,
+    restore * (OPT_LENS_UM * kpx) ** 2 + SCAN_PX ** 2 + (SOFT_UM * Math.max(-texture, 0) * kpx) ** 2, 0,
     Math.max(W, H) / FRAME_UM, restore, fine, FINE_K * (1 - TEXTURE_SOFT_K * Math.max(-texture, 0)),
   ]);
 }

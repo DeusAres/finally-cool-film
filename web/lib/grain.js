@@ -52,6 +52,8 @@ import { srgbToLinear, linearToSrgb, REC2020_TO_P3, LUMA_SRGB } from './color.js
 // the WGSL gets them by interpolation.
 // ACES-style soft gamut compression (rgc): threshold, the distance that maps to the edge, power.
 const RGC = { thr: 0.9, lim: 1.3, pw: 1.2 };
+// Smallest grain cell, in output pixels (see cell() in GRAIN_WGSL).
+const GRAIN_MIN_PX = 1.6;
 // Sky-blue rotation (skyHue): OKLab hue 235° direction, half-width (60°), rotation (5.5°), chroma ramp.
 const SKY = { dir: [-0.5735764, -0.8191520], width: 1.0471976, theta: 0.0959931, c0: 0.015, c1: 0.045 };
 // Rows: linear RGB → LMS (OKLab M1 composed with the primaries, rows normalised so white has a = b = 0), and back.
@@ -117,8 +119,15 @@ fn sstep(a: f32, b: f32, x: f32) -> f32 { let t = clamp((x - a) / (b - a), 0.0, 
 // falls as 1/√(1 + 0.59 r²), r = pixel / cell (fit of box-averaged value noise),
 // so every resolution shows the same grain once viewed at the same size.
 fn bpx(k: f32) -> f32 { let r = P[7] / (P[9] * k); return inverseSqrt(1.0 + 0.59 * r * r); }
-// Grain field with cells k × P[9] µm (never smaller than a pixel), as one pixel sees it.
-fn cell(um: vec2<f32>, k: f32, o: f32, s: u32) -> f32 { return vnoise(um / max(P[9] * k, P[7]) + o, s); }
+// Grain field with cells k × P[9] µm, as one pixel sees it. Never finer than
+// GRAIN_MIN_PX pixels: a scanner's optics spread even the finest grain over more
+// than one pixel (1-px cells read as a phone sensor's noise). Each field's lattice
+// is rotated by its own angle (from o): no axis-aligned value-noise structure.
+fn cell(um: vec2<f32>, k: f32, o: f32, s: u32) -> f32 {
+  let th = 0.4636476 + 0.137 * o; let cs = cos(th); let sn = sin(th);
+  let ru = vec2<f32>(cs * um.x - sn * um.y, sn * um.x + cs * um.y);
+  return vnoise(ru / max(P[9] * k, ${wf(GRAIN_MIN_PX)} * P[7]) + o, s);
+}
 fn grainField(um: vec2<f32>, k: f32, o: f32, s: u32) -> f32 { return bpx(k) * cell(um, k, o, s); }
 
 fn dec(v: vec3<f32>) -> vec3<f32> { return select(pow((v + 0.055) / 1.055, vec3<f32>(2.4)), v / 12.92, v <= vec3<f32>(0.04045)); }
