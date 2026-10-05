@@ -214,7 +214,14 @@ fn printLook(c: vec3<f32>, s: f32) -> vec3<f32> {
   var ab = lab.yz * (1.0 + s * (kv - 1.0));
   ab += s * (vec2<f32>(${wf(PRINT.shA)}, ${wf(PRINT.shB)}) * lo + vec2<f32>(${wf(PRINT.hiA)}, ${wf(PRINT.hiB)}) * hi
              + vec2<f32>(0.25, 0.6 * mid) * ${wf(PRINT.warm)});
-  return toGamut(l, fromOk(vec3<f32>(L, ab)));
+  // Soft gamut stop: a colour that would leave the gamut goes only 85% of the way to its
+  // edge (continuous at t = 1/0.85), so warm saturated tones are never flattened onto a
+  // channel at 0 or 255 (measured: hard stop left 7% of basket's pixels with B = 0).
+  let r = fromOk(vec3<f32>(L, ab));
+  let gl = select(vec3<f32>(1e9), l / (l - r), r < vec3<f32>(0.0));
+  let gh = select(vec3<f32>(1e9), (1.0 - l) / (r - l), r > vec3<f32>(1.0));
+  let t = min(1.0, 0.85 * min(min(min(gl.x, gl.y), gl.z), min(min(gh.x, gh.y), gh.z)));
+  return encs(l + t * (r - l));
 }
 
 @compute @workgroup_size(256)
@@ -376,5 +383,12 @@ export function printLookCPU(px, p3, s) {
   const g = 1 + s * (kv - 1);
   const a = a0 * g + s * (PRINT.shA * lo + PRINT.hiA * hi + 0.25 * PRINT.warm);
   const b = b0 * g + s * (PRINT.shB * lo + PRINT.hiB * hi + 0.6 * mid * PRINT.warm);
-  toGamutCPU(px, l, fromOkCPU(L, a, b, sp));
+  const r = fromOkCPU(L, a, b, sp);   // soft gamut stop, as printLook
+  let t = 1e9;
+  for (let c = 0; c < 3; c++) {
+    if (r[c] < 0) t = Math.min(t, l[c] / (l[c] - r[c]));
+    if (r[c] > 1) t = Math.min(t, (1 - l[c]) / (r[c] - l[c]));
+  }
+  t = Math.min(1, 0.85 * t);
+  for (let c = 0; c < 3; c++) px[c] = linearToSrgb(l[c] + t * (r[c] - l[c]));
 }
