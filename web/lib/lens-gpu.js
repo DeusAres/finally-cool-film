@@ -198,7 +198,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   // inhibitor diffusion at edges). Edge-aware: taps more than ~1 stop away
   // barely count, so strong edges get no halo; texture gets the lift. Taps
   // read the full-frame texture in frame coordinates: tiles stay seamless.
-  if (p.clar.y > 0.0) {
+  if (p.clar.y != 0.0) {                       // < 0: towards the edge-aware local mean, the soft analog print look
     let l0 = log2(max(dot(c, LW), 1e-5));
     let o = max(0.35 * p.clar.x, 0.5);            // prefilter: each tap is a 4-tap box, no aliasing at 48 MP
     var sw = 1.0; var sl = l0;

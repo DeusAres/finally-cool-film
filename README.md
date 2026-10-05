@@ -31,7 +31,7 @@ di pellicola → stampa → scansione, nel browser via WebAssembly + WebGPU. Foc
 - **Texture** (−1..+1, dettaglio fine 15–60 µm): sotto zero il micro-dettaglio da ISP viene compresso verso una media
   edge-aware, e il peso di range si allarga così che anche i bordi si ammorbidiscono un po', come con una lente vintage;
   sopra zero il dettaglio viene restituito, con un limite.
-- **Clarity** (adiacenza della pellicola, ~150 µm): contrasto locale in luminanza log, con tap prefiltrati (niente aliasing
+- **Chiarezza** (−1..+1, adiacenza della pellicola, ~150 µm; negativa = resa morbida da stampa analogica): contrasto locale in luminanza log, con tap prefiltrati (niente aliasing
   né rumore all'export), pesi che ignorano i bordi forti (niente aloni) e maschera sui mezzitoni (ombre e alte luci invariate).
 - **Polvere e graffi** (`web/lib/dust.js`): procedurali, niente texture. Granelli irregolari (alcuni sfocati), fibre a curvatura
   casuale, rari graffi lungo lo scorrimento della pellicola, in µm sul fotogramma 36 mm, quindi identici in anteprima ed export.
