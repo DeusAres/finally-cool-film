@@ -1,5 +1,5 @@
 import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, to8, clipMask, writeClipAlpha, run } from './lib/common.js';
-import { transferChart, readTransfer, buildTone, autoTone, scanLevels } from './lib/tone.js';
+import { transferChart, readTransfer, buildTone, autoTone, scanLevels, greyBalance } from './lib/tone.js';
 import { sleep, store } from './lib/util.js';
 import { LIN8, LUMA_P3, LUMA_SRGB } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
@@ -31,6 +31,10 @@ let engineCalib = '';       // JSON of the calibration params `engine` was built
 let engineParams = '';      // JSON last given to `engine.update` (re-sending it is a no-op)
 let photo = null;           // { file, bitmap, preview, after }
 let transfer = null, transferKey = '';   // measured grey transfer of the pipeline (per calibration)
+// Grey balance of the unfiltered enlarger (Magenta/Giallo at 0). Balancing each
+// calibration's own transfer made greys neutral again and cancelled the cast the
+// filter sliders ask for; this one only removes the film toe's own cast.
+let balance0 = null;
 let tone = null, toneKey = '';           // LUTs for the current transfer + look + ev
 let rendering = false, dirty = false, exporting = false, renderCount = 0;
 
@@ -152,6 +156,7 @@ async function ensureTone(u) {
     updateEngine(renderParamsJson(u, true));
     transfer = readTransfer(await run(engine, chart, gpu), chart.w);
     transferKey = engineCalib;
+    if (u.mshift === 0 && u.yshift === 0) balance0 = greyBalance(transfer);
     log(`transfer measured ${Math.round(performance.now() - t)} ms: white Y ${transfer.white.toFixed(3)}, black ${transfer.floor.toFixed(4)}`);
   }
   const levels = photo?.levels;
@@ -167,6 +172,7 @@ async function ensureTone(u) {
       const n = tone.packed.length / 2 - 1, G = 2 ** (raw.baseline + u.ev);
       for (let i = 0; i <= n; i++) { tone.packed[i] = 1; tone.packed[n + 1 + i] = G * (i / n) ** 2; }
     }
+    if (balance0) tone.balance = balance0;
     toneKey = key2;
   }
 }
