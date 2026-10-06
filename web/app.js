@@ -686,7 +686,7 @@ const FORMAT = {
   falloff: pct,
   texture: (v) => `${sign(v)}${pct(v)}`, clarity: pctOff, dust: pctOff, print: pctOff, fade: pctOff,
 };
-const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 1, halation: 1, texture: 0.3, clarity: 0.3, print: 1, fade: 0.6, ca: 0, vignette: 0, falloff: 0.4, dust: 0 };
+const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 0.4, halation: 1, texture: 0.2, clarity: 0.1, print: 0.8, fade: 0.5, ca: 1, vignette: 0.65, falloff: 0.4, dust: 0.27 };
 const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }
 
@@ -706,7 +706,7 @@ $('pick').addEventListener('change', (e) => { const f = e.target.files[0]; e.tar
 $('newPhoto').addEventListener('click', () => $('pick').click());
 $('auto').addEventListener('click', () => runAuto());
 $('export').addEventListener('click', exportFull);
-$('border').checked = store.get('fcf_border') === '1';
+$('border').checked = store.get('fcf_border') !== '0';   // on by default
 $('border').addEventListener('change', () => store.set('fcf_border', $('border').checked ? '1' : '0'));
 syncOutputs();
 
