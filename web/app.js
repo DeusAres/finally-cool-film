@@ -79,6 +79,8 @@ function renderParams(u, { noGrain = false } = {}) {
       // the region, so every export tile drew a different one (measured: the
       // same pixel varied ~0.3 levels between tiles, and seams showed at tile
       // boundaries). Our grain supplies the texture.
+      // DIR couplers: per-pixel inhibition kept (colour, contrast), spatial spread off (edge effect).
+      dir_couplers: { diffusion_size_um: 0.01, diffusion_tail_weight: 0 },
       glare: { roughness: 0 },
     },
     print_render: { glare: { roughness: 0 } },

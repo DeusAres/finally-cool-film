@@ -291,7 +291,8 @@ export function inputUniform(W, H, p3, x0, y0, w, h, scale, lens, clarity = 0, r
     scale, p3 ? 1 : 0, w, h,
     ...M[0], 0, ...M[1], 0, ...M[2], 0,
     MICRO_UM * kpx, texture * MICRO_MAX,
-    restore * (OPT_LENS_UM * kpx) ** 2 + SCAN_PX ** 2, clarity,
-    kpx, restore, restore * FINE_STRENGTH, FINE_K,
+    // Off (user's choice after A/B on the debug build): lens + scanner blur, halo removal, fine-detail compression.
+    0, clarity,
+    kpx, 0, 0, FINE_K,
   ]);
 }
