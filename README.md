@@ -25,6 +25,9 @@ di pellicola → stampa → scansione, nel browser via WebAssembly + WebGPU. Foc
 - **Esporta**: piena risoluzione (max 12.5 MP) a tile 1024 px, una striscia alla volta passata in streaming a jpegli
   (worker, distance 1.0, 4:4:4, baseline sopra 6 MP perché il progressive tiene tutti i coefficienti DCT in heap),
   EXIF dell'originale preservati, download diretto.
+- **IG** (solo foto verticali): export per Instagram a 1080 px di larghezza (3:4 → 1080 × 1440), senza ritaglio, bordo
+  incluso nella larghezza. L'intera pipeline gira a quella dimensione, così la grana nasce alla risoluzione finale: resa a
+  12 MP e poi ridotta si media via; a 1080 sopravvive alla ricompressione di Instagram (test interni, compressione simulata).
 - **Pipeline GPU**: la foto va sulla GPU una volta, come texture 8-bit; lens + ricostruzione tono + matrice colore girano
   come primo pass della catena del motore (shader in `lens-gpu.js`, `Engine.process_frame`) e l'uscita torna già RGBA 8-bit
   tramite la LUT di stampa. Nessun frame float attraversa JS↔wasm: ~4 ms di CPU per frame invece di ~100.

@@ -17,6 +17,7 @@ const FILM_FORMAT_MM = 35;        // engine default; sets the physical pixel siz
 const EXPORT_TILE = 1024;         // export tile core size (px)
 const EXPORT_PAD = 128;           // tile overlap: covers halation / DIR diffusion reach at 12 MP
 const MAX_EXPORT_PIXELS = 12.5e6; // keeps native 12 MP iPhone frames; 48 MP gets downscaled (20 MP crashed the grain exporter)
+const IG_WIDTH = 1080;            // Instagram feed width (3:4 portrait = 1080 × 1440)
 const JPEG_DISTANCE = 1.0;        // butteraugli distance for jpegli
 const PROGRESSIVE_PIXEL_LIMIT = 6e6; // progressive keeps all DCT coeffs in the wasm heap (~29 B/px): baseline above
 const BORDER_FRACTION = 0.01;     // white mat, fraction of the long side, all four sides (as in grain pro)
@@ -496,6 +497,7 @@ async function loadPhoto(file) {
     fitToScreen();
     await runAuto();
     $('export').disabled = false; $('auto').disabled = false; $('newPhoto').hidden = false;
+    $('exportIG').hidden = !(photo.preview.h > photo.preview.w); $('exportIG').disabled = false;   // IG export: verticals only
   } catch (e) {
     log('load error: ' + (e?.stack || e));
     status('Errore: ' + (e?.message || e));
@@ -555,10 +557,13 @@ function download(blob, name) {
   setTimeout(() => { if (lastDownloadUrl === url) { URL.revokeObjectURL(url); lastDownloadUrl = null; } }, 60000);
 }
 
-async function exportFull() {
+// `ig`: Instagram export (vertical photos): the whole pipeline runs at IG_WIDTH px wide,
+// mat included, no crop, so grain is born at the final size (measured: rendered at
+// 12 MP and downscaled it averages away; at 1080 it survives IG's recompression).
+async function exportFull(ig = false) {
   if (!photo || exporting) return;
   exporting = true;
-  $('export').disabled = true;
+  $('export').disabled = $('exportIG').disabled = true;
   setBusy('export');
   // A preview render in flight shares the engine and the GPU frame: let it finish first.
   while (rendering) await sleep(20);
@@ -567,8 +572,11 @@ async function exportFull() {
   try {
     const { bitmap } = photo, rawPv = photo.preview.raw;
     const fw = rawPv ? rawPv.fullW : bitmap.width, fh = rawPv ? rawPv.fullH : bitmap.height;
-    const scale = Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (fw * fh)));
-    const longCap = Math.max(fw, fh) * scale;
+    const bFrac = $('border').checked ? BORDER_FRACTION : 0;
+    // IG: (image + 2 mats) = IG_WIDTH; mat = bFrac of the image's long side (as below).
+    const scale = ig ? Math.min(1, IG_WIDTH / (fw + 2 * bFrac * Math.max(fw, fh)))
+      : Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (fw * fh)));
+    const longCap = Math.round(Math.max(fw, fh) * scale);
     status('Esporto: decodifica…');
     let frame;   // { data (CPU path only), w, h, p3, raw }
     if (rawPv) {
@@ -589,7 +597,7 @@ async function exportFull() {
     }
     const { w, h, p3 } = frame;
     const progressive = w * h > PROGRESSIVE_PIXEL_LIMIT ? 0 : 2;
-    const border = $('border').checked ? Math.round(Math.max(w, h) * BORDER_FRACTION) : 0;
+    const border = bFrac ? (ig ? (IG_WIDTH - w) >> 1 : Math.round(Math.max(w, h) * bFrac)) : 0;
     log(`export start ${w}x${h} p3=${p3} progressive=${progressive} border=${border}`);
 
     await ensureTone(u);
@@ -639,7 +647,7 @@ async function exportFull() {
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
     log(`export done ${(blob.size / 1e6).toFixed(1)} MB in ${secs} s`);
     status(`Esportata: ${result.width}×${result.height}, ${(blob.size / 1e6).toFixed(1)} MB in ${secs} s`);
-    download(blob, `${base}_gold200${border ? '_bordo' : ''}.jpg`);
+    download(blob, `${base}_gold200${ig ? '_ig' : ''}${border ? '_bordo' : ''}.jpg`);
   } catch (e) {
     encoder.postMessage({ cmd: 'abort' });
     log('export error: ' + (e?.stack || e));
@@ -648,7 +656,7 @@ async function exportFull() {
     setBusy(null);
     exporting = false;
     if (dustStripCanvas) { dustStripCanvas.width = dustStripCanvas.height = 0; dustStripCanvas = null; }   // release the backing store
-    $('export').disabled = false;
+    $('export').disabled = $('exportIG').disabled = false;
     try {
       if (gpu) {   // back to the preview frame
         if (photo.preview.raw) uploadRaw(sf, photo.preview.raw);
@@ -711,7 +719,8 @@ $('reseed').addEventListener('click', () => {
 $('pick').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadPhoto(f); });
 $('newPhoto').addEventListener('click', () => $('pick').click());
 $('auto').addEventListener('click', () => runAuto());
-$('export').addEventListener('click', exportFull);
+$('export').addEventListener('click', () => exportFull());
+$('exportIG').addEventListener('click', () => exportFull(true));
 $('border').checked = store.get('fcf_border') !== '0';   // on by default
 $('border').addEventListener('change', () => store.set('fcf_border', $('border').checked ? '1' : '0'));
 syncOutputs();
