@@ -105,11 +105,13 @@ function monotoneSpline(P, M) {
  *   spread evenly and white is approached gently (no band where the iPhone
  *   clipped); with full rolloff white lands just below 1, like paper.
  */
-const MID_HEADROOM = XW - 1.1;       // mids stay ≥ 1.1 EV below white however far ev goes
+const MID_HEADROOM = XW - 1.1;
+const ROLLOFF_EV = 0.6;               // display white drop at Alte luci 100 (was 0.06 EV: no visible range)       // mids stay ≥ 1.1 EV below white however far ev goes
 
 function displayCurve(ev, rolloff) {
   const lift = 0.9 * ev;
-  const mid = lift > 0 ? MID_HEADROOM * Math.tanh(lift / MID_HEADROOM) : lift, white = XW - 0.06 * rolloff;
+  // Alte luci lowers display white by up to ROLLOFF_EV (squared: gentle at the default, real at 100).
+  const mid = lift > 0 ? MID_HEADROOM * Math.tanh(lift / MID_HEADROOM) : lift, white = XW - ROLLOFF_EV * rolloff * rolloff;
   const shadows = Math.min(mid - 0.25 * 3.5, -3.5 + 0.15 * ev);
   const secant = (white - mid) / XW;
   return monotoneSpline(
@@ -124,8 +126,9 @@ function displayCurve(ev, rolloff) {
 // the hue swings to red/magenta and the chroma collapses (measured on an
 // iPhone original: hue 51° → 36°, chroma ×0.56 at L* 10–20). So the print
 // curve fades out below LOOK_FADE (EV under mid grey); there the inversion,
-// which keeps hue exactly, takes over.
-const LOOK_FADE = [-5, -2];
+// which keeps hue exactly, takes over. From -1 EV (was -2): the curve's toe closed
+// shadow detail (hair, indoor shade at -2..-4 EV) as soon as Contrasto went up.
+const LOOK_FADE = [-4, -1];
 
 /** Scene-linear value for a display-linear value dc that has been through the display curve. */
 function sceneValue(T, dc, look) {
@@ -218,11 +221,12 @@ const fromLstar = (L) => (L > 8 ? ((L + 16) / 116) ** 3 : Math.max(0, L) / 903.3
  * and it separates the flat iPhone frames, 91.8–93.9, from normal ones, 95.0–98.0,
  * which p99 does not). Targets from the KG200 refs: p1 2.8–3.1 (→ 3.5, the top of
  * our normal frames, so they stay put); p99.9 95.5–100 (→ 95.5). Caps in output
- * L*: black lift removed ≤ 8, white raised ≤ 6. A hazy frame (p1 ~16) keeps half
+ * L*: black lift removed ≤ 3, white raised ≤ 2 (were 8 / 6: they crushed shadows and
+ * pushed lights back up against Alte luci). A hazy frame (p1 ~16) keeps half
  * its veil: the scene's own aerial perspective, not a stretch into mud.
  * Returns { black, white } in pre-scan L* (scanCurve's input) for buildTone.
  */
-const LV = { black: 3.5, white: 95.5, maxBlack: 8, maxWhite: 6, pBlack: 0.01, pWhite: 0.999 };
+const LV = { black: 3.5, white: 95.5, maxBlack: 3, maxWhite: 2, pBlack: 0.01, pWhite: 0.999 };
 export function scanLevels(L) {
   const B = 2000, h = new Uint32Array(B + 1);
   for (const v of L) h[Math.max(0, Math.min(B, Math.round(v * B / 100)))]++;

@@ -8,6 +8,7 @@ import { isRaw, loadRaw, uploadRaw, rawAuto, rawPreviewRGBA } from './lib/raw.js
 import { iccSegment } from './lib/icc.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, inputUniform } from './lib/lens-gpu.js';
+import { fitScan, invertCPU } from './lib/scan.js';
 import { dustField, drawDust, compositeDust } from './lib/dust.js';
 import { GRAIN_WGSL, grainParams, outputColourCPU, scanSaturation, printLookCPU, fadeCPU } from './lib/grain.js';
 
@@ -38,6 +39,7 @@ let engineCalib = '';       // JSON of the calibration params `engine` was built
 let engineParams = '';      // JSON last given to `engine.update` (re-sending it is a no-op)
 let photo = null;           // { file, bitmap, preview, after }
 let transfer = null, transferKey = '';   // measured grey transfer of the pipeline (per calibration)
+let scanP = null;                        // scanner inversion of the negative, fitted per calibration (scan.js)
 // Grey balance of the unfiltered enlarger (Magenta/Giallo at 0). Balancing each
 // calibration's own transfer made greys neutral again and cancelled the cast the
 // filter sliders ask for; this one only removes the film toe's own cast.
@@ -64,7 +66,7 @@ function castGains(data) {
 const ui = () => ({
   ev: +$('ev').value, look: +$('look').value, rolloff: +$('rolloff').value,
   mshift: +$('mshift').value, yshift: +$('yshift').value,
-  grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value, print: +$('print').value, fade: +$('fade').value, fadeTint: +$('fadeTint').value,
+  grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value, print: +$('print').value, fade: +$('fade').value,
   ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value,
 });
 // CA slider is quadratic: realistic (subtle) amounts get most of the travel.
@@ -88,7 +90,9 @@ function renderParams(u, { noGrain = false } = {}) {
     // them into Rec.2020 (film colours fit there) and the output pass converts
     // to P3 with a soft gamut compression (grain.js toP3); plain P3 output
     // hard-clipped dark warm browns (B = 0, hue swung red).
-    io: outP3() ? { output_color_space: 'ITU-R BT.2020', output_gamut_compress: { algorithm: 'off' } } : { output_color_space: 'sRGB', output_gamut_compress: { algorithm: 'cam16ucs' } },
+    // Direct film scan: the engine returns the developed negative (inverted in the output pass,
+    // scan.js); no print paper. Gamut compression would act on the negative, so it is off.
+    io: { output_color_space: outP3() ? 'ITU-R BT.2020' : 'sRGB', output_gamut_compress: { algorithm: 'off' }, scan_film: true },
     // The engine's scanner unsharp mask works in pixels (0.7 px: crisper at
     // preview size than on a 12 MP export) and inflated pixel-level detail
     // ×1.3–1.6 (measured): a phone's crunch, not film. Texture comes from the
@@ -175,7 +179,11 @@ async function ensureTone(u) {
   if (transferKey !== engineCalib) {
     const t = performance.now(), chart = transferChart();
     updateEngine(renderParamsJson(u, true));
-    transfer = readTransfer(await run(engine, chart, gpu), chart.w);
+    // Direct film scan (no paper): fit the scanner inversion on the raw negative chart, then
+    // measure the inverted chain, which is what the output pass shows.
+    const out = await run(engine, chart, gpu);
+    scanP = fitScan(readTransfer(out, chart.w)); invertCPU(out, scanP);
+    transfer = readTransfer(out, chart.w);
     transferKey = engineCalib;
     if (u.mshift === 0 && u.yshift === 0) balance0 = greyBalance(transfer);
     log(`transfer measured ${Math.round(performance.now() - t)} ms: white Y ${transfer.white.toFixed(3)}, black ${transfer.floor.toFixed(4)}`);
@@ -212,7 +220,7 @@ async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, textur
   if (gpu) {
     return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3 && !frame.raw, x0, y0, w, h, 1, lens, clarity, frame.raw ? 0 : 1, texture, photo.wb),
       tone.packed, w, h, tone.out8,
-      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0], tone.balance, photo.vibrance || 0, print, fade, ui().fadeTint), target);
+      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0], tone.balance, photo.vibrance || 0, print, fade, scanP), target);
   }
   const rgb = lensActive(lens)
     ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lensGeometry(frame.w, frame.h, lens), tone)
@@ -222,12 +230,12 @@ async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, textur
   const px = new Float32Array(3), p3 = outP3();
   for (let p = 0, j = 0; p < w * h; p++, j += 3) {
     px[0] = out[j]; px[1] = out[j + 1]; px[2] = out[j + 2];
-    outputColourCPU(px, p3, tone.balance, photo.vibrance || 0);
+    outputColourCPU(px, p3, tone.balance, photo.vibrance || 0, scanP);
     let r8 = to8(px[0], tone.out8), g8 = to8(px[1], tone.out8), b8 = to8(px[2], tone.out8);
     if (print > 0 || fade > 0) {   // same post-LUT steps as the GPU output pass (grain.js printLook, Nero)
       px[0] = r8 / 255; px[1] = g8 / 255; px[2] = b8 / 255;
       if (print > 0) printLookCPU(px, p3, print);
-      if (fade > 0) fadeCPU(px, fade, ui().fadeTint);
+      if (fade > 0) fadeCPU(px, fade);
       r8 = Math.round(px[0] * 255); g8 = Math.round(px[1] * 255); b8 = Math.round(px[2] * 255);
     }
     d32[p] = (r8 | (g8 << 8) | (b8 << 16) | 0xff000000) >>> 0;
@@ -720,9 +728,9 @@ const FORMAT = {
   grain: mult, halation: mult,
   ca: pctOff, vignette: pctOff,
   falloff: pct,
-  texture: (v) => `${sign(v)}${pct(v)}`, clarity: pctOff, dust: pctOff, print: pctOff, fade: pctOff, fadeTint: (v) => `${sign(v)}${pct(v)}`,
+  texture: (v) => `${sign(v)}${pct(v)}`, clarity: pctOff, dust: pctOff, print: pctOff, fade: pctOff,
 };
-const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 0.4, halation: 1, texture: 0.2, clarity: 0.1, print: 0.8, fade: 0.15, fadeTint: -0.3, ca: 1, vignette: 0.65, falloff: 0.4, dust: 0.27 };
+const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 0.4, halation: 1, texture: 0.2, clarity: 0.1, print: 0.8, fade: 0.15, ca: 1, vignette: 0.65, falloff: 0.4, dust: 0.27 };
 const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }
 

@@ -46,6 +46,7 @@
 // taps and drift from the scans.
 
 import { FRAME_UM, wf, wv3, wm3 } from './util.js';
+import { SCAN_WGSL, invertCPU } from './scan.js';
 import { srgbToLinear, linearToSrgb, REC2020_TO_P3, LUMA_SRGB } from './color.js';
 
 // Constants shared by GRAIN_WGSL and its CPU twin (outputColourCPU): one source,
@@ -56,9 +57,9 @@ const RGC = { thr: 0.9, lim: 1.3, pw: 1.2 };
 const GRAIN_MIN_PX = 1.6;
 // Nero (fade): black lift (display-encoded) at slider 1 (0.15 → L* ~13), toe exponent.
 const FADE_MAX = 0.15, FADE_P = 3.5;
-// Tinta nero: how the scanner's shadow lift is tinted (per channel, display RGB, ~zero luma),
-// scaled by the slider: < 0 towards cyan-green (thin negative on a Frontier), > 0 towards olive.
-const FADE_CYAN = [-0.6, 0.15, 0.45], FADE_OLIVE = [0.3, 0.1, -0.9];
+// The scanner's shadow lift is tinted cyan-green, as when a lab scanner pulls up a thin negative:
+// per channel weights (display RGB, ~zero luma) at full strength; the tint grows with Nero.
+const FADE_TINT = [1 - 0.6 * 0.5, 1 + 0.15 * 0.5, 1 + 0.45 * 0.5];
 // Gold toning (OKLab offsets on every pixel, by OKLab L), measured on 9 Gold 200 scans
 // (IG screenshots): neutrals are pure yellow, Lab b* +6 in deep shadows, +12 through
 // shadows and mids, +4 in the lights; a* ~0. bMid at L 0.30-0.62, easing to bHi by 0.90.
@@ -89,12 +90,12 @@ export const GRAIN_WGSL = /* wgsl */`
 // P[11] = 1: the chain output is Rec.2020 → convert to Display P3 here, with
 // ACES-style per-channel soft gamut compression (see toP3); P[12] the paper
 // black (8-bit / 255): grain softly floors there instead of clipping to 0;
-// P[13] = 1: grey balance curves (tone.js greyBalance) from P[18], applied first;
-// P[17] Tinta nero (-1 cyan .. +1 olive), tints the Nero lift (P[16]).
+// P[13] = 1: grey balance curves (tone.js greyBalance) from P[26], applied first;
+// P[17..25] direct-scan inversion fit (scan.js): the engine output is the negative.
 // P[14] scanner saturation strength (vib, 0 = off).
 
 fn bal(c: u32, v: f32) -> f32 {             // grey balance (tone.js greyBalance), P[16..]
-  let f = clamp(v, 0.0, 1.0) * 1024.0; let i = u32(f); let base = 18u + c * 1025u;
+  let f = clamp(v, 0.0, 1.0) * 1024.0; let i = u32(f); let base = 26u + c * 1025u;
   if (i >= 1024u) { return P[base + 1024u]; }
   return mix(P[base + i], P[base + i + 1u], f - f32(i));
 }
@@ -141,6 +142,7 @@ fn grainField(um: vec2<f32>, k: f32, o: f32, s: u32) -> f32 { return bpx(k) * ce
 
 fn dec(v: vec3<f32>) -> vec3<f32> { return select(pow((v + 0.055) / 1.055, vec3<f32>(2.4)), v / 12.92, v <= vec3<f32>(0.04045)); }
 fn encs(v: vec3<f32>) -> vec3<f32> { return select(1.055 * pow(max(v, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055, 12.92 * v, v <= vec3<f32>(0.0031308)); }
+${SCAN_WGSL(17)}
 // One channel's distance from the achromatic axis compressed beyond THR so that
 // LIM (the farthest a film colour lands outside P3) maps exactly to the gamut edge.
 fn rgc(d: f32) -> f32 {
@@ -247,19 +249,17 @@ fn printLook(c: vec3<f32>, s: f32) -> vec3<f32> {
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = id.x + id.y * u32(P[1]);
   if (i >= u32(P[0])) { return; }
-  var e = vec3<f32>(src[3u * i], src[3u * i + 1u], src[3u * i + 2u]);
+  var e = scanInv(vec3<f32>(src[3u * i], src[3u * i + 1u], src[3u * i + 2u]));   // negative → positive (scan.js)
   if (P[13] > 0.5) { e = vec3<f32>(bal(0u, e.x), bal(1u, e.y), bal(2u, e.z)); }
   if (P[11] > 0.5) { e = toP3(e); }
   e = skyHue(e);
   if (P[14] > 0.0) { e = vib(e); }
   var c = vec3<f32>(q(e.x), q(e.y), q(e.z));
   if (P[15] > 0.0) { c = printLook(c, P[15]); }
-  // Nero (fade, P[16]): lifted, matte-print blacks; the toe term (1 - c)^FADE_P
-  // leaves mids and highlights almost where they are (black → ~23/255, L* ~7, mid grey +2 levels at default).
+  // Nero (fade, P[16]): the scanner's lifted blacks, tinted cyan-green (FADE_TINT) in proportion;
+  // the toe term (1 - c)^FADE_P leaves mids and highlights almost where they are.
   if (P[16] > 0.0) {
-    let t = P[17];
-    let w = vec3<f32>(1.0) + select(t * ${wv3(FADE_OLIVE)}, -t * ${wv3(FADE_CYAN)}, t < 0.0);
-    c += P[16] * w * pow(max(vec3<f32>(1.0) - c, vec3<f32>(0.0)), vec3<f32>(${wf(FADE_P)}));
+    c += P[16] * ${wv3(FADE_TINT)} * pow(max(vec3<f32>(1.0) - c, vec3<f32>(0.0)), vec3<f32>(${wf(FADE_P)}));
   }
   if (P[8] > 0.0) {
     let w = u32(P[4]);
@@ -295,13 +295,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
  * Params for GRAIN_WGSL: region (x0, y0, w) of a frame whose long side is
  * `frameLong` px; `amount` is the Grana slider (0 = off), `seed` per photo.
  */
-export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false, black = 0, balance = null, vibrance = 0, print = 0, fade = 0, fadeTint = 0) {
+export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false, black = 0, balance = null, vibrance = 0, print = 0, fade = 0, scanP = null) {
   const umPerPx = FRAME_UM / frameLong;
   // Size grows a little with the amount (a coarser-looking stock); 12 µm at 1.
   const size = 12 * (0.75 + 0.25 * amount);
-  const head = [w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0, black / 255, balance ? 1 : 0, vibrance, print, fade * FADE_MAX, fadeTint];   // vibrance → P[14]
+  const head = [w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0, black / 255, balance ? 1 : 0, vibrance, print, fade * FADE_MAX, ...(scanP || [1, 1, 1, 1, 1, 1, 0.18, 0.18, 0.18])];   // vibrance → P[14]
   const p = new Float32Array(head.length + (balance ? balance.length : 0));
-  p.set(head); if (balance) p.set(balance, head.length);   // balance starts at P[18]
+  p.set(head); if (balance) p.set(balance, head.length);   // balance starts at P[26]
   return p;
 }
 
@@ -309,16 +309,17 @@ export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = fa
 const GRAIN_LEVELS = 13;
 
 // CPU twin of the Nero fade in GRAIN_WGSL; px display-encoded 0..1, in place.
-export function fadeCPU(px, fade, tint = 0) {
-  const b = fade * FADE_MAX, d = tint < 0 ? FADE_CYAN : FADE_OLIVE, k = Math.abs(tint);
-  for (let c = 0; c < 3; c++) px[c] += b * (1 + k * d[c]) * Math.max(1 - px[c], 0) ** FADE_P;
+export function fadeCPU(px, fade) {
+  const b = fade * FADE_MAX;
+  for (let c = 0; c < 3; c++) px[c] += b * FADE_TINT[c] * Math.max(1 - px[c], 0) ** FADE_P;
 }
 
 // CPU twin of the colour steps of GRAIN_WGSL (grey balance, then Rec.2020 → P3),
 // for the no-WebGPU path: `px` is one engine output pixel (sRGB-encoded), in place.
 const RGC_SCL = (RGC.lim - RGC.thr) / (((1 - RGC.thr) / (RGC.lim - RGC.thr)) ** -RGC.pw - 1) ** (1 / RGC.pw);
 const rgcCPU = (d) => { if (d < RGC.thr) return d; const x = (d - RGC.thr) / RGC_SCL; return RGC.thr + RGC_SCL * x / (1 + x ** RGC.pw) ** (1 / RGC.pw); };
-export function outputColourCPU(px, rec2020ToP3, balance, vibrance = 0) {
+export function outputColourCPU(px, rec2020ToP3, balance, vibrance = 0, scanP = null) {
+  if (scanP) invertCPU(px, scanP);   // negative → positive, as scanInv
   if (balance) {
     for (let c = 0; c < 3; c++) {
       const f = Math.min(1, Math.max(0, px[c])) * 1024, i = f | 0, base = c * 1025;
