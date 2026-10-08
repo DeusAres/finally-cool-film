@@ -9,15 +9,14 @@
 // white balance from AsShotNeutral, highlight clip) -> Malvar-He-Cutler demosaic over
 // the DefaultCrop only (or 2x2 superpixel binning when the target is <= half size)
 // -> OpcodeList3 GainMap (lens shading) -> camera -> XYZ (ColorMatrix1/2 interpolated
-// by CCT of AsShotNeutral, DNG spec; ForwardMatrix1/2 likewise when present, then
-// no white estimate is needed) -> Bradford to D65 -> linear Rec.2020.
+// by CCT of AsShotNeutral, DNG spec) -> Bradford to D65 -> linear Rec.2020.
 //
 // Scale: the white-balanced sensor clip level of a neutral maps to 1.0 (diffuse
 // white ~ 1 before BaselineExposure). Values are clamped >= 0. Blown highlights are
 // clipped to neutral. Orientation is NOT applied (see meta.orientation).
 //
 // Unsupported (ignored): ProfileGainTableMap (52543/52544), semantic SubIFDs, XMP,
-// opcodes other than GainMap, OpcodeList1/2.
+// ForwardMatrix-based rendering, opcodes other than GainMap, OpcodeList1/2.
 
 // ---------------------------------------------------------------- TIFF / IFD
 
@@ -246,7 +245,6 @@ function inv3(m) {
 const XYZ_TO_REC2020 = [1.7166512, -0.3556708, -0.2533663, -0.6666844, 1.6164812, 0.0157685, 0.0176399, -0.0427706, 0.9421031];
 const BRADFORD = [0.8951, 0.2664, -0.1614, -0.7502, 1.7135, 0.0367, 0.0389, -0.0685, 1.0296];
 const D65 = [0.95047, 1, 1.08883];
-const D50 = [0.96422, 1, 0.82521];
 
 // EXIF LightSource -> CCT (as in the DNG SDK)
 const ILLUM_TEMP = { 1: 5500, 2: 4150, 3: 2850, 4: 5500, 9: 5500, 10: 6500, 11: 7500, 12: 6430, 13: 5000,
@@ -283,17 +281,6 @@ function xyToCCT(x, y) {
   return 1e6 / 600;
 }
 
-// DNG spec interpolation of a matrix pair by CCT (weight in 1/T, the lower-temperature
-// illuminant first). A single matrix is used as is.
-function blendByCCT(m1, m2, T1, T2, T) {
-  if (!m2 || T1 === T2) return m1;
-  let [A, B, lo, hi] = T1 < T2 ? [m1, m2, T1, T2] : [m2, m1, T2, T1];
-  if (T <= lo) return A;
-  if (T >= hi) return B;
-  const g = (1 / T - 1 / hi) / (1 / lo - 1 / hi);
-  return A.map((a, i) => g * a + (1 - g) * B[i]);
-}
-
 function buildColour(P, ifd, neutral) {
   const cm1 = P.values(ifd, 50721), cm2 = P.values(ifd, 50722);
   if (!cm1) throw new Error('DNG: no ColorMatrix1');
@@ -302,10 +289,17 @@ function buildColour(P, ifd, neutral) {
   const ab = P.values(ifd, 50727) || [1, 1, 1];
   const AB = diag(ab);
   const M1 = mul3(mul3(AB, cc1), cm1);
-  const M2 = cm2 ? mul3(mul3(AB, cc2), cm2) : null;
-  const fm1 = P.values(ifd, 50964), fm2 = P.values(ifd, 50965);   // ForwardMatrix1/2: camera -> XYZ D50
-  const T1 = ILLUM_TEMP[P.one(ifd, 50778, 21)] || 6504, T2 = ILLUM_TEMP[P.one(ifd, 50779, 21)] || 6504;
-  const interp = T => blendByCCT(M1, M2, T1, T2, T);
+  let M2 = cm2 ? mul3(mul3(AB, cc2), cm2) : null;
+  let T1 = ILLUM_TEMP[P.one(ifd, 50778, 21)] || 6504, T2 = ILLUM_TEMP[P.one(ifd, 50779, 21)] || 6504;
+  let A = M1, B = M2;
+  if (B && T1 > T2) { [A, B] = [B, A]; [T1, T2] = [T2, T1]; }
+  const interp = T => {
+    if (!B || T1 === T2) return A;
+    if (T <= T1) return A;
+    if (T >= T2) return B;
+    const g = (1 / T - 1 / T2) / (1 / T1 - 1 / T2);
+    return A.map((a, i) => g * a + (1 - g) * B[i]);
+  };
   // DNG SDK NeutralToXY: iterate CCT <-> matrix until the white point converges.
   let x = 0.3457, y = 0.3585, cct = 5003;
   for (let it = 0; it < 30; it++) {
@@ -318,27 +312,16 @@ function buildColour(P, ifd, neutral) {
     if (done) break;
   }
   cct = xyToCCT(x, y);
+  const camToXYZ = inv3(interp(cct));
+  const W = mulv(camToXYZ, neutral);
+  const k = 1 / W[1];
+  const Wn = [W[0] * k, 1, W[2] * k];
+  const src = mulv(BRADFORD, Wn), dst = mulv(BRADFORD, D65);
+  const adapt = mul3(mul3(inv3(BRADFORD), diag([dst[0] / src[0], dst[1] / src[1], dst[2] / src[2]])), BRADFORD);
   const maxN = Math.max(...neutral);
-  let M;
-  if (fm1) {
-    // ForwardMatrix: white-balanced camera (neutral -> 1,1,1) straight to XYZ D50, so no
-    // white estimate is needed. Our WB'd input is camera / neutral * maxN.
-    const FM = blendByCCT(fm1, fm2, T1, T2, cct);
-    M = mul3(mul3(mul3(XYZ_TO_REC2020, adaptBradford(D50, D65)), FM), diag([1 / maxN, 1 / maxN, 1 / maxN]));
-  } else {
-    const camToXYZ = inv3(interp(cct));
-    const W = mulv(camToXYZ, neutral);
-    const k = 1 / W[1];
-    // camera WB'd RGB (clip=1) -> Rec.2020
-    M = mul3(mul3(mul3(XYZ_TO_REC2020, adaptBradford([W[0] * k, 1, W[2] * k], D65)), camToXYZ), diag(neutral.map(n => n * k / maxN)));
-  }
+  // camera WB'd RGB (clip=1) -> Rec.2020
+  const M = mul3(mul3(mul3(XYZ_TO_REC2020, adapt), camToXYZ), diag(neutral.map(n => n * k / maxN)));
   return { M, cct, whiteXY: [x, y] };
-}
-
-/** Bradford chromatic adaptation matrix from white `from` to white `to` (XYZ). */
-function adaptBradford(from, to) {
-  const src = mulv(BRADFORD, from), dst = mulv(BRADFORD, to);
-  return mul3(mul3(inv3(BRADFORD), diag([dst[0] / src[0], dst[1] / src[1], dst[2] / src[2]])), BRADFORD);
 }
 
 // ---------------------------------------------------------------- GainMap (opcode 9)

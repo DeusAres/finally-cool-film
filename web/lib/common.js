@@ -1,6 +1,7 @@
 // Shared by the app and the benchmark page: engine boot + photo decoding.
 import init, * as sf from '../pkg/spektrafilm_wasm.js';
-import { LIN8, P3_TO_REC2020, displayGain } from './color.js';
+import { LIN8, P3_TO_REC2020 } from './color.js';
+import { applyTone } from './tone.js';
 
 export { sf };
 
@@ -93,8 +94,8 @@ export function forEachStrip(bitmap, fn) {
 
 // ---------- clipped highlights ----------
 // Where the phone clipped (sky through a blind, a window, a lamp) the real
-// light was far brighter than display white. The scan can't show the
-// difference (it is white either way), but halation and scatter spread
+// light was far brighter than display white. The print can't show the
+// difference (it is paper white either way), but halation and scatter spread
 // a few % of the light, so they need it: a slit of sky must be a +6 EV
 // source, not a +2.5 EV one. Clipping is detected per pixel at FULL
 // resolution (a 2 px slit is no longer clipped once the preview averages it
@@ -141,13 +142,13 @@ export function clipMask(bitmap, w, h, longCap = 4096) {
 
 /**
  * Linear engine input for the region (x0, y0, w, h) of 8-bit RGBA `data`
- * (row stride `W`), multiplied by `scale`. With `inverse` the display values are turned
- * into scene light first (color.js displayToScene); without it they are just decoded.
+ * (row stride `W`), multiplied by `scale`. With `tone` (tone.js) the display
+ * values are turned into scene light first; without it they are just decoded.
  */
-export function extractLinear(data, W, p3, x0 = 0, y0 = 0, w = W, h = data.length / 4 / W, scale = 1, inverse = false) {
+export function extractLinear(data, W, p3, x0 = 0, y0 = 0, w = W, h = data.length / 4 / W, scale = 1, tone = null) {
   // CPU path (the app normally does this on the GPU, lens-gpu.js). Matrix as
   // scalars (identity when not P3) so the hot loop has no nested-array lookups.
-  const rgb = new Float32Array(w * h * 3);
+  const rgb = new Float32Array(w * h * 3), px = new Float32Array(3);
   const M = p3 ? P3_TO_REC2020 : [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
   const a0 = M[0][0] * scale, a1 = M[0][1] * scale, a2 = M[0][2] * scale;
   const b0 = M[1][0] * scale, b1 = M[1][1] * scale, b2 = M[1][2] * scale;
@@ -156,31 +157,13 @@ export function extractLinear(data, W, p3, x0 = 0, y0 = 0, w = W, h = data.lengt
   for (let y = y0; y < y0 + h; y++) {
     for (let i = (y * W + x0) * 4, end = i + w * 4; i < end; i += 4, j += 3) {
       let r = LIN8[data[i]], g = LIN8[data[i + 1]], b = LIN8[data[i + 2]];
-      if (inverse) { const k = displayGain(Math.max(r, g, b)); r *= k; g *= k; b *= k; }
+      if (tone) { applyTone(tone, r, g, b, px, 0); r = px[0]; g = px[1]; b = px[2]; }
       rgb[j] = a0 * r + a1 * g + a2 * b;
       rgb[j + 1] = b0 * r + b1 * g + b2 * b;
       rgb[j + 2] = c0 * r + c1 * g + c2 * b;
     }
   }
   return rgb;
-}
-
-/** Output-pack LUT of the GPU chain (4096 entries over 0..1 → 8-bit): identity, the engine output is already display-encoded. */
-export const PACK_LUT = Uint8Array.from({ length: 4096 }, (_, j) => Math.round(255 * j / 4095));
-
-export const THUMB_PX = 256;   // long side of the thumb the engine's auto-exposure / AutoSetup read
-/** Scene-linear thumb of an 8-bit preview in the engine's input space (display→scene inverse, no lens, no exposure). */
-export function jpegThumb({ data, w, h, p3 }, longSide = THUMB_PX) {
-  const s = Math.min(1, longSide / Math.max(w, h)), tw = Math.max(1, Math.round(w * s)), th = Math.max(1, Math.round(h * s));
-  const small = new Uint8Array(tw * th * 4);
-  for (let y = 0; y < th; y++) {
-    const row = Math.min(h - 1, Math.floor((y + 0.5) / s)) * w;
-    for (let x = 0, o = y * tw * 4; x < tw; x++, o += 4) {
-      const i = (row + Math.min(w - 1, Math.floor((x + 0.5) / s))) * 4;
-      small[o] = data[i]; small[o + 1] = data[i + 1]; small[o + 2] = data[i + 2];
-    }
-  }
-  return { rgb: extractLinear(small, tw, p3, 0, 0, tw, th, 1, true), w: tw, h: th };
 }
 
 /** Whole image at `longSide`: engine-ready linear pixels plus the displayable original. */
@@ -190,3 +173,6 @@ export function readPixels(bitmap, longSide = Infinity) {
   const before = new ImageData(data, w, h, p3 ? { colorSpace: 'display-p3' } : undefined);
   return { rgb, w, h, p3, before, data };
 }
+
+/** Engine output → 8-bit: through `out8` (tone.js, 4096 entries over 0..1) or a plain scale. */
+export const to8 = (v, out8) => (out8 ? out8[v <= 0 ? 0 : v >= 1 ? 4095 : (v * 4095 + 0.5) | 0] : v * 255);

@@ -4,9 +4,8 @@
 // input a film simulation actually wants: no phone tone curve to invert, no HDR
 // crunch, the whole highlight range. It goes to the GPU as a half-float frame
 // (sf.alloc_frame_f16), alpha = sensor-clipped weight (feeds halation as the
-// 8-bit path's clip mask does): alpha is the SENSOR value, before any exposure gain.
-// Exposure (BaselineExposure + Esposizione) is applied in the input pass; everything
-// after it is shared with the JPEG path.
+// 8-bit path's clip mask does). The tone LUT for a raw frame is plain exposure
+// (rawTone, see app.js ensureTone); everything after the input pass is shared.
 // Orientation (EXIF 1–8) is applied by index mapping while converting strips,
 // so the full-resolution float image is never copied.
 
@@ -75,17 +74,19 @@ export function uploadRaw(sf, r) {
   }
 }
 
-/** Scene-linear Rec.2020 thumb (sensor values, oriented, no baseline) for the engine's auto-exposure / AutoSetup. */
-export function rawThumb(r, longSide) {
-  const s = Math.min(1, longSide / Math.max(r.w, r.h)), w = Math.max(1, Math.round(r.w * s)), h = Math.max(1, Math.round(r.h * s));
-  const rgb = new Float32Array(w * h * 3);
-  for (let y = 0, o = 0; y < h; y++) {
-    for (let x = 0; x < w; x++, o += 3) {
-      const i = srcIndex(r, Math.min(r.w - 1, Math.floor((x + 0.5) / s)), Math.min(r.h - 1, Math.floor((y + 0.5) / s))) * 3;
-      rgb[o] = r.rgb[i]; rgb[o + 1] = r.rgb[i + 1]; rgb[o + 2] = r.rgb[i + 2];
-    }
-  }
-  return { rgb, w, h };
+/** Scene luminance samples (linear Rec.2020 Y, after BaselineExposure) for Auto. */
+function sceneY(r) {
+  const n = r.sw * r.sh, step = Math.max(1, Math.floor(n / 60000)), g = 2 ** r.baseline;
+  const Y = new Float32Array(Math.ceil(n / step));
+  for (let p = 0, k = 0; p < n; p += step, k++) Y[k] = g * (0.2627 * r.rgb[3 * p] + 0.678 * r.rgb[3 * p + 1] + 0.0593 * r.rgb[3 * p + 2]);
+  return Y.sort();
+}
+
+/** Auto for a raw: partial correction of the median towards a typical scene median (as autoTone). */
+export function rawAuto(r) {
+  const Y = sceneY(r), med = Math.max(Y[Y.length >> 1], 1e-4);
+  const ev = Math.max(-1, Math.min(1.5, 0.6 * Math.log2(0.14 / med)));
+  return { ev: Math.round(ev * 10) / 10 };
 }
 
 /** The 'before' view: the raw as plain Display P3 (exposure + baseline, clipped), RGBA 8-bit. */
