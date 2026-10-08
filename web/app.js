@@ -1,5 +1,5 @@
 import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, to8, clipMask, writeClipAlpha, run } from './lib/common.js';
-import { transferChart, readTransfer, buildTone, autoTone, scanLevels, greyBalance, buildRawTone } from './lib/tone.js';
+import { transferChart, readTransfer, buildTone, autoTone, scanLevels, buildRawTone } from './lib/tone.js';
 import { sleep, store } from './lib/util.js';
 import { LIN8, LUMA_P3, LUMA_SRGB, srgbToLinear } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
@@ -36,12 +36,8 @@ let engine = null;          // sf.Engine for the current photo + calibration
 let engineCalib = '';       // JSON of the calibration params `engine` was built with
 let engineParams = '';      // JSON last given to `engine.update` (re-sending it is a no-op)
 let photo = null;           // { file, bitmap, preview, after }
-let transfer = null, transferKey = '';   // measured grey transfer of the pipeline (per calibration)
+let transfer = null, transferKey = '';   // measured grey transfer of the pipeline (keyed on calibration, output space, halation, gpu)
 let scanP = null;                        // scanner inversion of the negative, fitted per calibration (scan.js)
-// Grey balance of the unfiltered enlarger (Magenta/Giallo at 0). Balancing each
-// calibration's own transfer made greys neutral again and cancelled the cast the
-// filter sliders ask for; this one only removes the film toe's own cast.
-let balance0 = null;
 let tone = null, toneKey = '';           // LUTs for the current transfer + look + ev
 let rendering = false, dirty = false, exporting = false, renderCount = 0;
 
@@ -70,8 +66,8 @@ const ui = () => ({
 // CA slider is quadratic: realistic (subtle) amounts get most of the travel.
 const lensOf = (u) => ({ ca: u.ca * u.ca, vignette: u.vignette, falloff: u.falloff });
 
-// Enlarger filtration is baked in at engine construction (calibration).
-// No print, no enlarger: the colour filters are the scanner's colour correction (scanFiltered).
+// Engine construction params (calibration): neutral filtration, no print.
+// The colour filters are the scanner's colour correction (scanFiltered).
 const calibParams = () => ({ enlarger: { m_filter_shift: 0, y_filter_shift: 0 } });
 // Magenta↔Verde / Giallo↔Blu: scanner channel gains on the inverted exposure, EV per slider unit.
 const FILTER_EV = 0.005;
@@ -85,7 +81,7 @@ function scanFiltered(u) {
 // Everything else is read at render time and goes through `engine.update`.
 // Tone is handled by tone.js on the input (scene reconstruction) and output
 // (white point), so the engine runs at fixed exposure with no auto-exposure,
-// no print-curve morph and no scanner levels: the paper's real black stays.
+// no print-curve morph and no scanner levels (levels are ours, tone.js).
 const outP3 = () => !!photo?.preview.p3;
 
 function renderParams(u, { noGrain = false } = {}) {
@@ -183,7 +179,9 @@ function uploadFrame(data, w, h, mask = null) {
 
 async function ensureTone(u) {
   ensureEngine(u);
-  if (transferKey !== engineCalib) {
+  // The measurement depends on the engine output space, halation and backend: re-measure only when one changes.
+  const tKey = `${engineCalib}|${outP3()}|${u.halation}|${gpu}`;
+  if (transferKey !== tKey) {
     const t = performance.now(), chart = transferChart();
     updateEngine(renderParamsJson(u, true));
     // Direct film scan (no paper): fit the scanner inversion on the raw negative chart, then
@@ -191,8 +189,7 @@ async function ensureTone(u) {
     const out = await run(engine, chart, gpu);
     scanP = fitScan(readTransfer(out, chart.w)); invertCPU(out, scanP);
     transfer = readTransfer(out, chart.w);
-    transferKey = engineCalib;
-    if (u.mshift === 0 && u.yshift === 0) balance0 = greyBalance(transfer);
+    transferKey = tKey;
     log(`transfer measured ${Math.round(performance.now() - t)} ms: white Y ${transfer.white.toFixed(3)}, black ${transfer.floor.toFixed(4)}`);
   }
   const levels = photo?.levels;
@@ -205,7 +202,6 @@ async function ensureTone(u) {
     tone = raw
       ? buildRawTone(transfer, { ev: u.ev, look: u.look, rolloff: u.rolloff, baseline: raw.baseline, levels })
       : buildTone(transfer, { look: u.look, ev: u.ev, rolloff: u.rolloff, levels });
-    if (balance0) tone.balance = balance0;
     toneKey = key2;
   }
 }
@@ -229,10 +225,10 @@ async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, textur
     : extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, 1, tone);
   const out = engine.process(rgb, w, h), d32 = new Uint32Array(target.buffer, target.byteOffset, w * h);
   // Same colour steps as the GPU output pass: grey balance, and Rec.2020 → P3 for P3 photos.
-  const px = new Float32Array(3), p3 = outP3();
+  const px = new Float32Array(3), p3 = outP3(), sf8 = scanFiltered(ui());
   for (let p = 0, j = 0; p < w * h; p++, j += 3) {
     px[0] = out[j]; px[1] = out[j + 1]; px[2] = out[j + 2];
-    outputColourCPU(px, p3, tone.balance, photo.vibrance || 0, scanFiltered(ui()));
+    outputColourCPU(px, p3, tone.balance, photo.vibrance || 0, sf8);
     let r8 = to8(px[0], tone.out8), g8 = to8(px[1], tone.out8), b8 = to8(px[2], tone.out8);
     if (print > 0 || fade > 0) {   // same post-LUT steps as the GPU output pass (grain.js printLook, Nero)
       px[0] = r8 / 255; px[1] = g8 / 255; px[2] = b8 / 255;
@@ -475,7 +471,7 @@ grip.addEventListener('pointermove', (e) => { if (grip.hasPointerCapture(e.point
 const endGrip = (e) => {
   if (!grip.hasPointerCapture?.(e.pointerId)) return;
   grip.releasePointerCapture(e.pointerId); grip.classList.remove('drag');
-  store.set('fcf_panel', String(Math.round(controls.getBoundingClientRect().height)));
+  store.set('fcf_panel', String(Math.max(1, Math.round(controls.getBoundingClientRect().height))));   // never '0': a collapsed panel must read back as saved
 };
 grip.addEventListener('pointerup', endGrip);
 grip.addEventListener('pointercancel', endGrip);
@@ -491,6 +487,8 @@ grip.addEventListener('dblclick', () => {
 async function loadPhoto(file) {
   if (!file) return;
   status('Decodifica…');
+  // Nothing exportable until this photo has loaded and been auto-measured; stays disabled on error.
+  $('export').disabled = $('exportIG').disabled = $('auto').disabled = true; $('exportIG').hidden = true;
   try {
     log(`photo: ${file.name} ${file.type} ${(file.size / 1e6).toFixed(1)} MB`);
     if (await isRaw(file)) {
@@ -553,13 +551,17 @@ async function runAuto() {
   const a = autoFromPhoto();
   $('ev').value = a.ev; $('look').value = a.look;
   syncOutputs();
+  // render() returns early while another render / export is in flight: wait, then measure on a fresh render.
+  while (rendering || exporting) await sleep(20);
   photo.levels = undefined; photo.vibrance = 0; photo.measuring = true;   // measured without levels, saturation, print
   try { await render(); } finally { photo.measuring = false; }
+  while (rendering) await sleep(20);   // a render started meanwhile (dirty loop) must be done too
   if (!photo?.after) return;
   const lv = scanLevels(outputLstar(photo.after));
   photo.levels = lv.black === 0 && lv.white === 100 ? undefined : lv;   // full-range frame: untouched
   photo.vibrance = scanSaturation(photo.after.data, photo.after.colorSpace === 'display-p3');   // 0: colourful enough
   log(`auto: ev ${a.ev}, look ${a.look}, levels ${lv.black.toFixed(1)}..${lv.white.toFixed(1)}, sat ${photo.vibrance.toFixed(2)}`);
+  while (rendering || exporting) await sleep(20);
   await render();
 }
 
@@ -595,7 +597,7 @@ function download(blob, name) {
 async function exportFull(ig = false) {
   if (!photo || exporting) return;
   exporting = true;
-  $('export').disabled = $('exportIG').disabled = true;
+  $('export').disabled = $('exportIG').disabled = $('auto').disabled = $('newPhoto').disabled = $('pick').disabled = true;
   setBusy('export');
   // A preview render in flight shares the engine and the GPU frame: let it finish first.
   while (rendering) await sleep(20);
@@ -608,7 +610,15 @@ async function exportFull(ig = false) {
     // IG: (image + 2 mats) = IG_WIDTH; mat = bFrac of the image's long side (as below).
     const scale = ig ? Math.min(1, IG_WIDTH / (fw + 2 * bFrac * Math.max(fw, fh)))
       : Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (fw * fh)));
-    const longCap = Math.round(Math.max(fw, fh) * scale);
+    let longCap = Math.round(Math.max(fw, fh) * scale);
+    if (ig && bFrac && scale < 1) {
+      // Total width must be exactly IG_WIDTH: pick the long cap whose decoded width is IG_WIDTH - 2 * mat
+      // (decodeRGBA: w = round(fw * longCap / long)); try a few caps around the estimate, else keep it.
+      const long = Math.max(fw, fh), mat = Math.round(longCap * bFrac), want = IG_WIDTH - 2 * mat;
+      for (const d of [0, 1, -1, 2, -2, 3, -3]) {
+        if (Math.round(fw * ((longCap + d) / long)) === want) { longCap += d; break; }
+      }
+    }
     status('Esporto: decodifica…');
     let frame;   // { data (CPU path only), w, h, p3, raw }
     if (rawPv) {
@@ -625,7 +635,8 @@ async function exportFull(ig = false) {
     } else {
       frame = decodeRGBA(bitmap, longCap);
       // GPU: the pixels live in the frame texture; drop them for the tile loop.
-      if (gpu) { writeClipAlpha(frame.data); uploadFrame(frame.data, frame.w, frame.h); frame.data = null; }
+      // Clip mask from the full-resolution bitmap (as the preview), not the downscaled pixels: thin clipped highlights survive.
+      if (gpu) { uploadFrame(frame.data, frame.w, frame.h, clipMask(bitmap, frame.w, frame.h)); frame.data = null; }
     }
     const { w, h, p3 } = frame;
     const progressive = w * h > PROGRESSIVE_PIXEL_LIMIT ? 0 : 2;
@@ -688,7 +699,7 @@ async function exportFull(ig = false) {
     setBusy(null);
     exporting = false;
     if (dustStripCanvas) { dustStripCanvas.width = dustStripCanvas.height = 0; dustStripCanvas = null; }   // release the backing store
-    $('export').disabled = $('exportIG').disabled = false;
+    $('export').disabled = $('exportIG').disabled = $('auto').disabled = $('newPhoto').disabled = $('pick').disabled = false;
     try {
       if (gpu) {   // back to the preview frame
         if (photo.preview.raw) uploadRaw(sf, photo.preview.raw);
@@ -745,7 +756,7 @@ for (const id of Object.keys(FORMAT)) {
 $('reseed').addEventListener('click', () => {
   if (!photo) return;
   photo.dustSeed = newDustSeed();
-  if (!dustAmount()) { $('dust').value = 0.5; syncOutputs(); }
+  if (!dustAmount()) { $('dust').value = DEFAULTS.dust; syncOutputs(); }
   drawDustLayer();
 });
 $('pick').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadPhoto(f); });
@@ -757,7 +768,7 @@ $('border').checked = store.get('fcf_border') !== '0';   // on by default
 $('border').addEventListener('change', () => store.set('fcf_border', $('border').checked ? '1' : '0'));
 syncOutputs();
 
-// Build stamp: replaced at deploy (scripts/stamp-version.sh) with the commit and
+// Build stamp: replaced at deploy (scripts/stamp-version.sh) with the version and
 // its time; it lives in app.js itself, so a stale cached app.js shows a stale stamp.
 const BUILD = '__BUILD__';
 $('ver').textContent = BUILD.startsWith('__') ? 'dev' : BUILD;
