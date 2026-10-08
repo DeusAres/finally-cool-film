@@ -29,6 +29,9 @@ const CAST_REMOVE = 0.7, CAST_CLAMP = [0.8, 1.25];
 // estimated from the photo's real scene light (EXIF) and simulated in two places:
 // scene exposure x 2^-U before the film (lens-gpu.js wb.w), scanner gain x 2^+U after inversion.
 const GOLD = { iso: 200, N: 2.8, tMax: 1 / 30, maxUnder: 3 };
+// Interno: stops of underexposure simulated (then compensated by the scanner) and toe tint strength.
+// Capped: at -3 EV the engine's toe went red and milky (measured); the olive drift comes from TOE.
+const INDOOR = { under: 1.0, toe: 1 };
 const WARM_BLUE_GAIN = 1.15;      // no EXIF: castGains blue gain >= this means tungsten light
 /** Stops of underexposure for a photo's EXIF exposure (or its cast gains when no EXIF). */
 function underExposure(exp, wb) {
@@ -88,11 +91,13 @@ const calibParams = () => ({ enlarger: { m_filter_shift: 0, y_filter_shift: 0 } 
 // Magenta↔Verde / Giallo↔Blu: scanner channel gains on the inverted exposure, EV per slider unit.
 const FILTER_EV = 0.005;
 /** scanP with the colour filters folded into its per-channel scales (+m greener, +y bluer). */
+/** Stops of underexposure simulated for the current photo: Interno on → INDOOR.under. */
+const indoorUnder = () => (photo && $('indoor')?.checked ? INDOOR.under : 0);
 function scanFiltered(u) {
   if (!scanP) return scanP;
   const m = u.mshift * FILTER_EV, y = u.yshift * FILTER_EV, g = [-m / 2 - y / 2, m - y / 2, -m / 2 + y];
   // (CPU fallback path ignores wb today, so it also ignores the pre-film 2^-U half of this.)
-  const lift = 2 ** (photo?.under || 0);   // scanner compensation of the underexposed negative (after inversion)
+  const lift = 2 ** indoorUnder();   // scanner compensation of the underexposed negative (after inversion)
   return scanP.map((v, i) => (i >= 6 ? v * lift * 2 ** g[i - 6] : v));
 }
 
@@ -234,9 +239,9 @@ async function ensureTone(u) {
 /** 8-bit render of a region of `frame` into `target` (RGBA, w×h×4 bytes). */
 async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, texture = 0, clarity = 0, print = 0, fade = 0) {
   if (gpu) {
-    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3 && !frame.raw, x0, y0, w, h, 1, lens, clarity, frame.raw ? 0 : 1, texture, [...photo.wb, 2 ** -photo.under]),
+    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3 && !frame.raw, x0, y0, w, h, 1, lens, clarity, frame.raw ? 0 : 1, texture, [...photo.wb, 2 ** -indoorUnder()]),
       tone.packed, w, h, tone.out8,
-      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0], tone.balance, photo.vibrance || 0, print, fade, scanFiltered(ui())), target);
+      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0], tone.balance, photo.vibrance || 0, print, fade, scanFiltered(ui()), indoorUnder() > 0 ? INDOOR.toe : 0), target);
   }
   const rgb = lensActive(lens)
     ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lensGeometry(frame.w, frame.h, lens), tone)
@@ -520,6 +525,7 @@ async function loadPhoto(file) {
       photo?.bitmap?.close();
       const ux = underExposure(await readExposure(file), [1, 1, 1]);
       log(`under ${ux.u.toFixed(2)} EV (EV100 ${ux.ev100 === null ? 'n/a' : ux.ev100.toFixed(1)})`);
+      $('indoor').checked = ux.u >= 1;
       photo = { file, bitmap: null, preview, wb: [1, 1, 1], under: ux.u, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
       uploadRaw(sf, raw);
     } else {
@@ -532,6 +538,7 @@ async function loadPhoto(file) {
       photo?.bitmap?.close();   // full-resolution decode of the previous photo
       const wb = castGains(preview.data), ux = underExposure(await readExposure(file), wb);
       log(`under ${ux.u.toFixed(2)} EV (EV100 ${ux.ev100 === null ? 'n/a' : ux.ev100.toFixed(1)})`);
+      $('indoor').checked = ux.u >= 1;   // preselected from EXIF (or a tungsten cast); the user decides
       photo = { file, bitmap, preview, wb, under: ux.u, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
       if (gpu) {
         preview.clip = clipMask(bitmap, preview.w, preview.h);   // full-res clipping, see common.js
@@ -784,6 +791,7 @@ $('reseed').addEventListener('click', () => {
 $('pick').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadPhoto(f); });
 $('newPhoto').addEventListener('click', () => $('pick').click());
 $('auto').addEventListener('click', () => runAuto());
+$('indoor').addEventListener('change', () => render());
 $('export').addEventListener('click', () => exportFull());
 $('exportIG').addEventListener('click', () => exportFull(true));
 $('border').checked = store.get('fcf_border') !== '0';   // on by default

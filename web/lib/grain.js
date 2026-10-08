@@ -74,6 +74,12 @@ const SKY_RGB = { p3: [3.1277694, -2.2571362, 0.1293668, -1.0910094, 2.413332, -
 const OK_LAB = [0.2104542553, 0.7936177850, -0.0040720468, 1.9779984951, -2.4285922050, 0.4505937099, 0.0259040371, 0.7827717662, -0.8086757660];
 // Scanner saturation (vib): chroma ramp-in (greys untouched) and fade-out (saturated untouched).
 const VIB = { c0: 0.008, c1: 0.022, f0: 0.025, f1: 0.2 };
+// Interno (thin negative, low light): the scanner lifts shadows that sat in the film's toe,
+// where the dye layers part: deep shadows drift olive/cyan, apart from the warm mids.
+// OKLab offset at full strength (P[26] = 1), faded out by OKLab L TOE.l1.
+const TOE = { a: -0.038, b: 0.002, l0: 0.10, l1: 0.50 };
+const GRAIN_CHROMA = 0.08;
+
 // Print character (printLook), chosen by eye on A/B variants: a print-like look
 // applied after the scan (steeper mids around OKLab L 0.55, deeper toe, richer mid chroma) with
 // Gold toning in GOLD (measured). OKLab units; all scaled by P[15].
@@ -92,15 +98,16 @@ export const GRAIN_WGSL = /* wgsl */`
 //   P[11] = 1: the engine output is Rec.2020 → convert to Display P3 here, with
 //         ACES-style per-channel soft gamut compression (see toP3)
 //   P[12] black floor (tone.out8[0] / 255): grain softly floors there instead of clipping to 0
-//   P[13] = 1: grey balance curves (tone.js greyBalance) from P[26], applied after the scan inversion
+//   P[13] = 1: grey balance curves (tone.js greyBalance) from P[27], applied after the scan inversion
 //   P[14] scanner saturation strength (vib, 0 = off)
 //   P[15] print look strength (Stampa, includes Gold toning)
 //   P[16] Nero fade (black lift, already × FADE_MAX)
 //   P[17..25] direct-scan inversion fit (scan.js): the engine output is the negative
-//   P[26..] grey balance curves, 3 × 1025 floats (when P[13] = 1)
+//   P[26] Interno toe tint strength (0..1, toeTint)
+//   P[27..] grey balance curves, 3 × 1025 floats (when P[13] = 1)
 
-fn bal(c: u32, v: f32) -> f32 {             // grey balance (tone.js greyBalance), curves at P[26..]
-  let f = clamp(v, 0.0, 1.0) * 1024.0; let i = u32(f); let base = 26u + c * 1025u;
+fn bal(c: u32, v: f32) -> f32 {             // grey balance (tone.js greyBalance), curves at P[27..]
+  let f = clamp(v, 0.0, 1.0) * 1024.0; let i = u32(f); let base = 27u + c * 1025u;
   if (i >= 1024u) { return P[base + 1024u]; }
   return mix(P[base + i], P[base + i + 1u], f - f32(i));
 }
@@ -227,6 +234,13 @@ fn vib(e: vec3<f32>) -> vec3<f32> {
 }
 
 // Print character (PRINT, CPU twin printLookCPU) on the display-encoded output, strength s.
+fn toeTint(c: vec3<f32>, s: f32) -> vec3<f32> {
+  let l = dec(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)));
+  let lab = toOk(l);
+  let w = s * (1.0 - sstep(${wf(TOE.l0)}, ${wf(TOE.l1)}, lab.x)) * sstep(0.0, ${wf(TOE.l0)}, lab.x);
+  if (w <= 0.0) { return c; }
+  return toGamut(l, fromOk(vec3<f32>(lab.x, lab.y + w * ${wf(TOE.a)}, lab.z + w * ${wf(TOE.b)})));
+}
 fn printLook(c: vec3<f32>, s: f32) -> vec3<f32> {
   let l = dec(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)));
   let lab = toOk(l);
@@ -261,6 +275,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   if (P[14] > 0.0) { e = vib(e); }
   var c = vec3<f32>(q(e.x), q(e.y), q(e.z));
   if (P[15] > 0.0) { c = printLook(c, P[15]); }
+  if (P[26] > 0.0) { c = toeTint(c, P[26]); }   // Interno: thin-negative toe drift (TOE)
   // Nero (fade, P[16]): the scanner's lifted blacks, tinted cyan-green (FADE_TINT) in proportion;
   // the toe term (1 - c)^FADE_P leaves mids and highlights almost where they are.
   if (P[16] > 0.0) {
@@ -282,7 +297,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let mono = 0.95 * inverseSqrt(wF * wF + wC * wC + wK * wK)
              * (wF * fine + wC * bpx(2.3) * vC + wK * grainField(um, 5.0, 41.0, s + 5u));
     // Colour grain: the dye layers' coarse, independent mottle, not per-pixel speckle.
-    let chroma = 0.3 * (1.0 - 0.5 * sstep(10.0, 50.0, L));
+    // Colour grain: kept faint (Ektar/Gold scans: chroma noise ~0.1-0.15 of luma, coarser than it).
+    let chroma = ${wf(GRAIN_CHROMA)} * (1.0 - 0.5 * sstep(10.0, 50.0, L));
     let n = vec3<f32>(grainField(um, 6.0, 31.0, s + 2u), grainField(um, 6.0, 57.0, s + 3u), grainField(um, 6.0, 83.0, s + 4u));
     c += (P[8] / 255.0) * shape * (mono + chroma * n);
   }
@@ -305,13 +321,13 @@ const GRAIN_LEVELS = 13;
  * `black` is the black floor in 8-bit levels (tone.out8[0]); `scanP` is the
  * 9-value scan fit from fitScan (required).
  */
-export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false, black = 0, balance = null, vibrance = 0, print = 0, fade = 0, scanP = null) {
+export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false, black = 0, balance = null, vibrance = 0, print = 0, fade = 0, scanP = null, toe = 0) {
   if (!scanP) throw new Error('grainParams: scan fit missing');
   const umPerPx = FRAME_UM / frameLong;
   // Size grows a little with the amount (a coarser-looking stock); 12 µm at 1.
   const size = 12 * (0.75 + 0.25 * amount);
   // head[0] lands at P[4]: w, x0, y0, µm/px, amp, size, seed, p3, black, balance flag, vib (P[14]), print (P[15]), fade (P[16]), scan fit (P[17..25])
-  const head = [w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0, black / 255, balance ? 1 : 0, vibrance, print, fade * FADE_MAX, ...scanP];
+  const head = [w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0, black / 255, balance ? 1 : 0, vibrance, print, fade * FADE_MAX, ...scanP, toe];
   const p = new Float32Array(head.length + (balance ? balance.length : 0));
   p.set(head); if (balance) p.set(balance, head.length);   // balance curves start at P[26]
   return p;
