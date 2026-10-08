@@ -1305,6 +1305,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "spektrafilm-eval"
+version = "0.1.2"
+dependencies = [
+ "image",
+ "serde",
+ "serde_json",
+ "spektrafilm-core",
+ "spektrafilm-gpu",
+ "spektrafilm-math",
+]
+
+[[package]]
 name = "spektrafilm-gpu"
 version = "0.1.2"
 dependencies = [

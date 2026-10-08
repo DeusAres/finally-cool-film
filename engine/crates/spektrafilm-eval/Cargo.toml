@@ -1,0 +1,18 @@
+[package]
+name = "spektrafilm-eval"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Colour/tone measurement harness for the film pipeline (see eval/SCHEMA.md)"
+
+[[bin]]
+name = "sf-eval"
+path = "src/main.rs"
+
+[dependencies]
+spektrafilm-core.workspace = true
+spektrafilm-gpu.workspace = true
+spektrafilm-math.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+image.workspace = true
