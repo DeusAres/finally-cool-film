@@ -17,6 +17,8 @@ const FILM_FORMAT_MM = 35;        // engine default; sets the physical pixel siz
 const EXPORT_TILE = 1024;         // export tile core size (px)
 const EXPORT_PAD = 128;           // tile overlap: covers halation / DIR diffusion reach at 12 MP
 const MAX_EXPORT_PIXELS = 12.5e6; // keeps native 12 MP iPhone frames; 48 MP gets downscaled (20 MP crashed the grain exporter)
+// Contrasto on raw frames: log-slope per unit of slider, and the slider value that keeps the film's own contrast.
+const RAW_LOOK_K = 1.2, RAW_LOOK_REF = 0.35;
 const IG_WIDTH = 1080;            // Instagram feed width (3:4 portrait = 1080 × 1440)
 const JPEG_DISTANCE = 1.0;        // butteraugli distance for jpegli
 const PROGRESSIVE_PIXEL_LIMIT = 6e6; // progressive keeps all DCT coeffs in the wasm heap (~29 B/px): baseline above
@@ -168,10 +170,12 @@ async function ensureTone(u) {
     tone = buildTone(transfer, { look: u.look, ev: u.ev, rolloff: u.rolloff, levels });
     if (raw) {
       // A raw frame is already scene-linear (sensor clip = 1): no phone curve to
-      // invert, only exposure (BaselineExposure + Esposizione). Gain LUT 1, scene
-      // LUT = G·x on the same sqrt-spaced index as tone.js.
+      // invert, only exposure (BaselineExposure + Esposizione) and Contrasto, as a
+      // log-slope k about middle grey (k = 1 at RAW_LOOK_REF: the film's own
+      // contrast). Gain LUT 1, scene LUT on the same sqrt-spaced index as tone.js.
       const n = tone.packed.length / 2 - 1, G = 2 ** (raw.baseline + u.ev);
-      for (let i = 0; i <= n; i++) { tone.packed[i] = 1; tone.packed[n + 1 + i] = G * (i / n) ** 2; }
+      const k = Math.max(0.4, 1 + RAW_LOOK_K * (u.look - RAW_LOOK_REF));
+      for (let i = 0; i <= n; i++) { tone.packed[i] = 1; tone.packed[n + 1 + i] = 0.18 * (G * (i / n) ** 2 / 0.18) ** k; }
     }
     if (balance0) tone.balance = balance0;
     toneKey = key2;
