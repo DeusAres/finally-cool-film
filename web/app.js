@@ -1,5 +1,5 @@
 import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, to8, clipMask, writeClipAlpha, run } from './lib/common.js';
-import { transferChart, readTransfer, buildTone, autoTone, scanLevels, greyBalance } from './lib/tone.js';
+import { transferChart, readTransfer, buildTone, autoTone, scanLevels, greyBalance, highlightGain } from './lib/tone.js';
 import { sleep, store } from './lib/util.js';
 import { LIN8, LUMA_P3, LUMA_SRGB, srgbToLinear } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
@@ -73,7 +73,16 @@ const ui = () => ({
 const lensOf = (u) => ({ ca: u.ca * u.ca, vignette: u.vignette, falloff: u.falloff });
 
 // Enlarger filtration is baked in at engine construction (calibration).
-const calibParams = (u) => ({ enlarger: { m_filter_shift: u.mshift, y_filter_shift: u.yshift } });
+// No print, no enlarger: the colour filters are the scanner's colour correction (scanFiltered).
+const calibParams = () => ({ enlarger: { m_filter_shift: 0, y_filter_shift: 0 } });
+// Magenta↔Verde / Giallo↔Blu: scanner channel gains on the inverted exposure, EV per slider unit.
+const FILTER_EV = 0.01;
+/** scanP with the colour filters folded into its per-channel scales (+m greener, +y bluer). */
+function scanFiltered(u) {
+  if (!scanP) return scanP;
+  const m = u.mshift * FILTER_EV, y = u.yshift * FILTER_EV, g = [-m / 2 - y / 2, m - y / 2, -m / 2 + y];
+  return scanP.map((v, i) => (i >= 6 ? v * 2 ** g[i - 6] : v));
+}
 
 // Everything else is read at render time and goes through `engine.update`.
 // Tone is handled by tone.js on the input (scene reconstruction) and output
@@ -198,10 +207,10 @@ async function ensureTone(u) {
       // A raw frame is already scene-linear (sensor clip = 1): no phone curve to
       // invert, only exposure (BaselineExposure + Esposizione) and Contrasto, as a
       // log-slope k about middle grey (k = 1 at RAW_LOOK_REF: the film's own
-      // contrast). Gain LUT 1, scene LUT on the same sqrt-spaced index as tone.js.
-      const n = tone.packed.length / 2 - 1, G = 2 ** (raw.baseline + u.ev);
+      // contrast). Gain LUT: Alte luci's shoulder only; scene LUT on the same sqrt-spaced index as tone.js.
+      const n = tone.packed.length / 2 - 1, G = 2 ** (raw.baseline + u.ev), hg = highlightGain(u.rolloff);
       const k = Math.max(0.4, 1 + RAW_LOOK_K * (u.look - RAW_LOOK_REF));
-      for (let i = 0; i <= n; i++) { tone.packed[i] = 1; tone.packed[n + 1 + i] = 0.18 * (G * (i / n) ** 2 / 0.18) ** k; }
+      for (let i = 0; i <= n; i++) { tone.packed[i] = hg[i]; tone.packed[n + 1 + i] = 0.18 * (G * (i / n) ** 2 / 0.18) ** k; }
     }
     if (balance0) tone.balance = balance0;
     toneKey = key2;
@@ -220,7 +229,7 @@ async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, textur
   if (gpu) {
     return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3 && !frame.raw, x0, y0, w, h, 1, lens, clarity, frame.raw ? 0 : 1, texture, photo.wb),
       tone.packed, w, h, tone.out8,
-      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0], tone.balance, photo.vibrance || 0, print, fade, scanP), target);
+      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0], tone.balance, photo.vibrance || 0, print, fade, scanFiltered(ui())), target);
   }
   const rgb = lensActive(lens)
     ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lensGeometry(frame.w, frame.h, lens), tone)
@@ -230,7 +239,7 @@ async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, textur
   const px = new Float32Array(3), p3 = outP3();
   for (let p = 0, j = 0; p < w * h; p++, j += 3) {
     px[0] = out[j]; px[1] = out[j + 1]; px[2] = out[j + 2];
-    outputColourCPU(px, p3, tone.balance, photo.vibrance || 0, scanP);
+    outputColourCPU(px, p3, tone.balance, photo.vibrance || 0, scanFiltered(ui()));
     let r8 = to8(px[0], tone.out8), g8 = to8(px[1], tone.out8), b8 = to8(px[2], tone.out8);
     if (print > 0 || fade > 0) {   // same post-LUT steps as the GPU output pass (grain.js printLook, Nero)
       px[0] = r8 / 255; px[1] = g8 / 255; px[2] = b8 / 255;

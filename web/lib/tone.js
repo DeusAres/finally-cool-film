@@ -108,6 +108,14 @@ function monotoneSpline(P, M) {
 const MID_HEADROOM = XW - 1.1;
 const ROLLOFF_EV = 0.6;               // display white drop at Alte luci 100 (was 0.06 EV: no visible range)       // mids stay ≥ 1.1 EV below white however far ev goes
 
+/** Gain LUT (as buildTone's) of the display curve at ev 0: only Alte luci's shoulder.
+ * For raw frames, whose input is scene-linear with the sensor clip at 1. */
+export function highlightGain(rolloff) {
+  const curve = displayCurve(0, rolloff), g = new Float32Array(SQRT_N + 1);
+  for (let i = 0; i <= SQRT_N; i++) { const n = Math.max((i / SQRT_N) ** 2, 1e-6); g[i] = (0.18 * 2 ** curve(Math.log2(n / 0.18))) / n; }
+  return g;
+}
+
 function displayCurve(ev, rolloff) {
   const lift = 0.9 * ev;
   // Alte luci lowers display white by up to ROLLOFF_EV (squared: gentle at the default, real at 100).
