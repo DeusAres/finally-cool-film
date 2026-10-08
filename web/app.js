@@ -1,16 +1,14 @@
-import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, to8, clipMask, writeClipAlpha, run } from './lib/common.js';
-import { transferChart, readTransfer, buildTone, autoTone, scanLevels, buildRawTone } from './lib/tone.js';
+import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, clipMask, writeClipAlpha, jpegThumb, THUMB_PX, PACK_LUT } from './lib/common.js';
 import { sleep, store } from './lib/util.js';
-import { LIN8, LUMA_P3, LUMA_SRGB, srgbToLinear } from './lib/color.js';
+import { DISPLAY_GAIN_LUT } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif, readExposure } from './lib/exif.js';
-import { isRaw, loadRaw, uploadRaw, rawAuto, rawPreviewRGBA } from './lib/raw.js';
+import { isRaw, loadRaw, uploadRaw, rawThumb, rawPreviewRGBA } from './lib/raw.js';
 import { iccSegment } from './lib/icc.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, inputUniform } from './lib/lens-gpu.js';
-import { fitScan, invertCPU } from './lib/scan.js';
 import { dustField, drawDust, compositeDust } from './lib/dust.js';
-import { GRAIN_WGSL, grainParams, outputColourCPU, scanSaturation, printLookCPU, fadeCPU } from './lib/grain.js';
+import { GRAIN_WGSL, grainParams, toP3CPU } from './lib/grain.js';
 
 const PREVIEW_LONG_SIDE = 2000;   // display canvas cap (bigger canvases make iOS compositing crash when zoomed)
 const GRAIN_AREA_UM2 = 0.2;       // engine default AgX particle area
@@ -19,95 +17,60 @@ const EXPORT_TILE = 1024;         // export tile core size (px)
 const EXPORT_PAD = 128;           // tile overlap: covers halation / DIR diffusion reach at 12 MP
 const MAX_EXPORT_PIXELS = 12.5e6; // keeps native 12 MP iPhone frames; 48 MP gets downscaled (20 MP crashed the grain exporter)
 const IG_WIDTH = 1080;            // Instagram feed width (3:4 portrait = 1080 × 1440)
-// Per-photo cast correction (castGains), as a lab operator does per frame: the share of the
-// near-neutral pixels' cast removed (Gold 200 scans measured: neutrals a* ~0; an iPhone
-// indoors left them magenta-red), and the clamp on each channel gain.
-const CAST_REMOVE = 0.7, CAST_CLAMP = [0.8, 1.25];
-const CAST_SAT = 0.25, CAST_YMIN = 0.08;   // castGains pixel gate: max (max-min)/max, min luminance
 // Film camera (Contax T3-like compact, handheld, no flash) loaded with Gold 200. Dim scenes
-// (indoors) are underexposed: the negative is thin, shadows fall into the toe, and the lab
-// scanner compensates by lifting them (olive/cyan drift). iPhones auto-brighten, so U is
-// estimated from the photo's real scene light (EXIF) and simulated in two places:
-// scene exposure x 2^-U before the film (lens-gpu.js wb.w), scanner gain x 2^+U after inversion.
-const GOLD = { iso: 200, N: 2.8, tMax: 1 / 30, maxUnder: 3 };
-// Interno: stops of underexposure simulated (then compensated by the scanner) and toe tint strength.
-// Capped: at -3 EV the engine's toe went red and milky (measured); the olive drift comes from TOE.
-const INDOOR = { under: 1.0, toe: 1 };
-const WARM_BLUE_GAIN = 1.15;      // no EXIF: castGains blue gain >= this means tungsten light
-/** Stops of underexposure for a photo's EXIF exposure (or its cast gains when no EXIF). */
-function underExposure(exp, wb) {
-  const evCam = Math.log2(GOLD.N ** 2 / GOLD.tMax) - Math.log2(GOLD.iso / 100);   // darkest scene the camera exposes correctly
+// (indoors) are underexposed: iPhones auto-brighten, so the stops the camera would have missed
+// are estimated from the photo's real scene light (EXIF) and taken off the scene exposure
+// before the film (Interno). The lab scanner's AutoSetup (frontier.auto) decides what it does about the thin negative.
+const CAMERA = { iso: 200, N: 2.8, tMax: 1 / 30 };
+const MAX_UNDER_EV = 2;
+const NO_AUTO = [0, 0, 0, 0];   // scanner AutoSetup result [d, c, m, y]: neutral
+/** Stops of underexposure for a photo's EXIF exposure, clamped to [0, MAX_UNDER_EV]; 0 without EXIF. */
+function underExposure(exp) {
+  const evCam = Math.log2(CAMERA.N ** 2 / CAMERA.tMax) - Math.log2(CAMERA.iso / 100);   // darkest scene the camera exposes correctly
   let ev100 = null;
   if (exp) ev100 = Math.log2(exp.N ** 2 / exp.t) - Math.log2(exp.iso / 100);
   if (ev100 === null && exp?.bv != null) ev100 = exp.bv + 5;   // APEX: EV = BV + SV, SV(ISO 100) = 5
-  const u = ev100 !== null ? Math.min(GOLD.maxUnder, Math.max(0, evCam - ev100)) : (wb[2] >= WARM_BLUE_GAIN ? 1 : 0);
+  const u = ev100 !== null ? Math.min(MAX_UNDER_EV, Math.max(0, evCam - ev100)) : 0;
   return { u, ev100 };
 }
 const JPEG_DISTANCE = 1.0;        // butteraugli distance for jpegli
 const PROGRESSIVE_PIXEL_LIMIT = 6e6; // progressive keeps all DCT coeffs in the wasm heap (~29 B/px): baseline above
-const BORDER_FRACTION = 0.01;     // white mat, fraction of the long side, all four sides (as in grain pro)
+const BORDER_FRACTION = 0.01;     // mat (the image's paper white), fraction of the long side, all four sides (as in grain pro)
 
 const $ = (id) => document.getElementById(id);
 const stage = $('stage'), view = $('view');
 const ctx = view.getContext('2d', { colorSpace: 'display-p3' });
 
 let gpu = false;
-let engine = null;          // sf.Engine for the current photo + calibration
-let engineCalib = '';       // JSON of the calibration params `engine` was built with
+let engine = null;          // sf.Engine for the current photo (its input colour space is fixed at construction)
 let engineParams = '';      // JSON last given to `engine.update` (re-sending it is a no-op)
-let photo = null;           // { file, bitmap, preview, after }
-let transfer = null, transferKey = '';   // measured grey transfer of the pipeline (keyed on calibration, output space, halation, gpu)
-let scanP = null;                        // scanner inversion of the negative, fitted per calibration (scan.js)
-let tone = null, toneKey = '';           // LUTs for the current transfer + look + ev
+let photo = null;           // { file, bitmap, preview, after, under, auto: scanner AutoSetup [d, c, m, y], ... }
 let rendering = false, dirty = false, exporting = false, renderCount = 0;
-
-/** Linear RGB gains that remove CAST_REMOVE of the cast of the near-neutral mid-tone pixels of
- * `data` (display-encoded RGBA). Neutral (1, 1, 1) when too few such pixels. */
-function castGains(data) {
-  const sum = [0, 0, 0]; let n = 0;
-  for (let i = 0; i < data.length; i += 4 * 13) {
-    const r = srgbToLinear(data[i] / 255), g = srgbToLinear(data[i + 1] / 255), b = srgbToLinear(data[i + 2] / 255);
-    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    // Truly near-neutral mid-tones and lights only: a wide gate (0.5) took warm skin, wood and
-    // fabric for a cast and turned real whites green (measured: cat fur a* -7).
-    if (y < CAST_YMIN || mx > 0.9 || (mx - mn) / mx > CAST_SAT) continue;
-    sum[0] += r / y; sum[1] += g / y; sum[2] += b / y; n++;
-  }
-  if (n < 200) return [1, 1, 1];
-  return sum.map((s) => Math.min(CAST_CLAMP[1], Math.max(CAST_CLAMP[0], (n / s) ** CAST_REMOVE)));
-}
 
 // ---------- params ----------
 
 const ui = () => ({
-  ev: +$('ev').value, look: +$('look').value, rolloff: +$('rolloff').value,
-  mshift: +$('mshift').value, yshift: +$('yshift').value,
-  grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value, print: +$('print').value, fade: +$('fade').value,
+  ev: +$('ev').value, contrast: +$('contrast').value, highlight: +$('highlight').value,
+  mshift: +$('mshift').value, yshift: +$('yshift').value, black: +$('black').value,
+  grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value,
   ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value,
 });
 // CA slider is quadratic: realistic (subtle) amounts get most of the travel.
 const lensOf = (u) => ({ ca: u.ca * u.ca, vignette: u.vignette, falloff: u.falloff });
 
-// Engine construction params (calibration): neutral filtration, no print.
-// The colour filters are the scanner's colour correction (scanFiltered).
-const calibParams = () => ({ enlarger: { m_filter_shift: 0, y_filter_shift: 0 } });
-// Magenta↔Verde / Giallo↔Blu: scanner channel gains on the inverted exposure, EV per slider unit.
-const FILTER_EV = 0.005;
-/** scanP with the colour filters folded into its per-channel scales (+m greener, +y bluer). */
-/** Stops of underexposure simulated for the current photo: Interno on → INDOOR.under. */
-const indoorUnder = () => (photo && $('indoor')?.checked ? INDOOR.under : 0);
-function scanFiltered(u) {
-  if (!scanP) return scanP;
-  const m = u.mshift * FILTER_EV, y = u.yshift * FILTER_EV, g = [-m / 2 - y / 2, m - y / 2, -m / 2 + y];
-  // (CPU fallback path ignores wb today, so it also ignores the pre-film 2^-U half of this.)
-  const lift = 2 ** indoorUnder();   // scanner compensation of the underexposed negative (after inversion)
-  return scanP.map((v, i) => (i >= 6 ? v * lift * 2 ** g[i - 6] : v));
-}
+// Magenta ↔ Verde / Giallo ↔ Blu: Frontier C/M/Y keys, 0.01 density per key (eval/frontier_model.json user_controls).
+const FRONTIER_KEY = 0.01;
+// v2-calib: sign of frontier.cmy (+ = more filtration, i.e. the opposite colour); the sliders read +m greener, +y bluer.
+const frontierCmy = (u) => [0, -u.mshift * FRONTIER_KEY, -u.yshift * FRONTIER_KEY];
+
+/** Scene exposure gain of the input pass: Esposizione, minus Interno's underexposure, plus the DNG baseline (physical, before the film). */
+const underEv = () => (photo && $('indoor')?.checked ? photo.under : 0);
+const baselineEv = () => photo?.preview.raw?.baseline ?? 0;
+const sceneGain = (u) => 2 ** (u.ev - underEv() + baselineEv());
 
 // Everything else is read at render time and goes through `engine.update`.
-// Tone is handled by tone.js on the input (scene reconstruction) and output
-// (white point), so the engine runs at fixed exposure with no auto-exposure,
-// no print-curve morph and no scanner levels (levels are ours, tone.js).
+// The film model and the Frontier scanner are the engine's (the positive comes out of it);
+// our input pass only conditions the light (display→scene, exposure, lens, Texture, Chiarezza).
 const outP3 = () => !!photo?.preview.p3;
 
 function renderParams(u, { noGrain = false } = {}) {
@@ -119,59 +82,52 @@ function renderParams(u, { noGrain = false } = {}) {
     // them into Rec.2020 (film colours fit there) and the output pass converts
     // to P3 with a soft gamut compression (grain.js toP3); plain P3 output
     // hard-clipped dark warm browns (B = 0, hue swung red).
-    // Direct film scan: the engine returns the developed negative (inverted in the output pass,
-    // scan.js); no print paper. Gamut compression would act on the negative, so it is off.
+    // v2-calib: the engine now returns a positive, so its own gamut compression could be back on for sRGB.
     io: { output_color_space: outP3() ? 'ITU-R BT.2020' : 'sRGB', output_gamut_compress: { algorithm: 'off' }, scan_film: true },
     // The engine's scanner unsharp mask works in pixels (0.7 px: crisper at
     // preview size than on a 12 MP export) and inflated pixel-level detail
     // ×1.3–1.6 (measured): a phone's crunch, not film. Texture comes from the
     // film-adjacency clarity in the input pass instead (lens-gpu.js), in µm.
-    scanner: { black_correction: false, white_correction: false, unsharp_mask: [0, 0] },
+    scanner: {
+      model: 'frontier', black_correction: false, white_correction: false, unsharp_mask: [0, 0],
+      frontier: {
+        cmy: frontierCmy(u), contrast: u.contrast, highlight: u.highlight, black_lift: u.black,
+        auto: photo.auto,
+      },
+    },
     film_render: {
       // On the GPU path grain is ours (grain.js, in the output pass); the engine's is the CPU fallback.
       // (Inactive on the GPU path: a constant area keeps the grain slider from changing the params JSON, so no engine.update.)
       grain: { active: !gpu && !noGrain && u.grain > 0, agx_particle_area_um2: GRAIN_AREA_UM2 * (gpu ? 1 : Math.max(u.grain, 0.01)) },
+      // v2-calib: strength comes from the profile's antihalation; halation_amount is a multiplier on it (Halation slider).
       halation: { active: u.halation > 0, halation_amount: u.halation },
       // Viewing glare: same mean (E = percent whatever the roughness), but no
       // random per-pixel field: that field is seeded by the pixel's index in
       // the region, so every export tile drew a different one (measured: the
       // same pixel varied ~0.3 levels between tiles, and seams showed at tile
       // boundaries). Our grain supplies the texture.
-      // DIR couplers: per-pixel inhibition kept (colour, contrast), spatial spread off (edge effect).
-      dir_couplers: { diffusion_size_um: 0.01, diffusion_tail_weight: 0 },
       glare: { roughness: 0 },
     },
     print_render: { glare: { roughness: 0 } },
   };
 }
 
-// JSON of renderParams, memoised on the inputs it depends on (the slider path
-// asks for it on every render; the export loop once per tile).
-let rpKey = '', rpJson = '';
 function renderParamsJson(u, noGrain = false, tileMm = 0) {
-  const key = `${gpu}|${outP3()}|${noGrain}|${tileMm}|${u.halation}|${gpu ? 0 : u.grain}`;
-  if (key !== rpKey) {
-    const p = renderParams(u, { noGrain });
-    rpJson = JSON.stringify(tileMm ? deepMerge(p, { camera: { film_format_mm: tileMm } }) : p);
-    rpKey = key;
-  }
-  return rpJson;
+  const p = renderParams(u, { noGrain });
+  return JSON.stringify(tileMm ? deepMerge(p, { camera: { film_format_mm: tileMm } }) : p);
 }
 
-let calibM = NaN, calibY = NaN;
-function ensureEngine(u) {
-  if (engine && u.mshift === calibM && u.yshift === calibY) return engine;
-  const calib = JSON.stringify(calibParams(u));
-  if (engine && calib === engineCalib) { calibM = u.mshift; calibY = u.yshift; return engine; }
-  engine?.free();
-  engine = new sf.Engine(FILM, PAPER, JSON.stringify(deepMerge(BASE_PARAMS, inputParams(photo.preview.p3), calibParams(u))));
-  engineCalib = calib; calibM = u.mshift; calibY = u.yshift;
-  engineParams = '';
+// One engine per photo (the input colour space is fixed at construction); the film and the scanner are all updates.
+function ensureEngine() {
+  if (!engine) {
+    engine = new sf.Engine(FILM, PAPER, JSON.stringify(deepMerge(BASE_PARAMS, inputParams(photo.preview.p3))));
+    engineParams = '';
+  }
   return engine;
 }
 
 // Skips the parse / merge / rebuild in the engine when the params did not
-// change (most sliders are ours: tone, lens, grain, texture).
+// change (most sliders are ours: exposure, lens, grain, texture).
 function updateEngine(json) {
   if (json === engineParams) return;
   engine.update(json);
@@ -198,84 +154,50 @@ function uploadFrame(data, w, h, mask = null) {
   }
 }
 
-// ---------- tone ----------
-// Measure the pipeline's grey transfer once per calibration (one render of a
-// 81-patch grey chart), then build the scene-reconstruction / white-point LUTs
-// for the current Contrasto (look), Esposizione (midtone ev) and Alte luci (rolloff). See tone.js.
-
-async function ensureTone(u) {
-  ensureEngine(u);
-  // The measurement depends on the engine output space, halation and backend: re-measure only when one changes.
-  const tKey = `${engineCalib}|${outP3()}|${u.halation}|${gpu}`;
-  if (transferKey !== tKey) {
-    const t = performance.now(), chart = transferChart();
-    updateEngine(renderParamsJson(u, true));
-    // Direct film scan (no paper): fit the scanner inversion on the raw negative chart, then
-    // measure the inverted chain, which is what the output pass shows.
-    const out = await run(engine, chart, gpu);
-    scanP = fitScan(readTransfer(out, chart.w)); invertCPU(out, scanP);
-    transfer = readTransfer(out, chart.w);
-    transferKey = tKey;
-    log(`transfer measured ${Math.round(performance.now() - t)} ms: white Y ${transfer.white.toFixed(3)}, black ${transfer.floor.toFixed(4)}`);
-  }
-  const levels = photo?.levels;
-  const key = `${transferKey}|${u.look}|${u.ev}|${u.rolloff}|${levels ? `${levels.black}|${levels.white}` : ''}`;
-  const raw = photo?.preview.raw;
-  const key2 = raw ? `${key}|raw${raw.baseline}` : key;
-  if (key2 !== toneKey) {
-    // A raw frame is already scene-linear (sensor clip = 1): no phone curve to invert, only
-    // exposure (BaselineExposure + Esposizione), Alte luci's shoulder and Contrasto (tone.js).
-    tone = raw
-      ? buildRawTone(transfer, { ev: u.ev, look: u.look, rolloff: u.rolloff, baseline: raw.baseline, levels })
-      : buildTone(transfer, { look: u.look, ev: u.ev, rolloff: u.rolloff, levels });
-    toneKey = key2;
-  }
-}
-
-// ---------- lens ----------
+// ---------- lens & input ----------
 // Applied to the light reaching the film (engine input), in frame coordinates.
-
-// GPU: the whole input stage (lens, tone, matrix) runs inside the engine's
+// GPU: the whole input stage (lens, display→scene, exposure, matrix) runs inside the engine's
 // chain from the frame texture (sf.set_frame), see lens-gpu.js. CPU fallback
 // below (no WebGPU): float input built here, float output converted here.
 
 /** 8-bit render of a region of `frame` into `target` (RGBA, w×h×4 bytes). */
-async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, texture = 0, clarity = 0, print = 0, fade = 0) {
+async function renderRegion(frame, x0, y0, w, h, target, u) {
+  const lens = lensOf(u), expo = sceneGain(u);
   if (gpu) {
-    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3 && !frame.raw, x0, y0, w, h, 1, lens, clarity, frame.raw ? 0 : 1, texture, [...photo.wb, 2 ** -indoorUnder()]),
-      tone.packed, w, h, tone.out8,
-      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0], tone.balance, photo.vibrance || 0, print, fade, scanFiltered(ui()), indoorUnder() > 0 ? INDOOR.toe : 0), target);
+    const space = frame.raw ? 'rec2020' : frame.p3 ? 'p3' : 'srgb';
+    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture),
+      DISPLAY_GAIN_LUT, w, h, PACK_LUT,
+      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), u.grain, photo.grainSeed, outP3()), target);
   }
+  // (the CPU path has no clip boost: exposure is a plain scale)
   const rgb = lensActive(lens)
-    ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lensGeometry(frame.w, frame.h, lens), tone)
-    : extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, 1, tone);
+    ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, expo, lensGeometry(frame.w, frame.h, lens), true)
+    : extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, expo, true);
   const out = engine.process(rgb, w, h), d32 = new Uint32Array(target.buffer, target.byteOffset, w * h);
-  // Same colour steps as the GPU output pass: grey balance, and Rec.2020 → P3 for P3 photos.
-  const px = new Float32Array(3), p3 = outP3(), sf8 = scanFiltered(ui());
+  const px = new Float32Array(3), p3 = outP3();
   for (let p = 0, j = 0; p < w * h; p++, j += 3) {
     px[0] = out[j]; px[1] = out[j + 1]; px[2] = out[j + 2];
-    outputColourCPU(px, p3, tone.balance, photo.vibrance || 0, sf8);
-    let r8 = to8(px[0], tone.out8), g8 = to8(px[1], tone.out8), b8 = to8(px[2], tone.out8);
-    if (print > 0 || fade > 0) {   // same post-LUT steps as the GPU output pass (grain.js printLook, Nero)
-      px[0] = r8 / 255; px[1] = g8 / 255; px[2] = b8 / 255;
-      if (print > 0) printLookCPU(px, p3, print);
-      if (fade > 0) fadeCPU(px, fade);
-      r8 = Math.round(px[0] * 255); g8 = Math.round(px[1] * 255); b8 = Math.round(px[2] * 255);
-    }
-    d32[p] = (r8 | (g8 << 8) | (b8 << 16) | 0xff000000) >>> 0;
+    if (p3) toP3CPU(px);   // Rec.2020 → P3, as the GPU output pass
+    d32[p] = (q8(px[0]) | (q8(px[1]) << 8) | (q8(px[2]) << 16) | 0xff000000) >>> 0;
   }
 }
+const q8 = (v) => Math.round(255 * Math.min(1, Math.max(0, v)));
 
 // ---------- auto ----------
-// Starting Esposizione / Contrasto from the photo's own luminance (tone.js autoTone).
+// Auto = the engine's own exposure metering on a thumb of the photo (Esposizione), then the
+// scanner's AutoSetup on that thumb as the film will see it (frontier.auto).
+// v2-calib: auto_exposure_ev's target (mid grey) and clamp; AutoSetup is not re-run when Esposizione / Interno change afterwards.
 
-function autoFromPhoto() {
-  if (photo.preview.raw) return { ev: rawAuto(photo.preview.raw).ev, look: +$('look').value };
-  const { data, p3 } = photo.preview;
-  const [kr, kg, kb] = p3 ? LUMA_P3 : LUMA_SRGB;
-  const Ys = new Float32Array(Math.ceil(data.length / 32));
-  for (let i = 0, k = 0; i < data.length; i += 32, k++) Ys[k] = kr * LIN8[data[i]] + kg * LIN8[data[i + 1]] + kb * LIN8[data[i + 2]];
-  return autoTone(Ys);
+function autoSetup() {
+  const eng = ensureEngine(), { preview } = photo, raw = preview.raw;
+  const { rgb, w, h } = raw ? rawThumb(raw, THUMB_PX) : jpegThumb(preview);
+  const scale = (k) => { for (let i = 0; i < rgb.length; i++) rgb[i] *= k; };
+  scale(2 ** baselineEv());
+  const ev = Math.max(+$('ev').min, Math.min(+$('ev').max, Math.round(eng.auto_exposure_ev(rgb.slice(), w, h) * 10) / 10));
+  scale(2 ** (ev - underEv()));
+  // The scanner model arrives with the engine: until then the app loads with neutral scanner setup.
+  const auto = typeof eng.frontier_auto_setup === 'function' ? Array.from(eng.frontier_auto_setup(rgb, w, h)) : [0, 0, 0, 0];
+  return { ev, auto };
 }
 
 // ---------- preview ----------
@@ -291,11 +213,11 @@ async function render() {
       const pv = photo.preview, t0 = performance.now(), n = ++renderCount;
       // Breadcrumb: if iOS kills the tab mid-render, the next load says so.
       setBusy(`anteprima #${n} ${pv.w}x${pv.h} ${JSON.stringify(u)}`);
-      await ensureTone(u);
+      ensureEngine();
       updateEngine(renderParamsJson(u));
       const cs = outP3() ? 'display-p3' : 'srgb';
       if (photo.after?.width !== pv.w || photo.after?.height !== pv.h || photo.after.colorSpace !== cs) photo.after = new ImageData(pv.w, pv.h, { colorSpace: cs });
-      await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), lensOf(u), u.grain, u.texture, u.clarity, photo.measuring ? 0 : u.print, photo.measuring ? 0 : u.fade);
+      await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), u);
       const t1 = performance.now();
       if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); }
       const t2 = performance.now(), ms = (v) => Math.round(v);
@@ -526,10 +448,10 @@ async function loadPhoto(file) {
       preview.before = new ImageData(preview.data, preview.w, preview.h, { colorSpace: 'display-p3' });
       log(`DNG ${raw.fullW}x${raw.fullH}, preview ${raw.w}x${raw.h}, orientation ${raw.orientation}, baseline ${raw.baseline} EV, ${Math.round(performance.now() - t)} ms`);
       photo?.bitmap?.close();
-      const ux = underExposure(await readExposure(file), [1, 1, 1]);
+      const ux = underExposure(await readExposure(file));
       log(`under ${ux.u.toFixed(2)} EV (EV100 ${ux.ev100 === null ? 'n/a' : ux.ev100.toFixed(1)})`);
       $('indoor').checked = ux.u >= 1;
-      photo = { file, bitmap: null, preview, wb: [1, 1, 1], under: ux.u, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
+      photo = { file, bitmap: null, preview, under: ux.u, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
       uploadRaw(sf, raw);
     } else {
       const bitmap = await createImageBitmap(file);
@@ -539,10 +461,10 @@ async function loadPhoto(file) {
       preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
       log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
       photo?.bitmap?.close();   // full-resolution decode of the previous photo
-      const wb = castGains(preview.data), ux = underExposure(await readExposure(file), wb);
+      const ux = underExposure(await readExposure(file));
       log(`under ${ux.u.toFixed(2)} EV (EV100 ${ux.ev100 === null ? 'n/a' : ux.ev100.toFixed(1)})`);
-      $('indoor').checked = ux.u >= 1;   // preselected from EXIF (or a tungsten cast); the user decides
-      photo = { file, bitmap, preview, wb, under: ux.u, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
+      $('indoor').checked = ux.u >= 1;   // preselected from EXIF; the user decides
+      photo = { file, bitmap, preview, under: ux.u, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
       if (gpu) {
         preview.clip = clipMask(bitmap, preview.w, preview.h);   // full-res clipping, see common.js
         uploadFrame(preview.data, preview.w, preview.h, preview.clip);
@@ -566,34 +488,13 @@ async function loadPhoto(file) {
   }
 }
 
-// Scanner levels (tone.js scanLevels): as a lab scanner sets each frame's black
-// and white point, measured once on the rendered preview, then kept fixed for
-// the sliders and for every export tile (so tiles stay identical).
-function outputLstar(img) {
-  const [kr, kg, kb] = img.colorSpace === 'display-p3' ? LUMA_P3 : LUMA_SRGB, d = img.data;
-  const L = new Float32Array(Math.ceil(d.length / 16));
-  for (let i = 0, k = 0; i < d.length; i += 16, k++) {
-    const Y = kr * LIN8[d[i]] + kg * LIN8[d[i + 1]] + kb * LIN8[d[i + 2]];
-    L[k] = Y > 0.008856 ? 116 * Math.cbrt(Y) - 16 : 903.3 * Y;
-  }
-  return L;
-}
-
 async function runAuto() {
-  const a = autoFromPhoto();
-  $('ev').value = a.ev; $('look').value = a.look;
+  // render() returns early while another render / export is in flight: wait first (the engine is shared).
+  while (rendering || exporting) await sleep(20);
+  const a = autoSetup();
+  $('ev').value = a.ev; photo.auto = a.auto;
   syncOutputs();
-  // render() returns early while another render / export is in flight: wait, then measure on a fresh render.
-  while (rendering || exporting) await sleep(20);
-  photo.levels = undefined; photo.vibrance = 0; photo.measuring = true;   // measured without levels, saturation, print
-  try { await render(); } finally { photo.measuring = false; }
-  while (rendering) await sleep(20);   // a render started meanwhile (dirty loop) must be done too
-  if (!photo?.after) return;
-  const lv = scanLevels(outputLstar(photo.after));
-  photo.levels = lv.black === 0 && lv.white === 100 ? undefined : lv;   // full-range frame: untouched
-  photo.vibrance = scanSaturation(photo.after.data, photo.after.colorSpace === 'display-p3');   // 0: colourful enough
-  log(`auto: ev ${a.ev}, look ${a.look}, levels ${lv.black.toFixed(1)}..${lv.white.toFixed(1)}, sat ${photo.vibrance.toFixed(2)}`);
-  while (rendering || exporting) await sleep(20);
+  log(`auto: ev ${a.ev}, scanner ${a.auto.map((v) => v.toFixed(3)).join(' ')}`);
   await render();
 }
 
@@ -602,7 +503,7 @@ async function runAuto() {
 // is streamed to jpegli in a worker and dropped. Neither the full float image
 // nor the full RGB image ever exists (in JS, wasm or on the GPU).
 // Each tile keeps the frame's physical pixel size (film_format_mm scaled to the
-// tile) and uses the same tone LUTs as the preview, with an overlap margin cropped away.
+// tile) and the same engine parameters as the preview, with an overlap margin cropped away.
 
 const encoder = new Worker('export-worker.js');
 let encoderError = null, encoderDone = null;
@@ -621,6 +522,17 @@ function download(blob, name) {
   const a = Object.assign(document.createElement('a'), { href: url, download: name });
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => { if (lastDownloadUrl === url) { URL.revokeObjectURL(url); lastDownloadUrl = null; } }, 60000);
+}
+
+// The mat is the image's own paper white, not pure 255: what the scanner renders for a
+// saturated neutral (far above scene white), in output code values. Read from the engine on a flat patch.
+const MAT_PATCH = 8, MAT_SCENE = 64;
+function paperWhite(u) {
+  updateEngine(renderParamsJson(u, true));
+  const out = engine.process(new Float32Array(MAT_PATCH * MAT_PATCH * 3).fill(MAT_SCENE), MAT_PATCH, MAT_PATCH);
+  const px = Float32Array.from(out.subarray(0, 3));
+  if (outP3()) toP3CPU(px);
+  return Array.from(px, q8);
 }
 
 // `ig`: Instagram export (vertical photos): the whole pipeline runs at IG_WIDTH px wide,
@@ -675,7 +587,7 @@ async function exportFull(ig = false) {
     const border = bFrac ? (ig ? (IG_WIDTH - w) >> 1 : Math.round(Math.max(w, h) * bFrac)) : 0;
     log(`export start ${w}x${h} p3=${p3} progressive=${progressive} border=${border}`);
 
-    await ensureTone(u);
+    ensureEngine();
     const longSide = Math.max(w, h);
     const strips = Math.ceil(h / EXPORT_TILE), cols = Math.ceil(w / EXPORT_TILE);
 
@@ -683,7 +595,7 @@ async function exportFull(ig = false) {
     encoderError = null;
     const done = new Promise((resolve, reject) => { encoderDone = { resolve, reject }; });
     done.catch(() => {});
-    encoder.postMessage({ cmd: 'start', width: w, height: h, distance: JPEG_DISTANCE, progressive, yuv444: 1, border });
+    encoder.postMessage({ cmd: 'start', width: w, height: h, distance: JPEG_DISTANCE, progressive, yuv444: 1, border, mat: border ? paperWhite(u) : undefined });
 
     for (let s = 0; s < strips; s++) {
       const ty = s * EXPORT_TILE, ch = Math.min(EXPORT_TILE, h - ty);
@@ -696,7 +608,7 @@ async function exportFull(ig = false) {
         const tw = Math.min(w, tx + EXPORT_TILE + EXPORT_PAD) - x0, th = Math.min(h, ty + EXPORT_TILE + EXPORT_PAD) - y0;
         updateEngine(renderParamsJson(u, false, FILM_FORMAT_MM * Math.max(tw, th) / longSide));
         const tile = (tileBuf = tileBuf?.length >= tw * th * 4 ? tileBuf : new Uint8Array(tw * th * 4)).subarray(0, tw * th * 4);
-        await renderRegion(frame, x0, y0, tw, th, tile, lensOf(u), u.grain, u.texture, u.clarity, u.print, u.fade);
+        await renderRegion(frame, x0, y0, tw, th, tile, u);
         const cw = Math.min(EXPORT_TILE, w - tx);
         const t32 = new Uint32Array(tile.buffer, tile.byteOffset, tw * th);
         for (let y = 0; y < ch; y++) {   // RGBA tile → RGB strip (one 32-bit read per pixel; little-endian, as the CPU path)
@@ -712,7 +624,7 @@ async function exportFull(ig = false) {
     encoder.postMessage({ cmd: 'finish' });
     const result = await done;
     let bytes = result.jpeg;
-    if (outP3()) bytes = insertExif(bytes, iccSegment());   // generic segment insert: the JPEG is Display P3
+    bytes = insertExif(bytes, iccSegment(outP3() ? 'p3' : 'srgb'));   // generic segment insert: the JPEG says which space it is in
     try {
       const seg = await readExifSegment(photo.file);
       if (seg) { bytes = insertExif(bytes, patchExif(seg, result.width, result.height, outP3())); log(`EXIF carried over (${seg.length} B)`); }
@@ -766,16 +678,18 @@ const sign = (v) => (v > 0 ? '+' : '');
 const pct = (v) => `${Math.round(v * 100)}`;
 const mult = (v) => (v === 0 ? 'off' : `${v.toFixed(1)}×`);
 const pctOff = (v) => (v === 0 ? 'off' : pct(v));
+const signPct = (v) => `${sign(v)}${pct(v)}`;
 const FORMAT = {
   ev: (v) => `${sign(v)}${v.toFixed(1)}`,
-  look: pct, rolloff: pct,
+  contrast: signPct, highlight: signPct,
   mshift: (v) => `${sign(v)}${v}`, yshift: (v) => `${sign(v)}${v}`,
   grain: mult, halation: mult,
   ca: pctOff, vignette: pctOff,
   falloff: pct,
-  texture: (v) => `${sign(v)}${pct(v)}`, clarity: pctOff, dust: pctOff, print: pctOff, fade: pctOff,
+  texture: signPct, clarity: pctOff, dust: pctOff, black: pctOff,
 };
-const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 0.4, halation: 1, texture: 0.2, clarity: 0.1, print: 0.8, fade: 0.15, ca: 1, vignette: 0.65, falloff: 0.4, dust: 0.27 };
+// v2-calib: contrast / highlight / black defaults are the lab's standard (0); the old look defaults (Contrasto .35, Alte luci .6, Nero .15) are gone with their stages.
+const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, mshift: 0, yshift: 0, black: 0, grain: 0.4, halation: 1, texture: 0.2, clarity: 0.1, ca: 1, vignette: 0.65, falloff: 0.4, dust: 0.27 };
 const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }
 
