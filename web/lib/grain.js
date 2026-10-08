@@ -61,9 +61,9 @@ const FADE_MAX = 0.15, FADE_P = 3.5;
 // per channel weights (display RGB, ~zero luma) at full strength; the tint grows with Nero.
 const FADE_TINT = [1 - 0.6 * 0.5, 1 + 0.15 * 0.5, 1 + 0.45 * 0.5];
 // Gold toning (OKLab offsets on every pixel, by OKLab L), measured on 9 Gold 200 scans
-// (IG screenshots): neutrals are pure yellow, Lab b* +6 in deep shadows, +12 through
-// shadows and mids, +4 in the lights; a* ~0. bMid at L 0.30-0.62, easing to bHi by 0.90.
-const GOLD = { a: 0.002, bMid: 0.036, bHi: 0.012, l0: 0.04, l1: 0.30, l2: 0.62, l3: 0.90 };
+// (IG screenshots) on true neutrals only (Lab C* < 10): pure yellow, b* about +4 across the
+// range, a* ~0. (A C* < 25 mask mixed in skin and wood and read ~3x too warm.)
+const GOLD = { a: 0.002, bMid: 0.016, bHi: 0.009, l0: 0.04, l1: 0.30, l2: 0.62, l3: 0.90 };
 // Sky-blue rotation (skyHue): OKLab hue 235° direction, half-width (60°), rotation (5.5°), chroma ramp.
 const SKY = { dir: [-0.5735764, -0.8191520], width: 1.0471976, theta: 0.0959931, c0: 0.015, c1: 0.045 };
 // Rows: linear RGB → LMS (OKLab M1 composed with the primaries, rows normalised so white has a = b = 0), and back.
