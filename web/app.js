@@ -3,7 +3,7 @@ import { transferChart, readTransfer, buildTone, autoTone, scanLevels, buildRawT
 import { sleep, store } from './lib/util.js';
 import { LIN8, LUMA_P3, LUMA_SRGB, srgbToLinear } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
-import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
+import { readExifSegment, patchExif, insertExif, readExposure } from './lib/exif.js';
 import { isRaw, loadRaw, uploadRaw, rawAuto, rawPreviewRGBA } from './lib/raw.js';
 import { iccSegment } from './lib/icc.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
@@ -23,6 +23,22 @@ const IG_WIDTH = 1080;            // Instagram feed width (3:4 portrait = 1080 �
 // near-neutral pixels' cast removed (Gold 200 scans measured: neutrals a* ~0; an iPhone
 // indoors left them magenta-red), and the clamp on each channel gain.
 const CAST_REMOVE = 0.7, CAST_CLAMP = [0.8, 1.25];
+// Film camera (Contax T3-like compact, handheld, no flash) loaded with Gold 200. Dim scenes
+// (indoors) are underexposed: the negative is thin, shadows fall into the toe, and the lab
+// scanner compensates by lifting them (olive/cyan drift). iPhones auto-brighten, so U is
+// estimated from the photo's real scene light (EXIF) and simulated in two places:
+// scene exposure x 2^-U before the film (lens-gpu.js wb.w), scanner gain x 2^+U after inversion.
+const GOLD = { iso: 200, N: 2.8, tMax: 1 / 30, maxUnder: 3 };
+const WARM_BLUE_GAIN = 1.15;      // no EXIF: castGains blue gain >= this means tungsten light
+/** Stops of underexposure for a photo's EXIF exposure (or its cast gains when no EXIF). */
+function underExposure(exp, wb) {
+  const evCam = Math.log2(GOLD.N ** 2 / GOLD.tMax) - Math.log2(GOLD.iso / 100);   // darkest scene the camera exposes correctly
+  let ev100 = null;
+  if (exp) ev100 = Math.log2(exp.N ** 2 / exp.t) - Math.log2(exp.iso / 100);
+  if (ev100 === null && exp?.bv != null) ev100 = exp.bv + 5;   // APEX: EV = BV + SV, SV(ISO 100) = 5
+  const u = ev100 !== null ? Math.min(GOLD.maxUnder, Math.max(0, evCam - ev100)) : (wb[2] >= WARM_BLUE_GAIN ? 1 : 0);
+  return { u, ev100 };
+}
 const JPEG_DISTANCE = 1.0;        // butteraugli distance for jpegli
 const PROGRESSIVE_PIXEL_LIMIT = 6e6; // progressive keeps all DCT coeffs in the wasm heap (~29 B/px): baseline above
 const BORDER_FRACTION = 0.01;     // white mat, fraction of the long side, all four sides (as in grain pro)
@@ -75,7 +91,9 @@ const FILTER_EV = 0.005;
 function scanFiltered(u) {
   if (!scanP) return scanP;
   const m = u.mshift * FILTER_EV, y = u.yshift * FILTER_EV, g = [-m / 2 - y / 2, m - y / 2, -m / 2 + y];
-  return scanP.map((v, i) => (i >= 6 ? v * 2 ** g[i - 6] : v));
+  // (CPU fallback path ignores wb today, so it also ignores the pre-film 2^-U half of this.)
+  const lift = 2 ** (photo?.under || 0);   // scanner compensation of the underexposed negative (after inversion)
+  return scanP.map((v, i) => (i >= 6 ? v * lift * 2 ** g[i - 6] : v));
 }
 
 // Everything else is read at render time and goes through `engine.update`.
@@ -216,7 +234,7 @@ async function ensureTone(u) {
 /** 8-bit render of a region of `frame` into `target` (RGBA, w×h×4 bytes). */
 async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, texture = 0, clarity = 0, print = 0, fade = 0) {
   if (gpu) {
-    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3 && !frame.raw, x0, y0, w, h, 1, lens, clarity, frame.raw ? 0 : 1, texture, photo.wb),
+    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3 && !frame.raw, x0, y0, w, h, 1, lens, clarity, frame.raw ? 0 : 1, texture, [...photo.wb, 2 ** -photo.under]),
       tone.packed, w, h, tone.out8,
       GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0], tone.balance, photo.vibrance || 0, print, fade, scanFiltered(ui())), target);
   }
@@ -500,7 +518,9 @@ async function loadPhoto(file) {
       preview.before = new ImageData(preview.data, preview.w, preview.h, { colorSpace: 'display-p3' });
       log(`DNG ${raw.fullW}x${raw.fullH}, preview ${raw.w}x${raw.h}, orientation ${raw.orientation}, baseline ${raw.baseline} EV, ${Math.round(performance.now() - t)} ms`);
       photo?.bitmap?.close();
-      photo = { file, bitmap: null, preview, wb: [1, 1, 1], dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
+      const ux = underExposure(await readExposure(file), [1, 1, 1]);
+      log(`under ${ux.u.toFixed(2)} EV (EV100 ${ux.ev100 === null ? 'n/a' : ux.ev100.toFixed(1)})`);
+      photo = { file, bitmap: null, preview, wb: [1, 1, 1], under: ux.u, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
       uploadRaw(sf, raw);
     } else {
       const bitmap = await createImageBitmap(file);
@@ -510,7 +530,9 @@ async function loadPhoto(file) {
       preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
       log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
       photo?.bitmap?.close();   // full-resolution decode of the previous photo
-      photo = { file, bitmap, preview, wb: castGains(preview.data), dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
+      const wb = castGains(preview.data), ux = underExposure(await readExposure(file), wb);
+      log(`under ${ux.u.toFixed(2)} EV (EV100 ${ux.ev100 === null ? 'n/a' : ux.ev100.toFixed(1)})`);
+      photo = { file, bitmap, preview, wb, under: ux.u, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
       if (gpu) {
         preview.clip = clipMask(bitmap, preview.w, preview.h);   // full-res clipping, see common.js
         uploadFrame(preview.data, preview.w, preview.h, preview.clip);

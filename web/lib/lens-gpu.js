@@ -138,6 +138,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let k = lut(0u, max(c.r, max(c.g, c.b)));
   let S = ${TONE_SQRT_N}u + 1u;
   c = vec3<f32>(lut(S, c.r * k), lut(S, c.g * k), lut(S, c.b * k));
+  // Underexposure (app.js photo.under): the phone auto-brightened a dim scene; the film camera
+  // would have collected 2^-U of that light. Scale the scene exposure here, before the film.
+  c *= p.wb.w;
   // Clipped highlights (alpha = clipped fraction of the pixel, common.js): that
   // fraction of the light was really much brighter; it feeds halation/scatter.
   // Gate (CLIP_R*_UM): partly clipped white fabric must not turn into patchy
@@ -185,6 +188,6 @@ export function inputUniform(W, H, p3, x0, y0, w, h, scale, lens, clarity = 0, r
     MICRO_UM * kpx, texture * MICRO_MAX,
     0, clarity,                                // clar.z unused (removed stage)
     kpx, 0, 0, 0,                              // opt.yzw unused (removed stages)
-    wb[0], wb[1], wb[2], 0,
+    wb[0], wb[1], wb[2], wb[3] ?? 1,   // w: scene exposure scale 2^-under
   ]);
 }
