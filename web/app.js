@@ -76,7 +76,7 @@ const lensOf = (u) => ({ ca: u.ca * u.ca, vignette: u.vignette, falloff: u.fallo
 // No print, no enlarger: the colour filters are the scanner's colour correction (scanFiltered).
 const calibParams = () => ({ enlarger: { m_filter_shift: 0, y_filter_shift: 0 } });
 // Magenta↔Verde / Giallo↔Blu: scanner channel gains on the inverted exposure, EV per slider unit.
-const FILTER_EV = 0.01;
+const FILTER_EV = 0.005;
 /** scanP with the colour filters folded into its per-channel scales (+m greener, +y bluer). */
 function scanFiltered(u) {
   if (!scanP) return scanP;
