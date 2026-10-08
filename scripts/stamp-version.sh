@@ -14,7 +14,7 @@ sed -i -E "s#src=\"(app|bench)\.js\"#src=\"\1.js?v=$v\"#" "$dir"/*.html
 # Visible build label (app.js BUILD): v<VERSION> (+ debug) · commit time (Rome).
 # The commit id ($v) stays in the cache-busting query strings only.
 when=$(TZ=Europe/Rome date -d "@$(git log -1 --format=%ct 2>/dev/null || date +%s)" '+%d/%m %H:%M')
-label="v$(cat "$(dirname "$0")/../VERSION" 2>/dev/null || echo 0)"
+label="v$(cat "$(dirname "$0")/../VERSION" 2>/dev/null)" || { echo "stamp-version: VERSION file missing or unreadable" >&2; exit 1; }
 case "$v" in dbg-*) label="$label debug" ;; esac
 sed -i "s#'__BUILD__'#'$label · $when'#" "$dir/app.js"
 sed -i "s#new Worker('export-worker.js')#new Worker('export-worker.js?v=$v')#" "$dir/app.js"

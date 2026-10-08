@@ -9,10 +9,13 @@ import { wf } from './util.js';
 
 // S-curve: mid slope, toe and shoulder ranges (EV) in display log2 around mid grey.
 export const SCAN = { s: 1.3, lo: 6.5, hi: Math.log2(1 / 0.18) };
-const MID = 48, SPAN = 8;   // chart patch at mid grey (log2 s/0.18 = 0) and ±2 EV (0.25 EV per patch)
+// MID/SPAN must match tone.js LO/HI/N (LO = -12, HI = 8, N = 81; not exported): MID is the chart
+// patch at mid grey (log2 s/0.18 = 0), SPAN = ±2 EV at 0.25 EV per patch. fitScan asserts MID.
+const MID = 48, SPAN = 8;
 
 /** Per-channel [Tbase×3, 1/γ×3, scale×3] from readTransfer() of the raw negative chart. */
 export function fitScan(T) {
+  if (T.logS && Math.abs(T.logS[MID]) > 1e-6) throw new Error('fitScan: chart mid patch moved');
   const p = new Array(9);
   for (let c = 0; c < 3; c++) {
     const C = T.C[c], tb = Math.max(C[0], 1e-6);
@@ -33,7 +36,7 @@ const sCurve = (e) => {
 export function invertCPU(rgb, p) {
   for (let i = 0; i < rgb.length; i += 3) for (let c = 0; c < 3; c++) {
     const T = Math.max(dec(rgb[i + c]), 1e-6);
-    rgb[i + c] = enc(sCurve(p[6 + c] * (T / p[c]) ** (-p[3 + c])));
+    rgb[i + c] = enc(sCurve(Math.min(1e6, Math.max(1e-6, p[6 + c] * (T / p[c]) ** (-p[3 + c])))));
   }
 }
 
@@ -48,6 +51,6 @@ fn scanInv(e: vec3<f32>) -> vec3<f32> {
   let tb = vec3<f32>(P[${base}u], P[${base + 1}u], P[${base + 2}u]);
   let ig = vec3<f32>(P[${base + 3}u], P[${base + 4}u], P[${base + 5}u]);
   let sc = vec3<f32>(P[${base + 6}u], P[${base + 7}u], P[${base + 8}u]);
-  let E = sc * pow(T / tb, -ig);
+  let E = clamp(sc * pow(T / tb, -ig), vec3<f32>(1e-6), vec3<f32>(1e6));
   return encs(vec3<f32>(scanS(E.x), scanS(E.y), scanS(E.z)));
 }`;

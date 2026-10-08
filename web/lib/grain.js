@@ -1,12 +1,12 @@
 // Film grain, procedural, applied where it shows: in the final 8-bit pass
 // (the engine's output pack shader, see spektrafilm-wasm `process_frame`),
-// after the film/print/scan chain, as the grain of a scanned negative reads.
+// after the film + direct-scan chain, as the grain of a scanned negative reads.
 //
 // Why not the engine's own grain: measured on real Kodak Gold 200 scans
 // (shopfront, cliffs, palms, two people on grass), grain is strongest in the
 // shadows and low mids (L* ~20–60), fades in the deep blacks and falls to
 // ~10% of its peak in the highlights (L* 78–96, structure-free flat patches:
-// 8–16% of peak; the print/scan shoulder flattens it). The engine's
+// 8–16% of peak; the scan's shoulder flattens it). The engine's
 // grain, after our tone inversion (which places display highlights mid-curve
 // on the film), did the opposite: strongest at L* 60–90, weak in the shadows.
 //
@@ -47,7 +47,7 @@
 
 import { FRAME_UM, wf, wv3, wm3 } from './util.js';
 import { SCAN_WGSL, invertCPU } from './scan.js';
-import { srgbToLinear, linearToSrgb, REC2020_TO_P3, LUMA_SRGB } from './color.js';
+import { srgbToLinear, linearToSrgb, LIN8, REC2020_TO_P3, LUMA_SRGB } from './color.js';
 
 // Constants shared by GRAIN_WGSL and its CPU twin (outputColourCPU): one source,
 // the WGSL gets them by interpolation.
@@ -74,8 +74,8 @@ const SKY_RGB = { p3: [3.1277694, -2.2571362, 0.1293668, -1.0910094, 2.413332, -
 const OK_LAB = [0.2104542553, 0.7936177850, -0.0040720468, 1.9779984951, -2.4285922050, 0.4505937099, 0.0259040371, 0.7827717662, -0.8086757660];
 // Scanner saturation (vib): chroma ramp-in (greys untouched) and fade-out (saturated untouched).
 const VIB = { c0: 0.008, c1: 0.022, f0: 0.025, f1: 0.2 };
-// Print character (printLook), chosen by eye on A/B variants: a dense Frontier-style
-// print (steeper mids around OKLab L 0.55, deeper toe, richer mid chroma) with
+// Print character (printLook), chosen by eye on A/B variants: a print-like look
+// applied after the scan (steeper mids around OKLab L 0.55, deeper toe, richer mid chroma) with
 // Gold toning in GOLD (measured). OKLab units; all scaled by P[15].
 const PRINT = { piv: 0.55, con: 0.30, toe: -0.012, cLo: 0.95, cMid: 1.15, cHi: 0.92 };
 const OK_LMS = [1, 0.3963377774, 0.2158037573, 1, -0.1055613458, -0.0638541728, 1, -0.0894841775, -1.2914855480];
@@ -85,16 +85,21 @@ export const GRAIN_WGSL = /* wgsl */`
 @group(0) @binding(1) var<storage, read> lut: array<u32>;
 @group(0) @binding(2) var<storage, read_write> dst: array<u32>;
 @group(0) @binding(3) var<storage, read> P: array<f32>;
-// P[4] region width, P[5..6] region origin (frame px), P[7] µm per px,
-// P[8] amplitude (8-bit levels), P[9] grain size (µm), P[10] seed,
-// P[11] = 1: the chain output is Rec.2020 → convert to Display P3 here, with
-// ACES-style per-channel soft gamut compression (see toP3); P[12] the paper
-// black (8-bit / 255): grain softly floors there instead of clipping to 0;
-// P[13] = 1: grey balance curves (tone.js greyBalance) from P[26], applied first;
-// P[17..25] direct-scan inversion fit (scan.js): the engine output is the negative.
-// P[14] scanner saturation strength (vib, 0 = off).
+// P[] layout (the engine prepends 4 slots, so grainParams' head[0] is P[4]):
+//   P[4]  region width            P[5], P[6] region origin (frame px)
+//   P[7]  µm per px               P[8]  amplitude (8-bit levels)
+//   P[9]  grain size (µm)         P[10] seed
+//   P[11] = 1: the engine output is Rec.2020 → convert to Display P3 here, with
+//         ACES-style per-channel soft gamut compression (see toP3)
+//   P[12] black floor (tone.out8[0] / 255): grain softly floors there instead of clipping to 0
+//   P[13] = 1: grey balance curves (tone.js greyBalance) from P[26], applied after the scan inversion
+//   P[14] scanner saturation strength (vib, 0 = off)
+//   P[15] print look strength (Stampa, includes Gold toning)
+//   P[16] Nero fade (black lift, already × FADE_MAX)
+//   P[17..25] direct-scan inversion fit (scan.js): the engine output is the negative
+//   P[26..] grey balance curves, 3 × 1025 floats (when P[13] = 1)
 
-fn bal(c: u32, v: f32) -> f32 {             // grey balance (tone.js greyBalance), P[16..]
+fn bal(c: u32, v: f32) -> f32 {             // grey balance (tone.js greyBalance), curves at P[26..]
   let f = clamp(v, 0.0, 1.0) * 1024.0; let i = u32(f); let base = 26u + c * 1025u;
   if (i >= 1024u) { return P[base + 1024u]; }
   return mix(P[base + i], P[base + i + 1u], f - f32(i));
@@ -281,32 +286,36 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let n = vec3<f32>(grainField(um, 6.0, 31.0, s + 2u), grainField(um, 6.0, 57.0, s + 3u), grainField(um, 6.0, 83.0, s + 4u));
     c += (P[8] / 255.0) * shape * (mono + chroma * n);
   }
-  // Soft floor at the paper black: unchanged a few levels above it, approaching
+  // Soft floor at the black floor (P[12]): unchanged a few levels above it, approaching
   // it below (softplus), so grain never punches pure-black specks into the
   // deepest shadows (measured: up to 4% of a frame at exactly 0).
-  let k = 2.0 / 255.0; let b = P[12] - 2.0 * k;   // paper black maps to itself within 0.3 levels; grain has room below it
+  let k = 2.0 / 255.0; let b = P[12] - 2.0 * k;   // the black floor maps to itself within 0.3 levels; grain has room below it
   let x = (c - b) / k;                         // stable softplus: max(x,0) + log(1 + e^-|x|)
   c = b + k * (max(x, vec3<f32>(0.0)) + log(vec3<f32>(1.0) + exp(-abs(x))));
   let o = vec3<u32>(round(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)) * 255.0));
   dst[i] = o.x | (o.y << 8u) | (o.z << 16u) | 0xff000000u;
 }`;
 
+// Peak amplitude (8-bit levels, per unit of noise) at amount 1.
+const GRAIN_LEVELS = 13;
+
 /**
  * Params for GRAIN_WGSL: region (x0, y0, w) of a frame whose long side is
  * `frameLong` px; `amount` is the Grana slider (0 = off), `seed` per photo.
+ * `black` is the black floor in 8-bit levels (tone.out8[0]); `scanP` is the
+ * 9-value scan fit from fitScan (required).
  */
 export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false, black = 0, balance = null, vibrance = 0, print = 0, fade = 0, scanP = null) {
+  if (!scanP) throw new Error('grainParams: scan fit missing');
   const umPerPx = FRAME_UM / frameLong;
   // Size grows a little with the amount (a coarser-looking stock); 12 µm at 1.
   const size = 12 * (0.75 + 0.25 * amount);
-  const head = [w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0, black / 255, balance ? 1 : 0, vibrance, print, fade * FADE_MAX, ...(scanP || [1, 1, 1, 1, 1, 1, 0.18, 0.18, 0.18])];   // vibrance → P[14]
+  // head[0] lands at P[4]: w, x0, y0, µm/px, amp, size, seed, p3, black, balance flag, vib (P[14]), print (P[15]), fade (P[16]), scan fit (P[17..25])
+  const head = [w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0, black / 255, balance ? 1 : 0, vibrance, print, fade * FADE_MAX, ...scanP];
   const p = new Float32Array(head.length + (balance ? balance.length : 0));
-  p.set(head); if (balance) p.set(balance, head.length);   // balance starts at P[26]
+  p.set(head); if (balance) p.set(balance, head.length);   // balance curves start at P[26]
   return p;
 }
-
-// Peak amplitude (8-bit levels, per unit of noise) at amount 1.
-const GRAIN_LEVELS = 13;
 
 // CPU twin of the Nero fade in GRAIN_WGSL; px display-encoded 0..1, in place.
 export function fadeCPU(px, fade) {
@@ -318,6 +327,7 @@ export function fadeCPU(px, fade) {
 // for the no-WebGPU path: `px` is one engine output pixel (sRGB-encoded), in place.
 const RGC_SCL = (RGC.lim - RGC.thr) / (((1 - RGC.thr) / (RGC.lim - RGC.thr)) ** -RGC.pw - 1) ** (1 / RGC.pw);
 const rgcCPU = (d) => { if (d < RGC.thr) return d; const x = (d - RGC.thr) / RGC_SCL; return RGC.thr + RGC_SCL * x / (1 + x ** RGC.pw) ** (1 / RGC.pw); };
+// scanP defaults to null only for callers without a scan fit; the app always passes it.
 export function outputColourCPU(px, rec2020ToP3, balance, vibrance = 0, scanP = null) {
   if (scanP) invertCPU(px, scanP);   // negative → positive, as scanInv
   if (balance) {
@@ -387,7 +397,7 @@ export function vibCPU(px, p3, s) {
 const SAT_NORMAL = 0.045, SAT_GAIN = 1.6, SAT_MAX = 0.8;
 export function scanSaturation(rgba, p3) {
   const sp = p3 ? 'p3' : 'srgb';
-  const lin = new Float64Array(256).map((_, i) => srgbToLinear(i / 255));
+  const lin = LIN8;
   const n = rgba.length >> 2, step = Math.max(1, Math.floor(n / 100000));
   const Cs = new Float32Array(Math.ceil(n / step));
   let k = 0;

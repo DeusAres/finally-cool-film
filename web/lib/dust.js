@@ -1,10 +1,11 @@
 // Dust, fibres and scratches on the negative — procedural, no textures.
 //
-// What the print shows: anything sitting on the NEGATIVE blocks the enlarger's
-// light, so that spot of paper gets no exposure and stays paper white. Dust and
-// scratches on a print from a negative are therefore light marks, and their
-// opacity is simply how much light they block. Compositing is a mix towards
-// paper white, applied after the whole film/print chain, as a separate layer:
+// What the scan shows: anything sitting on the NEGATIVE blocks the scanner's
+// light, so that spot reads dark on the negative and, once inverted the way a
+// lab scanner does, appears white. Dust and scratches on a scan of a negative
+// are therefore light marks, and their opacity is simply how much light they
+// block. Compositing is a mix towards white, applied after the whole film/scan
+// chain, as a separate layer:
 // toggling it, changing the amount or reseeding re-renders nothing.
 //
 // The field is a list of vector primitives generated from a seed, in µm on a
@@ -26,7 +27,7 @@
 
 import { FRAME_UM } from './util.js';
 
-const PAPER = [252, 250, 246];       // paper base, as the print shows it
+const PAPER = [252, 250, 246];       // white of the marks after inversion (scanner white)
 
 // Counts at amount 1 (a frame that has been handled carelessly).
 const N_SPECKS = 320, N_FIBRES = 18, N_SCRATCHES = 4, N_HAIRLINES = 10;
@@ -81,9 +82,9 @@ export function dustField(seed, aspect) {
     const knots = Array.from({ length: Math.ceil(n / k) + 2 }, () => R());
     return (i) => { const t = i / k, j = Math.floor(t), f = (1 - Math.cos((t - j) * Math.PI)) / 2; return knots[j] + (knots[j + 1] - knots[j]) * f; };
   };
-  // Tint: base-side scratches print white; one that only strips the negative's
-  // top dye layers lets more blue (yellow layer gone) or blue+green light
-  // through, so the print forms extra yellow / red there.
+  // Tint: base-side scratches appear white after inversion; one that only strips
+  // the negative's top dye layers lets more blue (yellow layer gone) or blue+green
+  // light through, so the scan shows extra yellow / red there.
   const tint = () => { const r = R(); return r < 0.72 ? PAPER : r < 0.88 ? [253, 246, 214] : [252, 226, 214]; };
 
   // A drawn line: heading wanders (mean-reverting random walk, rare kinks),
@@ -129,7 +130,7 @@ export function dustField(seed, aspect) {
 
 /**
  * Draw `marks` (amount 0..1) into a 2D context showing the region (x0, y0) of
- * a W×H image whose long side is the frame's long side. Paper colour on a
+ * a W×H image whose long side is the frame's long side. White (PAPER) on a
  * transparent canvas; alpha = light blocked.
  */
 export function drawDust(ctx, marks, amount, W, H, x0 = 0, y0 = 0) {
@@ -200,7 +201,7 @@ export function drawDust(ctx, marks, amount, W, H, x0 = 0, y0 = 0) {
   ctx.restore();
 }
 
-/** Mix an RGB strip (w×h, row stride w*3) towards paper white by the alpha of an RGBA overlay of the same size. */
+/** Mix an RGB strip (w×h, row stride w*3) towards white by the alpha of an RGBA overlay of the same size. */
 export function compositeDust(rgb, overlay) {
   for (let p = 0, j = 0; p < overlay.length; p += 4, j += 3) {
     const a = overlay[p + 3];
