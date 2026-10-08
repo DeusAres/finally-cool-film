@@ -23,6 +23,7 @@ const IG_WIDTH = 1080;            // Instagram feed width (3:4 portrait = 1080 Ã
 // near-neutral pixels' cast removed (Gold 200 scans measured: neutrals a* ~0; an iPhone
 // indoors left them magenta-red), and the clamp on each channel gain.
 const CAST_REMOVE = 0.7, CAST_CLAMP = [0.8, 1.25];
+const CAST_SAT = 0.25, CAST_YMIN = 0.08;   // castGains pixel gate: max (max-min)/max, min luminance
 // Film camera (Contax T3-like compact, handheld, no flash) loaded with Gold 200. Dim scenes
 // (indoors) are underexposed: the negative is thin, shadows fall into the toe, and the lab
 // scanner compensates by lifting them (olive/cyan drift). iPhones auto-brighten, so U is
@@ -67,7 +68,9 @@ function castGains(data) {
   for (let i = 0; i < data.length; i += 4 * 13) {
     const r = srgbToLinear(data[i] / 255), g = srgbToLinear(data[i + 1] / 255), b = srgbToLinear(data[i + 2] / 255);
     const mx = Math.max(r, g, b), mn = Math.min(r, g, b), y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    if (y < 0.02 || mx > 0.9 || (mx - mn) / mx > 0.5) continue;   // mid-tones, near-neutral, unclipped
+    // Truly near-neutral mid-tones and lights only: a wide gate (0.5) took warm skin, wood and
+    // fabric for a cast and turned real whites green (measured: cat fur a* -7).
+    if (y < CAST_YMIN || mx > 0.9 || (mx - mn) / mx > CAST_SAT) continue;
     sum[0] += r / y; sum[1] += g / y; sum[2] += b / y; n++;
   }
   if (n < 200) return [1, 1, 1];
