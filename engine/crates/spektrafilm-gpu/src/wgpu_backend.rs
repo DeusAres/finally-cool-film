@@ -1590,6 +1590,34 @@ impl WgpuBackend {
         };
         let scan_params_buf = mk_uniform("scan_params", bytemuck::bytes_of(&scan_params));
 
+        // Frontier scanner: trilinear lookup in the CPU-built LUT. The table
+        // goes through the static-buffer cache, so it is re-uploaded only when
+        // its contents change (i.e. when `scanner.frontier.*` changed).
+        #[repr(C)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+        struct ScanLutParams {
+            width: u32,
+            height: u32,
+            steps: u32,
+            pad: u32,
+            data_min: [f32; 4],
+            inv: [f32; 4],
+        }
+        let scan_lut = p.frontier.as_ref().map(|f| {
+            let prm = ScanLutParams {
+                width: image.width,
+                height: image.height,
+                steps: f.steps,
+                pad: 0,
+                data_min: [f.data_min[0], f.data_min[1], f.data_min[2], 0.0],
+                inv: [f.inv[0], f.inv[1], f.inv[2], 0.0],
+            };
+            (
+                mk_uniform("scan_lut_params", bytemuck::bytes_of(&prm)),
+                mk_storage("scan_lut", bytemuck::cast_slice(f.table)),
+            )
+        });
+
         // ── Pre-compile pipelines (cached after first call) ──────────────
         // Each shader's bindings layout is fixed and known here.
         let density_pipe = self.cached_pipeline(
@@ -1628,6 +1656,18 @@ impl WgpuBackend {
                 wgpu::BufferBindingType::Storage { read_only: false },
             ],
         );
+
+        let scan_lut_pipe = scan_lut.as_ref().map(|_| {
+            self.cached_pipeline(
+                include_str!("../../spektrafilm-shaders/wgsl/scan_lut.wgsl"),
+                &[
+                    wgpu::BufferBindingType::Uniform,
+                    wgpu::BufferBindingType::Storage { read_only: true },
+                    wgpu::BufferBindingType::Storage { read_only: true },
+                    wgpu::BufferBindingType::Storage { read_only: false },
+                ],
+            )
+        });
 
         // ── Build bind groups (per dispatch, but no buffer creation) ─────
         let workgroup_size = WG_1D;
@@ -1874,6 +1914,19 @@ impl WgpuBackend {
                     resource: buf_b.as_entire_binding(),
                 }, // final rgb
             ],
+        });
+
+        let bg_scan_lut = scan_lut.as_ref().zip(scan_lut_pipe.as_ref()).map(|((prm, table), pipe)| {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("bg_scan_lut"),
+                layout: &pipe.layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: prm.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: buf_a.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: table.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: buf_b.as_entire_binding() },
+                ],
+            })
         });
 
         // Readback buffer (for the final image only) — only needed when we
@@ -2133,7 +2186,11 @@ impl WgpuBackend {
             );
         }
         // 6. Scan spectral: buf_a → buf_b (final rgb, clamped, NOT sRGB-encoded)
-        dispatch(&mut encoder, &scan_pipe.pipeline, &bg_scan, n_pixels);
+        if let (Some(pipe), Some(bg)) = (scan_lut_pipe.as_ref(), bg_scan_lut.as_ref()) {
+            dispatch(&mut encoder, &pipe.pipeline, bg, n_pixels);
+        } else {
+            dispatch(&mut encoder, &scan_pipe.pipeline, &bg_scan, n_pixels);
+        }
         // 6b. Glare (in place on buf_b).
         if let Some(gs) = glare_state.as_ref() {
             let wg_xy = (image.width.div_ceil(16), image.height.div_ceil(16));
@@ -5730,4 +5787,20 @@ fn is_uniform(xs: &[f64]) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod scan_lut_shader_tests {
+    /// No adapter in CI: at least check the Frontier LUT shader parses and validates.
+    #[test]
+    fn scan_lut_wgsl_validates() {
+        let src = include_str!("../../spektrafilm-shaders/wgsl/scan_lut.wgsl");
+        let module = wgpu::naga::front::wgsl::parse_str(src).expect("wgsl parse");
+        wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("wgsl validate");
+    }
 }

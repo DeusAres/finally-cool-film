@@ -239,6 +239,20 @@ pub struct FilmChainParams<'a> {
     /// Whether the final output should be sRGB-encoded after clamping. Mirrors
     /// `RuntimeParams::io.output_cctf_encoding`.
     pub output_cctf_encoding: bool,
+    /// Frontier scanner LUT: when `Some` (scan_film), the scan pass is a
+    /// trilinear lookup in this table instead of `scan_spectral`.
+    pub frontier: Option<FrontierGpuLut<'a>>,
+}
+
+/// Baked Frontier scanner LUT (see `spektrafilm_core::frontier::FrontierLut`):
+/// sRGB-encoded positive RGB at `steps^3` nodes (r-major, 3 floats each) over
+/// the film-density box starting at `data_min`, `inv` = (steps-1)/extent.
+#[derive(Clone, Copy)]
+pub struct FrontierGpuLut<'a> {
+    pub table: &'a [f32],
+    pub steps: u32,
+    pub data_min: [f32; 3],
+    pub inv: [f32; 3],
 }
 
 /// RGB → film-raw front pass of the GPU-resident chain. Both variants are

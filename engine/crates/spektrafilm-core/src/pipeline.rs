@@ -654,8 +654,7 @@ impl Pipeline {
         // extended resident chain, including camera/scanner lens blur,
         // highlight boost, and enlarger diffusion. Backends that do not
         // implement the resident chain return `None` and fall through.
-        // The Frontier scan is baked in a CPU LUT; the GPU chain scans spectrally.
-        if self.frontier.is_none() && (self.tc_lut.is_some() || self.mallett_core.is_some()) {
+        if self.tc_lut.is_some() || self.mallett_core.is_some() {
             if let Some(out) = self.try_gpu_resident(&image, backend, &color_ref) {
                 tracing::info!("pipeline: gpu-resident fast path complete");
                 if backend.resident_chain_applies_post_scan() {
@@ -738,7 +737,7 @@ impl Pipeline {
         image: &ImageBuf,
         backend: &dyn ComputeBackend,
     ) -> Option<ImageBuf> {
-        if self.frontier.is_some() || (self.tc_lut.is_none() && self.mallett_core.is_none()) {
+        if self.tc_lut.is_none() && self.mallett_core.is_none() {
             return None;
         }
         tracing::info!(backend = backend.name(), "pipeline: borrowed resident start");
@@ -1197,7 +1196,8 @@ impl Pipeline {
         } else {
             &self.params.print_render.glare
         };
-        let glare = if glare_params.active && glare_params.percent > 0.0 {
+        // The Frontier positive has no viewing glare (as on the CPU path).
+        let glare = if self.frontier.is_none() && glare_params.active && glare_params.percent > 0.0 {
             let g = glare_params;
             // LogNormal parameters (same derivation as `compute_random_glare_amount`).
             let m = g.percent as f64;
@@ -1327,6 +1327,10 @@ impl Pipeline {
             enlarger_diffusion,
             print_exposure_scale,
             output_cctf_encoding: self.params.io.output_cctf_encoding,
+            frontier: self.frontier.as_ref().map(|f| {
+                let (table, steps, data_min, inv) = f.lut.gpu_table();
+                spektrafilm_gpu::FrontierGpuLut { table, steps, data_min, inv }
+            }),
         };
         backend.try_run_film_chain(&params)
     }

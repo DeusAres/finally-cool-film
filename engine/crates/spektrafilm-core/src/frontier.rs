@@ -199,6 +199,47 @@ impl FrontierBase {
         }
     }
 
+    /// Encoded positive at the `steps^3` nodes of the density box (r-major,
+    /// 3 per node). Same maths as `encode`, with the spectral sum factored per
+    /// axis (`10^-(r a + g b + c d) = 10^-r a * 10^-g b * 10^-c d`), so a
+    /// node costs a few multiply-adds instead of 80 `powf`.
+    pub fn node_table(&self, stage: &Stage, data_min: [f64; 3], data_max: [f64; 3], steps: usize) -> Vec<f64> {
+        let lam: Vec<usize> = (0..self.cd.len())
+            .filter(|&i| self.weights[i].iter().sum::<f64>() > 0.0)
+            .collect();
+        let nl = lam.len();
+        let mut axis = vec![vec![0.0f64; steps * nl]; 3];
+        for a in 0..3 {
+            for n in 0..steps {
+                let v = data_min[a] + (data_max[a] - data_min[a]) * n as f64 / (steps - 1) as f64;
+                for (l, &i) in lam.iter().enumerate() {
+                    let base = if a == 0 { 10f64.powf(-self.base[i]) } else { 1.0 };
+                    axis[a][n * nl + l] = 10f64.powf(-v * self.cd[i][a]) * base;
+                }
+            }
+        }
+        let mut out = vec![0.0f64; steps * steps * steps * 3];
+        out.par_chunks_exact_mut(3).enumerate().for_each(|(idx, dst)| {
+            let (i, j, k) = (idx / (steps * steps), (idx / steps) % steps, idx % steps);
+            let (e0, e1, e2) = (&axis[0][i * nl..], &axis[1][j * nl..], &axis[2][k * nl..]);
+            let mut t = [0.0f64; 3];
+            for (l, &wl) in lam.iter().enumerate() {
+                let tr = e0[l] * e1[l] * e2[l];
+                let w = &self.weights[wl];
+                t[0] += tr * w[0];
+                t[1] += tr * w[1];
+                t[2] += tr * w[2];
+            }
+            let mut d = [0.0f64; 3];
+            for c in 0..3 {
+                let raw = -t[c].max(self.model.tmin_floor).log10();
+                d[c] = self.slope[c] * (raw - self.dmin[c]) + self.offset[c];
+            }
+            dst.copy_from_slice(&stage.encode(d));
+        });
+        out
+    }
+
     /// Operator keys resolved to a per-pixel stage.
     pub fn stage(&self, keys: &FrontierParams) -> Stage {
         let m = &self.model;
@@ -235,6 +276,9 @@ pub struct Gradation {
     bp: f64,
     wp: f64,
     shoulder_one: f64,
+    /// sigmoid at x = 0 and x = 1 (rescale to 0..1)
+    s0: f64,
+    s1: f64,
 }
 
 impl Gradation {
@@ -247,6 +291,8 @@ impl Gradation {
             bp: p.black_point,
             wp: p.white_point,
             shoulder_one: 1.0,
+            s0: 1.0 / (1.0 + (a * m_mid).exp()),
+            s1: 1.0 / (1.0 + (-a * (1.0 - m_mid)).exp()),
         };
         g.shoulder_one = g.shoulder(1.0);
         g
@@ -280,8 +326,7 @@ impl Gradation {
     pub fn curve(&self, x: f64) -> f64 {
         let x = x.clamp(0.0, 1.0);
         let s = |x: f64| 1.0 / (1.0 + (-self.a * (x - self.m)).exp());
-        let (s0, s1) = (s(0.0), s(1.0));
-        let y = (s(x) - s0) / (s1 - s0);
+        let y = (s(x) - self.s0) / (self.s1 - self.s0);
         let y = self.shoulder(y) / self.shoulder_one;
         self.bp + (self.wp - self.bp) * y
     }
@@ -318,6 +363,9 @@ impl Stage {
 #[derive(Clone, Debug)]
 pub struct FrontierLut {
     prepared: PreparedPchip3d,
+    /// The same nodes as f32 (r-major, 3 per node): what the GPU samples.
+    table: Vec<f32>,
+    steps: usize,
     data_min: [f64; 3],
     inv: [f64; 3],
     max_coord: f64,
@@ -333,21 +381,21 @@ impl FrontierLut {
     ) -> Self {
         let stage = base.stage(keys);
         let step_inv = (steps - 1) as f64;
-        let mut lut = vec![0.0f64; steps * steps * steps * 3];
-        lut.par_chunks_exact_mut(3).enumerate().for_each(|(idx, dst)| {
-            let i = idx / (steps * steps);
-            let j = (idx / steps) % steps;
-            let k = idx % steps;
-            let cmy = [
-                data_min[0] + (data_max[0] - data_min[0]) * i as f64 / step_inv,
-                data_min[1] + (data_max[1] - data_min[1]) * j as f64 / step_inv,
-                data_min[2] + (data_max[2] - data_min[2]) * k as f64 / step_inv,
-            ];
-            dst.copy_from_slice(&base.encode(cmy, &stage));
-        });
+        let lut = base.node_table(&stage, data_min, data_max, steps);
         let scale = step_inv;
+        let prepared = prepare_pchip_3d(lut, steps);
+        // GPU table: built directly at three times the cell density (the 17-node
+        // surface itself is ~1.5/255 off the direct evaluation in the toe).
+        let gs = 3 * (steps - 1) + 1;
+        let table: Vec<f32> = base
+            .node_table(&stage, data_min, data_max, gs)
+            .iter()
+            .map(|&v| v as f32)
+            .collect();
         Self {
-            prepared: prepare_pchip_3d(lut, steps),
+            prepared,
+            table,
+            steps: gs,
             data_min,
             inv: [
                 scale / (data_max[0] - data_min[0]),
@@ -358,12 +406,52 @@ impl FrontierLut {
         }
     }
 
+    /// Node table, `steps` and domain for the GPU's trilinear scan pass
+    /// (`scan_lut.wgsl`, mirrored by [`trilinear_reference`]).
+    pub fn gpu_table(&self) -> (&[f32], u32, [f32; 3], [f32; 3]) {
+        let f = |a: [f64; 3]| [a[0] as f32, a[1] as f32, a[2] as f32];
+        let k = (self.steps - 1) as f64 / self.max_coord;
+        (&self.table, self.steps as u32, f(self.data_min), f([self.inv[0] * k, self.inv[1] * k, self.inv[2] * k]))
+    }
+
     /// Encoded positive for a film density.
     #[inline]
     pub fn apply(&self, cmy: [f64; 3]) -> [f64; 3] {
+        // TMPDBG
+        if std::env::var("SF_DBG").is_ok() { static L: std::sync::Mutex<[f64;3]> = std::sync::Mutex::new([9.0;3]); let mut l = L.lock().unwrap(); if (l[0]-cmy[0]).abs()>1e-9 || (l[1]-cmy[1]).abs()>1e-9 { *l = cmy; eprintln!("DBG {:.4} {:.4} {:.4}", cmy[0], cmy[1], cmy[2]); } }
         let q = |c: usize| ((cmy[c] - self.data_min[c]) * self.inv[c]).clamp(0.0, self.max_coord);
         pchip_interp(&self.prepared, q(0), q(1), q(2))
     }
+}
+
+/// The GPU scan pass in Rust: `scan_lut.wgsl` line for line (f32 trilinear in
+/// the node table, encoded output). Reference for the parity test.
+pub fn trilinear_reference(
+    table: &[f32],
+    steps: u32,
+    data_min: [f32; 3],
+    inv: [f32; 3],
+    cmy: [f32; 3],
+) -> [f32; 3] {
+    let top = (steps - 1) as f32;
+    let mut i0 = [0usize; 3];
+    let mut t = [0f32; 3];
+    for c in 0..3 {
+        let p = ((cmy[c] - data_min[c]) * inv[c]).clamp(0.0, top);
+        i0[c] = (p.floor() as usize).min(steps as usize - 2);
+        t[c] = p - i0[c] as f32;
+    }
+    let node = |i: usize, j: usize, k: usize| {
+        let b = ((i * steps as usize + j) * steps as usize + k) * 3;
+        [table[b], table[b + 1], table[b + 2]]
+    };
+    let mix = |a: [f32; 3], b: [f32; 3], t: f32| [0, 1, 2].map(|c| a[c] * (1.0 - t) + b[c] * t);
+    let (i, j, k) = (i0[0], i0[1], i0[2]);
+    let c00 = mix(node(i, j, k), node(i, j, k + 1), t[2]);
+    let c01 = mix(node(i, j + 1, k), node(i, j + 1, k + 1), t[2]);
+    let c10 = mix(node(i + 1, j, k), node(i + 1, j, k + 1), t[2]);
+    let c11 = mix(node(i + 1, j + 1, k), node(i + 1, j + 1, k + 1), t[2]);
+    mix(mix(c00, c01, t[1]), mix(c10, c11, t[1]), t[0])
 }
 
 /// AutoSetup (guessed LATD-style structure, see `eval/FRONTIER.md`).
@@ -525,6 +613,33 @@ mod tests {
     }
 
     #[test]
+    fn gpu_trilinear_matches_direct_evaluation() {
+        let Some(p) = pipeline() else { return };
+        let fr = p.frontier().unwrap();
+        let (table, steps, dmin, inv) = fr.lut.gpu_table();
+        let stage = fr.base.stage(&p.params.scanner.frontier);
+        let (mut seed, mut max_err) = (12345u64, 0f64);
+        let mut rnd = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for _ in 0..20000 {
+            let mut cmy = [0f32; 3];
+            for c in 0..3 {
+                let extent = (steps - 1) as f32 / inv[c];
+                cmy[c] = dmin[c] + extent * rnd() as f32;
+            }
+            let got = super::trilinear_reference(table, steps, dmin, inv, cmy);
+            let want = fr.base.encode([cmy[0] as f64, cmy[1] as f64, cmy[2] as f64], &stage);
+            for c in 0..3 {
+                max_err = max_err.max((got[c] as f64 - want[c]).abs());
+            }
+        }
+        eprintln!("gpu trilinear vs direct: max err {max_err:.5} ({:.2}/255)", max_err * 255.0);
+        assert!(max_err < 1.0 / 255.0, "max err {max_err}");
+    }
+
+    #[test]
     fn keys_move_the_image_the_documented_way() {
         let Some(p) = pipeline() else { return };
         let mut params = p.params.clone();
@@ -547,7 +662,14 @@ mod tests {
         params.scanner.frontier.cmy = [0.01, -0.02, 0.0];
         let t = std::time::Instant::now();
         let q = p.clone().with_params(params.clone());
-        eprintln!("frontier with_params (LUT rebuild): {:?}", t.elapsed());
+        eprintln!("frontier with_params (LUT rebuild, first): {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        for i in 0..10 {
+            let mut pp = params.clone();
+            pp.scanner.frontier.contrast = 0.1 + 0.01 * i as f32;
+            std::hint::black_box(q.clone().with_params(pp));
+        }
+        eprintln!("frontier with_params (LUT rebuild, mean of 10): {:?}", t.elapsed() / 10);
         assert!(std::sync::Arc::ptr_eq(&base, &q.frontier().unwrap().base), "grey-ramp fit must be reused");
         // film-side change refits
         params.film_render.dir_couplers.amount = 0.5;
