@@ -417,8 +417,6 @@ impl FrontierLut {
     /// Encoded positive for a film density.
     #[inline]
     pub fn apply(&self, cmy: [f64; 3]) -> [f64; 3] {
-        // TMPDBG
-        if std::env::var("SF_DBG").is_ok() { static L: std::sync::Mutex<[f64;3]> = std::sync::Mutex::new([9.0;3]); let mut l = L.lock().unwrap(); if (l[0]-cmy[0]).abs()>1e-9 || (l[1]-cmy[1]).abs()>1e-9 { *l = cmy; eprintln!("DBG {:.4} {:.4} {:.4}", cmy[0], cmy[1], cmy[2]); } }
         let q = |c: usize| ((cmy[c] - self.data_min[c]) * self.inv[c]).clamp(0.0, self.max_coord);
         pchip_interp(&self.prepared, q(0), q(1), q(2))
     }

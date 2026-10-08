@@ -1,0 +1,33 @@
+{
+ "scanner": {
+  "frontier": {
+   "model": {
+    "range_density": 1.4,
+    "gradation_a": 4.5,
+    "mid_grey_out": 0.48,
+    "shoulder_start": 0.74,
+    "shoulder_sharpness": 2.0,
+    "saturation": 1.12,
+    "black_point": 0.05,
+    "white_point": 0.99,
+    "sensor_peak_nm": [
+     640,
+     545,
+     450
+    ],
+    "sensor_fwhm_nm": [
+     40,
+     50,
+     50
+    ]
+   }
+  }
+ },
+ "film_render": {
+  "dir_couplers": {
+   "amount": 0.8,
+   "inhibition_interlayer": 0.8,
+   "inhibition_samelayer": 0.7
+  }
+ }
+}
