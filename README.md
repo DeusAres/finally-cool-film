@@ -39,9 +39,12 @@ di pellicola → stampa → scansione, nel browser via WebAssembly + WebGPU. Foc
 - **Colore Gold 200** (misurato su 9 scansioni Gold 200): neutri giallo puro, b\* ~+10 in ombre e mezzitoni, ~+3 nelle
   luci, a\* ~0 (`GOLD` in grain.js). Prima della pellicola, per ogni foto, si toglie il 70% della dominante dei pixel
   quasi neutri (`castGains` in app.js), come l'operatore di laboratorio: es. il magenta dell'iPhone in interni.
-- **Nero** (0..1, default 15): neri sollevati dallo scanner, dopo livelli e Stampa; il piede `(1 − c)^3.5` lascia mezzitoni
-  e luci quasi fermi. **Tinta nero** (−1 ciano … +1 oliva, default −30): tinge il sollevamento come uno scanner che
-  tira su un negativo sottile; più nero sollevi, più si vede.
+- **Scansione diretta, niente carta**: Instagram è RGB su schermo, quindi la catena è pellicola → scanner. Il motore
+  restituisce il negativo (`io.scan_film`), l'app lo inverte come uno scanner (`scan.js`): per canale toglie la base
+  arancio, normalizza la gamma e applica una S morbida senza nero/bianco di carta; il fit è sulla scala dei grigi.
+- **Contrasto**: pendenza attorno al grigio medio, che si spegne sotto −1 EV (le ombre tengono il dettaglio).
+  **Alte luci** abbassa il bianco fino a −0.6 stop. I livelli per foto spostano nero/bianco al massimo di 3/2 L\*.
+- **Nero** (0..1, default 15): neri sollevati dallo scanner con tinta ciano-verde che cresce con il sollevamento.
 - **Polvere e graffi** (`web/lib/dust.js`): procedurali, niente texture. Granelli irregolari (alcuni sfocati), fibre a curvatura
   casuale, rari graffi lungo lo scorrimento della pellicola, in µm sul fotogramma 36 mm, quindi identici in anteprima ed export.
   Stanno sul negativo, quindi in stampa sono bianco carta. Layer separato: slider e **Rimescola** non ri-renderizzano nulla.

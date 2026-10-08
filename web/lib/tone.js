@@ -129,13 +129,18 @@ function displayCurve(ev, rolloff) {
 // which keeps hue exactly, takes over. From -1 EV (was -2): the curve's toe closed
 // shadow detail (hair, indoor shade at -2..-4 EV) as soon as Contrasto went up.
 const LOOK_FADE = [-4, -1];
+const LOOK_SLOPE = 1.2, LOOK_REF = 0.35;   // Contrasto log-slope per unit of slider, neutral value
 
 /** Scene-linear value for a display-linear value dc that has been through the display curve. */
 function sceneValue(T, dc, look) {
   dc = Math.max(dc, 1e-5);
   const t = Math.max(0, Math.min(1, (Math.log2(dc / 0.18) - LOOK_FADE[0]) / (LOOK_FADE[1] - LOOK_FADE[0])));
-  look *= t * t * (3 - 2 * t);
-  return 0.18 * 2 ** ((1 - look) * inverse(T, Math.min(dc, 1)) + look * Math.log2(dc / 0.18));
+  const w = t * t * (3 - 2 * t);
+  const x = (1 - look * w) * inverse(T, Math.min(dc, 1)) + look * w * Math.log2(dc / 0.18);
+  // Contrasto as a log-slope about mid grey (direct scan: the chain's own curve is close to
+  // the photo's, so mixing it in alone barely moves the image). Shadows keep their detail:
+  // the slope fades out below LOOK_FADE, as the mix does. 1 at LOOK_REF.
+  return 0.18 * 2 ** (x * (1 + LOOK_SLOPE * (look - LOOK_REF) * w));
 }
 
 /**
