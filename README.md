@@ -36,8 +36,12 @@ di pellicola → stampa → scansione, nel browser via WebAssembly + WebGPU. Foc
 - **Chiarezza** (0..1): bagliore dreamy in luce lineare (stile Orton, ~220 µm): la luce delle forme chiare si spande
   sui vicini più scuri, più un velo leggero; i dettagli restano. Sempre attivi: morbidezza ottica di lente + scanner
   (0.6 px) e compressione del crunch da ISP (15–60 µm).
-- **Nero** (0..1, default 60): neri sollevati da stampa opaca, applicati dopo livelli e Stampa così nulla li annulla;
-  il piede `(1 − c)^3.5` lascia mezzitoni e luci quasi fermi (nero → ~L\* 7, grigio medio +2 livelli al default).
+- **Colore Gold 200** (misurato su 9 scansioni Gold 200): neutri giallo puro, b\* ~+10 in ombre e mezzitoni, ~+3 nelle
+  luci, a\* ~0 (`GOLD` in grain.js). Prima della pellicola, per ogni foto, si toglie il 70% della dominante dei pixel
+  quasi neutri (`castGains` in app.js), come l'operatore di laboratorio: es. il magenta dell'iPhone in interni.
+- **Nero** (0..1, default 15): neri sollevati dallo scanner, dopo livelli e Stampa; il piede `(1 − c)^3.5` lascia mezzitoni
+  e luci quasi fermi. **Tinta nero** (−1 ciano … +1 oliva, default −30): tinge il sollevamento come uno scanner che
+  tira su un negativo sottile; più nero sollevi, più si vede.
 - **Polvere e graffi** (`web/lib/dust.js`): procedurali, niente texture. Granelli irregolari (alcuni sfocati), fibre a curvatura
   casuale, rari graffi lungo lo scorrimento della pellicola, in µm sul fotogramma 36 mm, quindi identici in anteprima ed export.
   Stanno sul negativo, quindi in stampa sono bianco carta. Layer separato: slider e **Rimescola** non ri-renderizzano nulla.

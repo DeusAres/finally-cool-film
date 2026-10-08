@@ -1,7 +1,7 @@
 import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, to8, clipMask, writeClipAlpha, run } from './lib/common.js';
 import { transferChart, readTransfer, buildTone, autoTone, scanLevels, greyBalance } from './lib/tone.js';
 import { sleep, store } from './lib/util.js';
-import { LIN8, LUMA_P3, LUMA_SRGB } from './lib/color.js';
+import { LIN8, LUMA_P3, LUMA_SRGB, srgbToLinear } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
 import { isRaw, loadRaw, uploadRaw, rawAuto, rawPreviewRGBA } from './lib/raw.js';
@@ -20,6 +20,10 @@ const MAX_EXPORT_PIXELS = 12.5e6; // keeps native 12 MP iPhone frames; 48 MP get
 // Contrasto on raw frames: log-slope per unit of slider, and the slider value that keeps the film's own contrast.
 const RAW_LOOK_K = 1.2, RAW_LOOK_REF = 0.35;
 const IG_WIDTH = 1080;            // Instagram feed width (3:4 portrait = 1080 × 1440)
+// Per-photo cast correction (castGains), as a lab operator does per frame: the share of the
+// near-neutral pixels' cast removed (Gold 200 scans measured: neutrals a* ~0; an iPhone
+// indoors left them magenta-red), and the clamp on each channel gain.
+const CAST_REMOVE = 0.7, CAST_CLAMP = [0.8, 1.25];
 const JPEG_DISTANCE = 1.0;        // butteraugli distance for jpegli
 const PROGRESSIVE_PIXEL_LIMIT = 6e6; // progressive keeps all DCT coeffs in the wasm heap (~29 B/px): baseline above
 const BORDER_FRACTION = 0.01;     // white mat, fraction of the long side, all four sides (as in grain pro)
@@ -41,12 +45,26 @@ let balance0 = null;
 let tone = null, toneKey = '';           // LUTs for the current transfer + look + ev
 let rendering = false, dirty = false, exporting = false, renderCount = 0;
 
+/** Linear RGB gains that remove CAST_REMOVE of the cast of the near-neutral mid-tone pixels of
+ * `data` (display-encoded RGBA). Neutral (1, 1, 1) when too few such pixels. */
+function castGains(data) {
+  const sum = [0, 0, 0]; let n = 0;
+  for (let i = 0; i < data.length; i += 4 * 13) {
+    const r = srgbToLinear(data[i] / 255), g = srgbToLinear(data[i + 1] / 255), b = srgbToLinear(data[i + 2] / 255);
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    if (y < 0.02 || mx > 0.9 || (mx - mn) / mx > 0.5) continue;   // mid-tones, near-neutral, unclipped
+    sum[0] += r / y; sum[1] += g / y; sum[2] += b / y; n++;
+  }
+  if (n < 200) return [1, 1, 1];
+  return sum.map((s) => Math.min(CAST_CLAMP[1], Math.max(CAST_CLAMP[0], (n / s) ** CAST_REMOVE)));
+}
+
 // ---------- params ----------
 
 const ui = () => ({
   ev: +$('ev').value, look: +$('look').value, rolloff: +$('rolloff').value,
   mshift: +$('mshift').value, yshift: +$('yshift').value,
-  grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value, print: +$('print').value, fade: +$('fade').value,
+  grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value, print: +$('print').value, fade: +$('fade').value, fadeTint: +$('fadeTint').value,
   ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value,
 });
 // CA slider is quadratic: realistic (subtle) amounts get most of the travel.
@@ -192,9 +210,9 @@ async function ensureTone(u) {
 /** 8-bit render of a region of `frame` into `target` (RGBA, w×h×4 bytes). */
 async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, texture = 0, clarity = 0, print = 0, fade = 0) {
   if (gpu) {
-    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3 && !frame.raw, x0, y0, w, h, 1, lens, clarity, frame.raw ? 0 : 1, texture),
+    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, frame.p3 && !frame.raw, x0, y0, w, h, 1, lens, clarity, frame.raw ? 0 : 1, texture, photo.wb),
       tone.packed, w, h, tone.out8,
-      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0], tone.balance, photo.vibrance || 0, print, fade), target);
+      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), grain, photo.grainSeed, outP3(), tone.out8[0], tone.balance, photo.vibrance || 0, print, fade, ui().fadeTint), target);
   }
   const rgb = lensActive(lens)
     ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, 1, lensGeometry(frame.w, frame.h, lens), tone)
@@ -209,7 +227,7 @@ async function renderRegion(frame, x0, y0, w, h, target, lens, grain = 0, textur
     if (print > 0 || fade > 0) {   // same post-LUT steps as the GPU output pass (grain.js printLook, Nero)
       px[0] = r8 / 255; px[1] = g8 / 255; px[2] = b8 / 255;
       if (print > 0) printLookCPU(px, p3, print);
-      if (fade > 0) fadeCPU(px, fade);
+      if (fade > 0) fadeCPU(px, fade, ui().fadeTint);
       r8 = Math.round(px[0] * 255); g8 = Math.round(px[1] * 255); b8 = Math.round(px[2] * 255);
     }
     d32[p] = (r8 | (g8 << 8) | (b8 << 16) | 0xff000000) >>> 0;
@@ -474,7 +492,7 @@ async function loadPhoto(file) {
       preview.before = new ImageData(preview.data, preview.w, preview.h, { colorSpace: 'display-p3' });
       log(`DNG ${raw.fullW}x${raw.fullH}, preview ${raw.w}x${raw.h}, orientation ${raw.orientation}, baseline ${raw.baseline} EV, ${Math.round(performance.now() - t)} ms`);
       photo?.bitmap?.close();
-      photo = { file, bitmap: null, preview, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
+      photo = { file, bitmap: null, preview, wb: [1, 1, 1], dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
       uploadRaw(sf, raw);
     } else {
       const bitmap = await createImageBitmap(file);
@@ -484,7 +502,7 @@ async function loadPhoto(file) {
       preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
       log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
       photo?.bitmap?.close();   // full-resolution decode of the previous photo
-      photo = { file, bitmap, preview, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
+      photo = { file, bitmap, preview, wb: castGains(preview.data), dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
       if (gpu) {
         preview.clip = clipMask(bitmap, preview.w, preview.h);   // full-res clipping, see common.js
         uploadFrame(preview.data, preview.w, preview.h, preview.clip);
@@ -702,9 +720,9 @@ const FORMAT = {
   grain: mult, halation: mult,
   ca: pctOff, vignette: pctOff,
   falloff: pct,
-  texture: (v) => `${sign(v)}${pct(v)}`, clarity: pctOff, dust: pctOff, print: pctOff, fade: pctOff,
+  texture: (v) => `${sign(v)}${pct(v)}`, clarity: pctOff, dust: pctOff, print: pctOff, fade: pctOff, fadeTint: (v) => `${sign(v)}${pct(v)}`,
 };
-const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 0.4, halation: 1, texture: 0.2, clarity: 0.1, print: 0.8, fade: 0.5, ca: 1, vignette: 0.65, falloff: 0.4, dust: 0.27 };
+const DEFAULTS = { ev: 0, look: 0.35, rolloff: 0.6, mshift: 0, yshift: 0, grain: 0.4, halation: 1, texture: 0.2, clarity: 0.1, print: 0.8, fade: 0.15, fadeTint: -0.3, ca: 1, vignette: 0.65, falloff: 0.4, dust: 0.27 };
 const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }
 

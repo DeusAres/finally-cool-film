@@ -49,6 +49,7 @@ struct P {
   m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, // P3 → Rec.2020 rows (xyz)
   clar: vec4<f32>,                             // micro-contrast radius (px), strength (Texture); optical blur variance (px²); glow (Chiarezza)
   opt: vec4<f32>,                              // optical restore: frame px per µm, strength; fine-detail strength, range k
+  wb: vec4<f32>,                               // per-photo cast correction: linear RGB gains (castGains, app.js)
 };
 @group(0) @binding(0) var tex: texture_2d<f32>;
 @group(0) @binding(1) var smp: sampler;
@@ -242,6 +243,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let gl = acc / wt - c;
     c += p.clar.w * (${wf(GLOW_VEIL)} * gl + ${wf(GLOW_BLEED)} * max(gl, vec3<f32>(0.0)));
   }
+  c *= p.wb.xyz;                               // remove the phone's own cast (e.g. magenta indoors) before the film
   // tone.js applyTone: display curve on max(R,G,B) as a common gain, then per-channel scene LUT.
   let k = lut(0u, max(c.r, max(c.g, c.b)));
   let S = ${TONE_SQRT_N}u + 1u;
@@ -281,7 +283,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
  * by `scale`; same contract as lens.js extractLens. `restore` (0..1): optical
  * restore strength (halo removal + taking lens), on by default.
  */
-export function inputUniform(W, H, p3, x0, y0, w, h, scale, lens, clarity = 0, restore = 1, texture = 0) {
+export function inputUniform(W, H, p3, x0, y0, w, h, scale, lens, clarity = 0, restore = 1, texture = 0, wb = [1, 1, 1]) {
   const kpx = Math.max(W, H) / FRAME_UM;   // frame px per µm
   const geo = lensGeometry(W, H, lens), M = P3_TO_REC2020;
   return new Float32Array([
@@ -294,5 +296,6 @@ export function inputUniform(W, H, p3, x0, y0, w, h, scale, lens, clarity = 0, r
     // Off (user's choice after A/B on the debug build): lens + scanner blur, halo removal, fine-detail compression.
     0, clarity,
     kpx, 0, 0, FINE_K,
+    wb[0], wb[1], wb[2], 0,
   ]);
 }

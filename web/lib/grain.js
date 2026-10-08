@@ -56,6 +56,13 @@ const RGC = { thr: 0.9, lim: 1.3, pw: 1.2 };
 const GRAIN_MIN_PX = 1.6;
 // Nero (fade): black lift (display-encoded) at slider 1 (0.15 → L* ~13), toe exponent.
 const FADE_MAX = 0.15, FADE_P = 3.5;
+// Tinta nero: how the scanner's shadow lift is tinted (per channel, display RGB, ~zero luma),
+// scaled by the slider: < 0 towards cyan-green (thin negative on a Frontier), > 0 towards olive.
+const FADE_CYAN = [-0.6, 0.15, 0.45], FADE_OLIVE = [0.3, 0.1, -0.9];
+// Gold toning (OKLab offsets on every pixel, by OKLab L), measured on 9 Gold 200 scans
+// (IG screenshots): neutrals are pure yellow, Lab b* +6 in deep shadows, +12 through
+// shadows and mids, +4 in the lights; a* ~0. bMid at L 0.30-0.62, easing to bHi by 0.90.
+const GOLD = { a: 0.002, bMid: 0.036, bHi: 0.012, l0: 0.04, l1: 0.30, l2: 0.62, l3: 0.90 };
 // Sky-blue rotation (skyHue): OKLab hue 235° direction, half-width (60°), rotation (5.5°), chroma ramp.
 const SKY = { dir: [-0.5735764, -0.8191520], width: 1.0471976, theta: 0.0959931, c0: 0.015, c1: 0.045 };
 // Rows: linear RGB → LMS (OKLab M1 composed with the primaries, rows normalised so white has a = b = 0), and back.
@@ -68,9 +75,8 @@ const OK_LAB = [0.2104542553, 0.7936177850, -0.0040720468, 1.9779984951, -2.4285
 const VIB = { c0: 0.008, c1: 0.022, f0: 0.025, f1: 0.2 };
 // Print character (printLook), chosen by eye on A/B variants: a dense Frontier-style
 // print (steeper mids around OKLab L 0.55, deeper toe, richer mid chroma) with
-// Gold's warmth (cream highlights, warm mids). OKLab units; all scaled by P[15].
-const PRINT = { piv: 0.55, con: 0.30, toe: -0.012, cLo: 0.95, cMid: 1.15, cHi: 0.92,
-  shA: 0.001, shB: 0.0, hiA: 0.005, hiB: 0.016, warm: 0.010 };
+// Gold toning in GOLD (measured). OKLab units; all scaled by P[15].
+const PRINT = { piv: 0.55, con: 0.30, toe: -0.012, cLo: 0.95, cMid: 1.15, cHi: 0.92 };
 const OK_LMS = [1, 0.3963377774, 0.2158037573, 1, -0.1055613458, -0.0638541728, 1, -0.0894841775, -1.2914855480];
 
 export const GRAIN_WGSL = /* wgsl */`
@@ -83,11 +89,12 @@ export const GRAIN_WGSL = /* wgsl */`
 // P[11] = 1: the chain output is Rec.2020 → convert to Display P3 here, with
 // ACES-style per-channel soft gamut compression (see toP3); P[12] the paper
 // black (8-bit / 255): grain softly floors there instead of clipping to 0;
-// P[13] = 1: grey balance curves (tone.js greyBalance) from P[17], applied first;
+// P[13] = 1: grey balance curves (tone.js greyBalance) from P[18], applied first;
+// P[17] Tinta nero (-1 cyan .. +1 olive), tints the Nero lift (P[16]).
 // P[14] scanner saturation strength (vib, 0 = off).
 
 fn bal(c: u32, v: f32) -> f32 {             // grey balance (tone.js greyBalance), P[16..]
-  let f = clamp(v, 0.0, 1.0) * 1024.0; let i = u32(f); let base = 17u + c * 1025u;
+  let f = clamp(v, 0.0, 1.0) * 1024.0; let i = u32(f); let base = 18u + c * 1025u;
   if (i >= 1024u) { return P[base + 1024u]; }
   return mix(P[base + i], P[base + i + 1u], f - f32(i));
 }
@@ -223,8 +230,9 @@ fn printLook(c: vec3<f32>, s: f32) -> vec3<f32> {
   let k = ${wf(PRINT.cLo)} * lo + ${wf(PRINT.cMid)} * mid + ${wf(PRINT.cHi)} * hi;
   let kv = k + (1.0 - k) * sstep(0.12, 0.2, length(lab.yz)) * 0.6;   // vivid colours keep most of their bite
   var ab = lab.yz * (1.0 + s * (kv - 1.0));
-  ab += s * (vec2<f32>(${wf(PRINT.shA)}, ${wf(PRINT.shB)}) * lo + vec2<f32>(${wf(PRINT.hiA)}, ${wf(PRINT.hiB)}) * hi
-             + vec2<f32>(0.25, 0.6 * mid) * ${wf(PRINT.warm)});
+  // Gold toning (GOLD): pure yellow neutrals, strongest in shadows and mids.
+  let gr = sstep(${wf(GOLD.l0)}, ${wf(GOLD.l1)}, L);
+  ab += s * vec2<f32>(${wf(GOLD.a)} * gr, ${wf(GOLD.bMid)} * gr - ${wf(GOLD.bMid - GOLD.bHi)} * sstep(${wf(GOLD.l2)}, ${wf(GOLD.l3)}, L));
   // Soft gamut stop: a colour that would leave the gamut goes only 85% of the way to its
   // edge (continuous at t = 1/0.85), so warm saturated tones are never flattened onto a
   // channel at 0 or 255 (measured: hard stop left 7% of basket's pixels with B = 0).
@@ -248,7 +256,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   if (P[15] > 0.0) { c = printLook(c, P[15]); }
   // Nero (fade, P[16]): lifted, matte-print blacks; the toe term (1 - c)^FADE_P
   // leaves mids and highlights almost where they are (black → ~23/255, L* ~7, mid grey +2 levels at default).
-  if (P[16] > 0.0) { c += P[16] * pow(max(vec3<f32>(1.0) - c, vec3<f32>(0.0)), vec3<f32>(${wf(FADE_P)})); }
+  if (P[16] > 0.0) {
+    let t = P[17];
+    let w = vec3<f32>(1.0) + select(t * ${wv3(FADE_OLIVE)}, -t * ${wv3(FADE_CYAN)}, t < 0.0);
+    c += P[16] * w * pow(max(vec3<f32>(1.0) - c, vec3<f32>(0.0)), vec3<f32>(${wf(FADE_P)}));
+  }
   if (P[8] > 0.0) {
     let w = u32(P[4]);
     let um = (vec2<f32>(f32(i % w), f32(i / w)) + vec2<f32>(P[5], P[6]) + 0.5) * P[7];
@@ -283,13 +295,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
  * Params for GRAIN_WGSL: region (x0, y0, w) of a frame whose long side is
  * `frameLong` px; `amount` is the Grana slider (0 = off), `seed` per photo.
  */
-export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false, black = 0, balance = null, vibrance = 0, print = 0, fade = 0) {
+export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = false, black = 0, balance = null, vibrance = 0, print = 0, fade = 0, fadeTint = 0) {
   const umPerPx = FRAME_UM / frameLong;
   // Size grows a little with the amount (a coarser-looking stock); 12 µm at 1.
   const size = 12 * (0.75 + 0.25 * amount);
-  const head = [w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0, black / 255, balance ? 1 : 0, vibrance, print, fade * FADE_MAX];   // vibrance → P[14]
+  const head = [w, x0, y0, umPerPx, GRAIN_LEVELS * amount, size, seed % 65536, rec2020ToP3 ? 1 : 0, black / 255, balance ? 1 : 0, vibrance, print, fade * FADE_MAX, fadeTint];   // vibrance → P[14]
   const p = new Float32Array(head.length + (balance ? balance.length : 0));
-  p.set(head); if (balance) p.set(balance, head.length);   // balance starts at P[17]
+  p.set(head); if (balance) p.set(balance, head.length);   // balance starts at P[18]
   return p;
 }
 
@@ -297,9 +309,9 @@ export function grainParams(w, x0, y0, frameLong, amount, seed, rec2020ToP3 = fa
 const GRAIN_LEVELS = 13;
 
 // CPU twin of the Nero fade in GRAIN_WGSL; px display-encoded 0..1, in place.
-export function fadeCPU(px, fade) {
-  const b = fade * FADE_MAX;
-  for (let c = 0; c < 3; c++) px[c] += b * Math.max(1 - px[c], 0) ** FADE_P;
+export function fadeCPU(px, fade, tint = 0) {
+  const b = fade * FADE_MAX, d = tint < 0 ? FADE_CYAN : FADE_OLIVE, k = Math.abs(tint);
+  for (let c = 0; c < 3; c++) px[c] += b * (1 + k * d[c]) * Math.max(1 - px[c], 0) ** FADE_P;
 }
 
 // CPU twin of the colour steps of GRAIN_WGSL (grey balance, then Rec.2020 → P3),
@@ -401,8 +413,9 @@ export function printLookCPU(px, p3, s) {
   const k = PRINT.cLo * lo + PRINT.cMid * mid + PRINT.cHi * hi;
   const kv = k + (1 - k) * sstepCPU(0.12, 0.2, Math.hypot(a0, b0)) * 0.6;
   const g = 1 + s * (kv - 1);
-  const a = a0 * g + s * (PRINT.shA * lo + PRINT.hiA * hi + 0.25 * PRINT.warm);
-  const b = b0 * g + s * (PRINT.shB * lo + PRINT.hiB * hi + 0.6 * mid * PRINT.warm);
+  const gr = sstepCPU(GOLD.l0, GOLD.l1, L);
+  const a = a0 * g + s * GOLD.a * gr;
+  const b = b0 * g + s * (GOLD.bMid * gr - (GOLD.bMid - GOLD.bHi) * sstepCPU(GOLD.l2, GOLD.l3, L));
   const r = fromOkCPU(L, a, b, sp);   // soft gamut stop, as printLook
   let t = 1e9;
   for (let c = 0; c < 3; c++) {
