@@ -1,0 +1,1063 @@
+{
+ "version": 1,
+ "grey": [
+  {
+   "ev": -4.0,
+   "L": [
+    2.0,
+    12.0
+   ],
+   "a": [
+    -3.5,
+    2.5
+   ],
+   "b": [
+    -7.0,
+    5.0
+   ]
+  },
+  {
+   "ev": -3.667,
+   "L": [
+    3.7,
+    13.7
+   ],
+   "a": [
+    -3.6,
+    2.4
+   ],
+   "b": [
+    -6.5,
+    5.2
+   ]
+  },
+  {
+   "ev": -3.333,
+   "L": [
+    5.3,
+    15.3
+   ],
+   "a": [
+    -3.7,
+    2.3
+   ],
+   "b": [
+    -6.0,
+    5.3
+   ]
+  },
+  {
+   "ev": -3.0,
+   "L": [
+    7.0,
+    17.0
+   ],
+   "a": [
+    -3.8,
+    2.2
+   ],
+   "b": [
+    -5.5,
+    5.5
+   ]
+  },
+  {
+   "ev": -2.667,
+   "L": [
+    10.0,
+    20.0
+   ],
+   "a": [
+    -3.6,
+    2.2
+   ],
+   "b": [
+    -5.0,
+    5.7
+   ]
+  },
+  {
+   "ev": -2.333,
+   "L": [
+    13.0,
+    23.0
+   ],
+   "a": [
+    -3.5,
+    2.3
+   ],
+   "b": [
+    -4.5,
+    5.8
+   ]
+  },
+  {
+   "ev": -2.0,
+   "L": [
+    16.0,
+    26.0
+   ],
+   "a": [
+    -3.3,
+    2.3
+   ],
+   "b": [
+    -4.0,
+    6.0
+   ]
+  },
+  {
+   "ev": -1.667,
+   "L": [
+    21.0,
+    31.0
+   ],
+   "a": [
+    -2.9,
+    2.5
+   ],
+   "b": [
+    -3.5,
+    6.5
+   ]
+  },
+  {
+   "ev": -1.333,
+   "L": [
+    26.0,
+    36.0
+   ],
+   "a": [
+    -2.6,
+    2.6
+   ],
+   "b": [
+    -3.0,
+    7.0
+   ]
+  },
+  {
+   "ev": -1.0,
+   "L": [
+    31.0,
+    41.0
+   ],
+   "a": [
+    -2.2,
+    2.8
+   ],
+   "b": [
+    -2.5,
+    7.5
+   ]
+  },
+  {
+   "ev": -0.667,
+   "L": [
+    37.0,
+    47.0
+   ],
+   "a": [
+    -2.0,
+    3.0
+   ],
+   "b": [
+    -2.0,
+    8.0
+   ]
+  },
+  {
+   "ev": -0.333,
+   "L": [
+    43.0,
+    53.0
+   ],
+   "a": [
+    -1.7,
+    3.3
+   ],
+   "b": [
+    -1.5,
+    8.5
+   ]
+  },
+  {
+   "ev": 0.0,
+   "L": [
+    49.0,
+    59.0
+   ],
+   "a": [
+    -1.5,
+    3.5
+   ],
+   "b": [
+    -1.0,
+    9.0
+   ]
+  },
+  {
+   "ev": 0.333,
+   "L": [
+    54.7,
+    64.7
+   ],
+   "a": [
+    -1.4,
+    3.6
+   ],
+   "b": [
+    -0.7,
+    9.3
+   ]
+  },
+  {
+   "ev": 0.667,
+   "L": [
+    60.3,
+    70.3
+   ],
+   "a": [
+    -1.4,
+    3.6
+   ],
+   "b": [
+    -0.5,
+    9.5
+   ]
+  },
+  {
+   "ev": 1.0,
+   "L": [
+    66.0,
+    76.0
+   ],
+   "a": [
+    -1.3,
+    3.7
+   ],
+   "b": [
+    -0.2,
+    9.8
+   ]
+  },
+  {
+   "ev": 1.333,
+   "L": [
+    70.7,
+    80.0
+   ],
+   "a": [
+    -1.4,
+    3.6
+   ],
+   "b": [
+    -0.3,
+    10.0
+   ]
+  },
+  {
+   "ev": 1.667,
+   "L": [
+    75.3,
+    84.0
+   ],
+   "a": [
+    -1.4,
+    3.6
+   ],
+   "b": [
+    -0.4,
+    10.3
+   ]
+  },
+  {
+   "ev": 2.0,
+   "L": [
+    80.0,
+    88.0
+   ],
+   "a": [
+    -1.5,
+    3.5
+   ],
+   "b": [
+    -0.5,
+    10.5
+   ]
+  },
+  {
+   "ev": 2.333,
+   "L": [
+    82.8,
+    90.5
+   ],
+   "a": [
+    -1.7,
+    3.6
+   ],
+   "b": [
+    -0.7,
+    10.6
+   ]
+  },
+  {
+   "ev": 2.667,
+   "L": [
+    85.7,
+    93.0
+   ],
+   "a": [
+    -2.0,
+    3.7
+   ],
+   "b": [
+    -1.0,
+    10.7
+   ]
+  },
+  {
+   "ev": 3.0,
+   "L": [
+    88.5,
+    95.5
+   ],
+   "a": [
+    -2.2,
+    3.8
+   ],
+   "b": [
+    -1.2,
+    10.8
+   ]
+  },
+  {
+   "ev": 3.333,
+   "L": [
+    90.2,
+    96.8
+   ],
+   "a": [
+    -2.3,
+    3.7
+   ],
+   "b": [
+    -1.5,
+    10.5
+   ]
+  },
+  {
+   "ev": 3.667,
+   "L": [
+    91.8,
+    98.2
+   ],
+   "a": [
+    -2.4,
+    3.6
+   ],
+   "b": [
+    -1.7,
+    10.3
+   ]
+  },
+  {
+   "ev": 4.0,
+   "L": [
+    93.5,
+    99.5
+   ],
+   "a": [
+    -2.5,
+    3.5
+   ],
+   "b": [
+    -2.0,
+    10.0
+   ]
+  },
+  {
+   "ev": 4.333,
+   "L": [
+    94.2,
+    100
+   ],
+   "a": [
+    -2.7,
+    3.6
+   ],
+   "b": [
+    -2.5,
+    9.8
+   ]
+  },
+  {
+   "ev": 4.667,
+   "L": [
+    94.8,
+    100
+   ],
+   "a": [
+    -3.0,
+    3.7
+   ],
+   "b": [
+    -3.0,
+    9.7
+   ]
+  },
+  {
+   "ev": 5.0,
+   "L": [
+    95.5,
+    100
+   ],
+   "a": [
+    -3.2,
+    3.8
+   ],
+   "b": [
+    -3.5,
+    9.5
+   ]
+  }
+ ],
+ "cc24": [
+  {
+   "id": 1,
+   "name": "dark skin",
+   "ref_lab": [
+    37.54,
+    14.37,
+    14.92
+   ],
+   "target_lab": [
+    37.8,
+    14.9,
+    17.2
+   ],
+   "tol_de00": 7,
+   "chroma_ratio": [
+    0.98,
+    1.22
+   ],
+   "hue_shift_deg": [
+    -5,
+    11
+   ]
+  },
+  {
+   "id": 2,
+   "name": "light skin",
+   "ref_lab": [
+    64.66,
+    19.27,
+    17.5
+   ],
+   "target_lab": [
+    69.1,
+    19.1,
+    19.9
+   ],
+   "tol_de00": 7,
+   "chroma_ratio": [
+    0.94,
+    1.18
+   ],
+   "hue_shift_deg": [
+    -4,
+    12
+   ]
+  },
+  {
+   "id": 3,
+   "name": "blue sky",
+   "ref_lab": [
+    49.32,
+    -3.82,
+    -22.54
+   ],
+   "target_lab": [
+    54.0,
+    -5.8,
+    -20.9
+   ],
+   "tol_de00": 9,
+   "chroma_ratio": [
+    0.83,
+    1.07
+   ],
+   "hue_shift_deg": [
+    -14,
+    2
+   ]
+  },
+  {
+   "id": 4,
+   "name": "foliage",
+   "ref_lab": [
+    43.46,
+    -12.74,
+    22.72
+   ],
+   "target_lab": [
+    46.2,
+    -9.9,
+    25.5
+   ],
+   "tol_de00": 9,
+   "chroma_ratio": [
+    0.93,
+    1.17
+   ],
+   "hue_shift_deg": [
+    -16,
+    0
+   ]
+  },
+  {
+   "id": 5,
+   "name": "blue flower",
+   "ref_lab": [
+    54.94,
+    9.61,
+    -24.79
+   ],
+   "target_lab": [
+    59.9,
+    8.3,
+    -25.3
+   ],
+   "tol_de00": 11,
+   "chroma_ratio": [
+    0.88,
+    1.12
+   ],
+   "hue_shift_deg": [
+    -13,
+    7
+   ]
+  },
+  {
+   "id": 6,
+   "name": "bluish green",
+   "ref_lab": [
+    70.48,
+    -32.26,
+    -0.37
+   ],
+   "target_lab": [
+    73.6,
+    -32.1,
+    3.0
+   ],
+   "tol_de00": 9,
+   "chroma_ratio": [
+    0.88,
+    1.12
+   ],
+   "hue_shift_deg": [
+    -16,
+    4
+   ]
+  },
+  {
+   "id": 7,
+   "name": "orange",
+   "ref_lab": [
+    62.73,
+    35.83,
+    56.5
+   ],
+   "target_lab": [
+    67.0,
+    40.1,
+    63.3
+   ],
+   "tol_de00": 9,
+   "chroma_ratio": [
+    1.0,
+    1.24
+   ],
+   "hue_shift_deg": [
+    -8,
+    8
+   ]
+  },
+  {
+   "id": 8,
+   "name": "purplish blue",
+   "ref_lab": [
+    39.43,
+    10.75,
+    -45.17
+   ],
+   "target_lab": [
+    41.0,
+    6.0,
+    -46.0
+   ],
+   "tol_de00": 11,
+   "chroma_ratio": [
+    0.88,
+    1.12
+   ],
+   "hue_shift_deg": [
+    -16,
+    4
+   ]
+  },
+  {
+   "id": 9,
+   "name": "moderate red",
+   "ref_lab": [
+    50.57,
+    48.64,
+    16.67
+   ],
+   "target_lab": [
+    54.5,
+    54.5,
+    23.0
+   ],
+   "tol_de00": 9,
+   "chroma_ratio": [
+    1.03,
+    1.27
+   ],
+   "hue_shift_deg": [
+    -4,
+    12
+   ]
+  },
+  {
+   "id": 10,
+   "name": "purple",
+   "ref_lab": [
+    30.1,
+    22.54,
+    -20.87
+   ],
+   "target_lab": [
+    28.0,
+    23.7,
+    -21.9
+   ],
+   "tol_de00": 11,
+   "chroma_ratio": [
+    0.93,
+    1.17
+   ],
+   "hue_shift_deg": [
+    -10,
+    10
+   ]
+  },
+  {
+   "id": 11,
+   "name": "yellow green",
+   "ref_lab": [
+    71.77,
+    -24.13,
+    58.19
+   ],
+   "target_lab": [
+    74.2,
+    -16.6,
+    64.0
+   ],
+   "tol_de00": 9,
+   "chroma_ratio": [
+    0.93,
+    1.17
+   ],
+   "hue_shift_deg": [
+    -16,
+    0
+   ]
+  },
+  {
+   "id": 12,
+   "name": "orange yellow",
+   "ref_lab": [
+    71.51,
+    18.24,
+    67.37
+   ],
+   "target_lab": [
+    73.8,
+    24.3,
+    74.3
+   ],
+   "tol_de00": 9,
+   "chroma_ratio": [
+    1.0,
+    1.24
+   ],
+   "hue_shift_deg": [
+    -11,
+    5
+   ]
+  },
+  {
+   "id": 13,
+   "name": "blue",
+   "ref_lab": [
+    28.37,
+    15.42,
+    -49.8
+   ],
+   "target_lab": [
+    25.8,
+    9.9,
+    -50.1
+   ],
+   "tol_de00": 11,
+   "chroma_ratio": [
+    0.86,
+    1.1
+   ],
+   "hue_shift_deg": [
+    -14,
+    2
+   ]
+  },
+  {
+   "id": 14,
+   "name": "green",
+   "ref_lab": [
+    54.38,
+    -39.72,
+    32.27
+   ],
+   "target_lab": [
+    59.4,
+    -34.1,
+    36.7
+   ],
+   "tol_de00": 9,
+   "chroma_ratio": [
+    0.86,
+    1.1
+   ],
+   "hue_shift_deg": [
+    -16,
+    0
+   ]
+  },
+  {
+   "id": 15,
+   "name": "red",
+   "ref_lab": [
+    42.43,
+    51.05,
+    28.62
+   ],
+   "target_lab": [
+    44.4,
+    55.6,
+    37.9
+   ],
+   "tol_de00": 9,
+   "chroma_ratio": [
+    1.03,
+    1.27
+   ],
+   "hue_shift_deg": [
+    -3,
+    13
+   ]
+  },
+  {
+   "id": 16,
+   "name": "yellow",
+   "ref_lab": [
+    81.8,
+    2.67,
+    80.41
+   ],
+   "target_lab": [
+    80.1,
+    7.6,
+    88.2
+   ],
+   "tol_de00": 9,
+   "chroma_ratio": [
+    0.98,
+    1.22
+   ],
+   "hue_shift_deg": [
+    -11,
+    5
+   ]
+  },
+  {
+   "id": 17,
+   "name": "magenta",
+   "ref_lab": [
+    50.63,
+    51.28,
+    -14.12
+   ],
+   "target_lab": [
+    55.0,
+    54.9,
+    -10.1
+   ],
+   "tol_de00": 9,
+   "chroma_ratio": [
+    0.93,
+    1.17
+   ],
+   "hue_shift_deg": [
+    -5,
+    15
+   ]
+  },
+  {
+   "id": 18,
+   "name": "cyan",
+   "ref_lab": [
+    49.57,
+    -29.71,
+    -28.32
+   ],
+   "target_lab": [
+    54.3,
+    -30.9,
+    -23.8
+   ],
+   "tol_de00": 9,
+   "chroma_ratio": [
+    0.83,
+    1.07
+   ],
+   "hue_shift_deg": [
+    -16,
+    4
+   ]
+  },
+  {
+   "id": 19,
+   "name": "white 9.5",
+   "ref_lab": [
+    95.19,
+    -1.03,
+    2.93
+   ],
+   "target_lab": [
+    86.3,
+    0.9,
+    4.9
+   ],
+   "tol_de00": 6,
+   "chroma_ratio": null,
+   "hue_shift_deg": null
+  },
+  {
+   "id": 20,
+   "name": "neutral 8",
+   "ref_lab": [
+    81.29,
+    -0.57,
+    0.44
+   ],
+   "target_lab": [
+    80.3,
+    1.1,
+    4.9
+   ],
+   "tol_de00": 6,
+   "chroma_ratio": null,
+   "hue_shift_deg": null
+  },
+  {
+   "id": 21,
+   "name": "neutral 6.5",
+   "ref_lab": [
+    66.89,
+    -0.75,
+    1.15
+   ],
+   "target_lab": [
+    71.3,
+    1.2,
+    4.8
+   ],
+   "tol_de00": 6,
+   "chroma_ratio": null,
+   "hue_shift_deg": null
+  },
+  {
+   "id": 22,
+   "name": "neutral 5",
+   "ref_lab": [
+    50.76,
+    -0.13,
+    -0.23
+   ],
+   "target_lab": [
+    55.4,
+    1.0,
+    4.1
+   ],
+   "tol_de00": 6,
+   "chroma_ratio": null,
+   "hue_shift_deg": null
+  },
+  {
+   "id": 23,
+   "name": "neutral 3.5",
+   "ref_lab": [
+    35.63,
+    -0.46,
+    -0.48
+   ],
+   "target_lab": [
+    35.6,
+    0.3,
+    2.5
+   ],
+   "tol_de00": 6,
+   "chroma_ratio": null,
+   "hue_shift_deg": null
+  },
+  {
+   "id": 24,
+   "name": "black 2",
+   "ref_lab": [
+    20.64,
+    0.07,
+    -0.46
+   ],
+   "target_lab": [
+    16.4,
+    -0.7,
+    0.5
+   ],
+   "tol_de00": 8,
+   "chroma_ratio": null,
+   "hue_shift_deg": null
+  }
+ ],
+ "global": [
+  {
+   "id": "mean_chroma_ratio",
+   "target": [
+    0.98,
+    1.14
+   ]
+  },
+  {
+   "id": "red_chroma_ratio",
+   "target": [
+    1.03,
+    1.27
+   ]
+  },
+  {
+   "id": "yellow_chroma_ratio",
+   "target": [
+    0.98,
+    1.22
+   ]
+  },
+  {
+   "id": "green_chroma_ratio",
+   "target": [
+    0.86,
+    1.1
+   ]
+  },
+  {
+   "id": "blue_chroma_ratio",
+   "target": [
+    0.86,
+    1.1
+   ]
+  },
+  {
+   "id": "skin_chroma_ratio",
+   "target": [
+    0.98,
+    1.18
+   ]
+  },
+  {
+   "id": "skin_hue_deg",
+   "target": [
+    43,
+    54
+   ]
+  },
+  {
+   "id": "sky_hue_deg",
+   "target": [
+    245,
+    262
+   ]
+  },
+  {
+   "id": "foliage_hue_deg",
+   "target": [
+    102,
+    118
+   ]
+  },
+  {
+   "id": "grey_slope_mid",
+   "target": [
+    14.5,
+    20
+   ]
+  },
+  {
+   "id": "grey_slope_shadow",
+   "target": [
+    4,
+    9.5
+   ]
+  },
+  {
+   "id": "grey_slope_high",
+   "target": [
+    2,
+    7
+   ]
+  },
+  {
+   "id": "grey_ab_max_dev_mid",
+   "target": [
+    0,
+    4
+   ]
+  },
+  {
+   "id": "black_L",
+   "target": [
+    3,
+    14
+   ]
+  },
+  {
+   "id": "white_L",
+   "target": [
+    93,
+    99.5
+   ]
+  }
+ ],
+ "weights": {
+  "grey": 0.35,
+  "cc24": 0.4,
+  "global": 0.25
+ },
+ "sources": [
+  "Kodak E-7022 KODAK GOLD 200 tech sheet (Jun 2023): https://www.kodakprofessional.com/sites/default/files/wysiwyg/pro/resources/E7022%20Gold%20tech%20sheet.pdf (qualitative only; curve graphs not machine-read)",
+  "The Art of Film Scanning: Frontier vs. Noritsu: https://jbflanc.substack.com/p/the-art-of-film-scanning-frontier",
+  "50mmf2 Kodak Gold 200 review: https://50mmf2.com/writings/kodak-gold-200-review",
+  "Analogue Wonderland Ultramax vs Gold: https://analoguewonderland.co.uk/blogs/film-photography-blog/kodak-ultramax-vs-kodak-gold",
+  "ColorChecker reference Lab D50: BabelColor / X-Rite post-2014",
+  "Numeric targets are expert priors, not measurements; no published Gold 200 ColorChecker scan found"
+ ]
+}
