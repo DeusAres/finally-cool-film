@@ -19,6 +19,8 @@ const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
 // A lamp / window / sun has a darker surround (or is all clipped) and keeps it.
 const CLIP_R1_UM = 200, CLIP_R2_UM = 450;
 // Slider mapping (Texture, Chiarezza) and the stages they drive, in µm on the 36 mm frame.
+// Colour-noise reduction: ring radii (frame px), luminance range k (per stop²), strength.
+const CHROMA_R1 = 1.5, CHROMA_R2 = 3.0, CHROMA_K = 8.0, CHROMA_NR = 1.0;
 // Texture = micro-contrast: scale (µm), range k (per stop²), midtone width (stops), strength at ±1.
 const MICRO_UM = 60, MICRO_K = 0.4, MICRO_MID_STOPS = 2.5, MICRO_MAX = 0.8;
 // Chiarezza = glow: blur radius (µm), symmetric veil and one-sided bleed of light at 1.
@@ -33,7 +35,7 @@ struct P {
   scale: f32, p3: f32, regionW: f32, regionH: f32,
   m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, // P3 → Rec.2020 rows (xyz)
   clar: vec4<f32>,                             // micro-contrast radius (px), strength (Texture); unused; glow (Chiarezza)
-  opt: vec4<f32>,                              // frame px per µm; unused; unused; unused
+  opt: vec4<f32>,                              // frame px per µm; colour-noise reduction strength; unused; unused
   wb: vec4<f32>,                               // per-photo cast correction: linear RGB gains (castGains, app.js)
 };
 @group(0) @binding(0) var tex: texture_2d<f32>;
@@ -95,6 +97,25 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
   } else {
     c = at(pos).rgb;
+  }
+  // Colour-noise reduction (p.opt.y, CHROMA_NR): the phone's sensor chroma noise is invisible
+  // in the photo, but the film's colour saturation amplifies it ~5× (measured: σC 0.6 → 2.9
+  // with every look stage off) into digital-looking colour speckle; Gold scans show σC 0.4-0.9.
+  // As a lab does: average the chroma (RGB / luminance) over two rings (CHROMA_R1/R2 px),
+  // luminance-edge-aware, and keep this pixel's own luminance: detail and grain are untouched.
+  if (p.opt.y > 0.0) {
+    let y0 = max(dot(c, LW), 1e-5);
+    var acc = c / y0; var wt = 1.0;
+    for (var t = 0; t < 16; t++) {
+      let ring = t / 8;
+      let ang = f32(t) * 0.7853982 + f32(ring) * 0.3926991;
+      let q = at(pos + vec2<f32>(cos(ang), sin(ang)) * select(${wf(CHROMA_R1)}, ${wf(CHROMA_R2)}, ring == 1)).rgb;
+      let yq = max(dot(q, LW), 1e-5);
+      let dl = log2(yq / y0);
+      let w = exp(-dl * dl * ${wf(CHROMA_K)}) * select(1.0, 0.6, ring == 1);
+      acc += w * q / yq; wt += w;
+    }
+    c = mix(c, y0 * acc / wt, p.opt.y);
   }
   // Texture = micro-contrast (MICRO_UM): local contrast in log luminance at the
   // scale of film adjacency (developer / DIR inhibitor diffusion at edges).
@@ -187,7 +208,7 @@ export function inputUniform(W, H, p3, x0, y0, w, h, scale, lens, clarity = 0, r
     ...M[0], 0, ...M[1], 0, ...M[2], 0,
     MICRO_UM * kpx, texture * MICRO_MAX,
     0, clarity,                                // clar.z unused (removed stage)
-    kpx, 0, 0, 0,                              // opt.yzw unused (removed stages)
+    kpx, CHROMA_NR, 0, 0,                      // opt.y colour-noise reduction; opt.zw unused
     wb[0], wb[1], wb[2], wb[3] ?? 1,   // w: scene exposure scale 2^-under
   ]);
 }

@@ -42,6 +42,10 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   arancio, normalizza la gamma e applica una S morbida senza nero/bianco di carta; il fit è sulla scala dei grigi.
 - **Contrasto**: pendenza attorno al grigio medio, che si spegne sotto −1 EV (le ombre tengono il dettaglio).
   **Alte luci** abbassa il bianco fino a −0.6 stop. I livelli per foto spostano nero/bianco al massimo di 3/2 L\*.
+- **Pulizia del colore** (sempre attiva, stadio d'ingresso): il rumore di colore del sensore del telefono, invisibile
+  nella foto, la saturazione della pellicola lo amplificava ~5× in puntini colorati digitali. Come in laboratorio,
+  si media solo la crominanza (RGB / luminanza) su due anelli, rispettando i bordi di luminanza: dettaglio e grana
+  restano. Misurato: σC 2.4 → 0.8, colore/luminanza del rumore 0.64 → 0.17 (Gold di riferimento 0.18).
 - **Interno / luce scarsa** (interruttore in Tono e colore): simula il negativo sottile di una Gold 200 in poca luce
   (1 stop sotto, compensato dallo scanner) e la deriva oliva delle ombre profonde, staccate dai mezzitoni caldi.
   Preselezionato dagli EXIF (tempo, diaframma, ISO: luce sotto la portata di una compatta f/2.8 1/30 a 200 ISO).
@@ -53,7 +57,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## Versione
 
-Il numero mostrato nell'app (`v1.5 · dd/mm hh:mm`, es. `v1.3 · 08/10 14:30`) viene dal file `VERSION`: si alza la seconda cifra a ogni rilascio
+Il numero mostrato nell'app (`v1.6 · dd/mm hh:mm`, es. `v1.3 · 08/10 14:30`) viene dal file `VERSION`: si alza la seconda cifra a ogni rilascio
 (v1.1, v1.2…) e la prima per i cambi grossi. L'id del commit resta solo nei parametri anti-cache dei file.
 
 ## Build locale
