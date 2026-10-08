@@ -11,9 +11,12 @@ js=$(find "$dir" -name '*.js' -not -path "$dir/vendor/*")
 # Static ES module imports: from './x.js' / '../pkg/x.js'
 sed -i -E "s#(from ')(\.{1,2}/[^'?]+\.js)'#\1\2?v=$v'#g" $js
 sed -i -E "s#src=\"(app|bench)\.js\"#src=\"\1.js?v=$v\"#" "$dir"/*.html
-# Visible build label (app.js BUILD): commit · commit time (Rome).
+# Visible build label (app.js BUILD): v<VERSION> (+ debug) · commit time (Rome).
+# The commit id ($v) stays in the cache-busting query strings only.
 when=$(TZ=Europe/Rome date -d "@$(git log -1 --format=%ct 2>/dev/null || date +%s)" '+%d/%m %H:%M')
-sed -i "s#'__BUILD__'#'$v · $when'#" "$dir/app.js"
+label="v$(cat "$(dirname "$0")/../VERSION" 2>/dev/null || echo 0)"
+case "$v" in dbg-*) label="$label debug" ;; esac
+sed -i "s#'__BUILD__'#'$label · $when'#" "$dir/app.js"
 sed -i "s#new Worker('export-worker.js')#new Worker('export-worker.js?v=$v')#" "$dir/app.js"
 sed -i "s#importScripts('vendor/jpegli_wasm2.js')#importScripts('vendor/jpegli_wasm2.js?v=$v')#" "$dir/export-worker.js"
 sed -i "s#new URL('spektrafilm_wasm_bg.wasm', import.meta.url)#new URL('spektrafilm_wasm_bg.wasm?v=$v', import.meta.url)#" "$dir/pkg/spektrafilm_wasm.js"

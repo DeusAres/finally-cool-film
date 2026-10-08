@@ -43,6 +43,11 @@ di pellicola → stampa → scansione, nel browser via WebAssembly + WebGPU. Foc
   Stanno sul negativo, quindi in stampa sono bianco carta. Layer separato: slider e **Rimescola** non ri-renderizzano nulla.
 - Tocca la riga di stato per il **log**; se la scheda muore durante un export, al riavvio il log si apre da solo.
 
+## Versione
+
+Il numero mostrato nell'app (`v1.0 · data`) viene dal file `VERSION`: si alza la seconda cifra a ogni rilascio
+(v1.1, v1.2…) e la prima per i cambi grossi. L'id del commit resta solo nei parametri anti-cache dei file.
+
 ## Build locale
 
 ```bash
