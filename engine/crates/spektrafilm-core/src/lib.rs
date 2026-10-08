@@ -1,6 +1,7 @@
 pub mod color_reference;
 pub mod data;
 pub mod enlarger;
+pub mod frontier;
 pub mod gamut_compression;
 pub mod input_gamut;
 pub mod mallett;

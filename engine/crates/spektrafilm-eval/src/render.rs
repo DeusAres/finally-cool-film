@@ -34,7 +34,7 @@ impl Renderer for EngineRenderer {
 }
 
 /// Params of `web/app.js` (`renderParams`, `calibParams`) and `web/lib/common.js`
-/// (`BASE_PARAMS`, Rec.2020 linear input) with the app's slider defaults. Grain is
+/// (`BASE_PARAMS`, Rec.2020 linear input; no DIR-diffusion override, as v2) with the app's slider defaults. Grain is
 /// off: the app's grain is a GPU output pass, and noise would only blur the
 /// patch means. Output is sRGB, as SCHEMA.md measures.
 fn app_params() -> Value {
@@ -47,11 +47,10 @@ fn app_params() -> Value {
         },
         "enlarger": { "m_filter_shift": 0, "y_filter_shift": 0 },
         "camera": { "auto_exposure": false, "film_format_mm": 35 },
-        "scanner": { "black_correction": false, "white_correction": false, "unsharp_mask": [0, 0] },
+        "scanner": { "model": "frontier", "black_correction": false, "white_correction": false, "unsharp_mask": [0, 0] },
         "film_render": {
             "grain": { "active": false },
             "halation": { "active": true, "halation_amount": 1.0 },
-            "dir_couplers": { "diffusion_size_um": 0.01, "diffusion_tail_weight": 0 },
             "glare": { "roughness": 0 }
         },
         "print_render": { "glare": { "roughness": 0 } }

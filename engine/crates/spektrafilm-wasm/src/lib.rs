@@ -133,6 +133,27 @@ impl Engine {
         stages::filming::measure_autoexposure_ev(&image, &rgb_to_xyz, &params.camera.auto_exposure_method)
     }
 
+    /// Frontier AutoSetup. `rgba` is a thumbnail (at most 256 px on the long
+    /// side) of linear f32 RGBA in the engine's input space (w*h*4). It is
+    /// rendered to the negative on the CPU and analysed; resolves to
+    /// `[density_ev, c, m, y]`, to be passed back as `scanner.frontier.auto`.
+    /// Needs a negative film (the scanner model need not be active).
+    pub fn frontier_auto_setup(&self, rgba: Vec<f32>, width: u32, height: u32) -> Result<js_sys::Float32Array, JsError> {
+        let n = width as usize * height as usize;
+        if rgba.len() != n * 4 {
+            return Err(JsError::new("thumbnail must be width*height*4 floats"));
+        }
+        let mut rgb = Vec::with_capacity(n * 3);
+        for px in rgba.chunks_exact(4) {
+            rgb.extend_from_slice(&px[..3]);
+        }
+        let out = self
+            .pipeline()
+            .frontier_auto_setup(ImageBuf::from_data(width, height, rgb))
+            .ok_or_else(|| JsError::new("frontier_auto_setup needs a negative film"))?;
+        Ok(js_sys::Float32Array::from(out.as_slice()))
+    }
+
     fn pipeline(&self) -> &Pipeline {
         self.pipeline.as_ref().expect("pipeline present")
     }
