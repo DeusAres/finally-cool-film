@@ -1,5 +1,5 @@
 import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, to8, clipMask, writeClipAlpha, run } from './lib/common.js';
-import { transferChart, readTransfer, buildTone, autoTone, scanLevels, greyBalance, highlightGain } from './lib/tone.js';
+import { transferChart, readTransfer, buildTone, autoTone, scanLevels, greyBalance, buildRawTone } from './lib/tone.js';
 import { sleep, store } from './lib/util.js';
 import { LIN8, LUMA_P3, LUMA_SRGB, srgbToLinear } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
@@ -18,8 +18,6 @@ const FILM_FORMAT_MM = 35;        // engine default; sets the physical pixel siz
 const EXPORT_TILE = 1024;         // export tile core size (px)
 const EXPORT_PAD = 128;           // tile overlap: covers halation / DIR diffusion reach at 12 MP
 const MAX_EXPORT_PIXELS = 12.5e6; // keeps native 12 MP iPhone frames; 48 MP gets downscaled (20 MP crashed the grain exporter)
-// Contrasto on raw frames: log-slope per unit of slider, and the slider value that keeps the film's own contrast.
-const RAW_LOOK_K = 1.2, RAW_LOOK_REF = 0.35;
 const IG_WIDTH = 1080;            // Instagram feed width (3:4 portrait = 1080 × 1440)
 // Per-photo cast correction (castGains), as a lab operator does per frame: the share of the
 // near-neutral pixels' cast removed (Gold 200 scans measured: neutrals a* ~0; an iPhone
@@ -202,16 +200,11 @@ async function ensureTone(u) {
   const raw = photo?.preview.raw;
   const key2 = raw ? `${key}|raw${raw.baseline}` : key;
   if (key2 !== toneKey) {
-    tone = buildTone(transfer, { look: u.look, ev: u.ev, rolloff: u.rolloff, levels });
-    if (raw) {
-      // A raw frame is already scene-linear (sensor clip = 1): no phone curve to
-      // invert, only exposure (BaselineExposure + Esposizione) and Contrasto, as a
-      // log-slope k about middle grey (k = 1 at RAW_LOOK_REF: the film's own
-      // contrast). Gain LUT: Alte luci's shoulder only; scene LUT on the same sqrt-spaced index as tone.js.
-      const n = tone.packed.length / 2 - 1, G = 2 ** (raw.baseline + u.ev), hg = highlightGain(u.rolloff);
-      const k = Math.max(0.4, 1 + RAW_LOOK_K * (u.look - RAW_LOOK_REF));
-      for (let i = 0; i <= n; i++) { tone.packed[i] = hg[i]; tone.packed[n + 1 + i] = 0.18 * (G * (i / n) ** 2 / 0.18) ** k; }
-    }
+    // A raw frame is already scene-linear (sensor clip = 1): no phone curve to invert, only
+    // exposure (BaselineExposure + Esposizione), Alte luci's shoulder and Contrasto (tone.js).
+    tone = raw
+      ? buildRawTone(transfer, { ev: u.ev, look: u.look, rolloff: u.rolloff, baseline: raw.baseline, levels })
+      : buildTone(transfer, { look: u.look, ev: u.ev, rolloff: u.rolloff, levels });
     if (balance0) tone.balance = balance0;
     toneKey = key2;
   }

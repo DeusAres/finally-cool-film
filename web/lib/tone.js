@@ -105,16 +105,8 @@ function monotoneSpline(P, M) {
  *   spread evenly and white is approached gently (no band where the iPhone
  *   clipped); with full rolloff white lands just below 1, like paper.
  */
-const MID_HEADROOM = XW - 1.1;
-const ROLLOFF_EV = 0.6;               // display white drop at Alte luci 100 (was 0.06 EV: no visible range)       // mids stay ≥ 1.1 EV below white however far ev goes
-
-/** Gain LUT (as buildTone's) of the display curve at ev 0: only Alte luci's shoulder.
- * For raw frames, whose input is scene-linear with the sensor clip at 1. */
-export function highlightGain(rolloff) {
-  const curve = displayCurve(0, rolloff), g = new Float32Array(SQRT_N + 1);
-  for (let i = 0; i <= SQRT_N; i++) { const n = Math.max((i / SQRT_N) ** 2, 1e-6); g[i] = (0.18 * 2 ** curve(Math.log2(n / 0.18))) / n; }
-  return g;
-}
+const MID_HEADROOM = XW - 1.1;        // mids stay at least 1.1 EV below white however far ev goes
+const ROLLOFF_EV = 0.6;               // display white drop at Alte luci 100 (was 0.06 EV: no visible range)
 
 function displayCurve(ev, rolloff) {
   const lift = 0.9 * ev;
@@ -139,6 +131,12 @@ function displayCurve(ev, rolloff) {
 const LOOK_FADE = [-4, -1];
 const LOOK_SLOPE = 1.2, LOOK_REF = 0.35;   // Contrasto log-slope per unit of slider, neutral value
 
+/** Contrasto as a multiplicative log-slope about mid grey at logx (EV re 0.18): 1 at LOOK_REF, faded in shadows. */
+export function lookSlope(look, logx) {
+  const t = Math.max(0, Math.min(1, (logx - LOOK_FADE[0]) / (LOOK_FADE[1] - LOOK_FADE[0])));
+  return 1 + LOOK_SLOPE * (look - LOOK_REF) * t * t * (3 - 2 * t);
+}
+
 /** Scene-linear value for a display-linear value dc that has been through the display curve. */
 function sceneValue(T, dc, look) {
   dc = Math.max(dc, 1e-5);
@@ -148,12 +146,12 @@ function sceneValue(T, dc, look) {
   // Contrasto as a log-slope about mid grey (direct scan: the chain's own curve is close to
   // the photo's, so mixing it in alone barely moves the image). Shadows keep their detail:
   // the slope fades out below LOOK_FADE, as the mix does. 1 at LOOK_REF.
-  return 0.18 * 2 ** (x * (1 + LOOK_SLOPE * (look - LOOK_REF) * w));
+  return 0.18 * 2 ** (x * lookSlope(look, Math.log2(dc / 0.18)));
 }
 
 /**
  * Starting point from the photo's own luminance (display-linear Y samples):
- * lift the mids half-way towards a balanced median, and add print contrast in
+ * lift the mids half-way towards a balanced median, and add contrast in
  * proportion to how flat the photo is. Tuned towards "a touch brighter and
  * punchier", which is where manual edits kept going.
  */
@@ -190,6 +188,33 @@ export function buildTone(T, { look, ev, rolloff = 0.6, levels }) {
     gain[i] = (0.18 * 2 ** curve(Math.log2(n / 0.18))) / n;
     scene[i] = sceneValue(T, (i / SQRT_N) ** 2, look);
   }
+  return { gain, scene, ...finishTone(T, levels, gain, scene) };
+}
+
+/** Raw (DNG) variant of buildTone: input is scene-linear with the sensor clip at 1, so no
+ * inversion, only exposure G = 2^(baseline+ev), Alte luci's shoulder after it (gain LUT,
+ * tracks exposure) and Contrasto as lookSlope (scene LUT). */
+// Raw Alte luci: above RAW_KNEE EV over mid grey (after exposure), the excess e is
+// compressed to e / (1 + RAW_SHOULDER·rolloff·e): no clip, the film's own shoulder still
+// sees the light above scene white (the raw's headroom). At 100, scene white (+2.47 EV)
+// comes down ~0.65 EV (as JPEG's ~0.6 on display white); 0 = no shoulder at all.
+const RAW_KNEE = XW - 1.5, RAW_SHOULDER = 0.5;
+export function buildRawTone(T, { ev, look, rolloff = 0.6, baseline = 0, levels }) {
+  const G = 2 ** (baseline + ev);
+  const gain = new Float32Array(SQRT_N + 1), scene = new Float32Array(SQRT_N + 1);
+  for (let i = 0; i <= SQRT_N; i++) {
+    const x = Math.max((i / SQRT_N) ** 2, 1e-6);
+    // gain: shoulder on the exposed value G·x, kept in raw units (c·gain ≤ 1, the LUT's range).
+    const u = Math.log2(G * x / 0.18), e = Math.max(0, u - RAW_KNEE);
+    gain[i] = 2 ** (RAW_KNEE + e / (1 + RAW_SHOULDER * rolloff * e) - Math.max(u, RAW_KNEE));
+    // scene: exposure G, then Contrasto as a log-slope about mid grey (shadow-faded, as JPEG).
+    const lz = Math.log2(G * x / 0.18);
+    scene[i] = 0.18 * 2 ** (lz * lookSlope(look, lz));
+  }
+  return { gain, scene, ...finishTone(T, levels, gain, scene) };
+}
+
+function finishTone(T, levels, gain, scene) {
   // White stretch, a soft floor at the paper black (scanner sharpening and
   // grain can undershoot locally, but a print is never darker than its Dmax),
   // then the scanner curve (SCAN_CURVE).
@@ -204,7 +229,7 @@ export function buildTone(T, { look, ev, rolloff = 0.6, levels }) {
   }
   const packed = new Float32Array(2 * (SQRT_N + 1));
   packed.set(gain, 0); packed.set(scene, SQRT_N + 1);
-  return { gain, scene, out8, packed, balance: (T.balance ||= greyBalance(T)) };
+  return { out8, packed, balance: (T.balance ||= greyBalance(T)) };
 }
 
 // Scanner curve, in L* (output → output), per channel like a lab scanner's.
