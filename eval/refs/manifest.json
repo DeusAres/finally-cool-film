@@ -1,0 +1,7 @@
+{
+ "date": "2026-10-08",
+ "accepted": [],
+ "rejected": [],
+ "blocked_hosts": ["jbflanc.substack.com","sebastian-schlueter.com","lomography.com","carmencitafilmlab.com","flickr.com","reddit.com","commons.wikimedia.org","indiefilmlab.com","thedarkroom.com","analoguewonderland.co.uk","i.imgur.com","photrio.com"],
+ "note": "Sandbox proxy returned 403 on CONNECT for every candidate host (WebFetch: ENOTFOUND). No image downloaded, none measured. Web search found only prose (no ColorChecker/grey-card Gold 200 Frontier scans)."
+}
