@@ -71,7 +71,7 @@ export function insertExif(jpeg, seg) {
 
 /**
  * Capture exposure from EXIF: { t (s), N, iso, bv (APEX brightness, or null) } or null when
- * exposure time / aperture / ISO are unavailable. JPEG: APP1 Exif segment; DNG/TIFF: the file
+ * exposure time / aperture / ISO are unavailable. JPEG: APP1 Exif segment; DNG/TIFF (ExifIFD sits ~1 MB in for iPhone DNGs, so 2 MB are read): the file
  * start is the TIFF structure. Never throws.
  */
 export async function readExposure(file) {
@@ -81,7 +81,7 @@ export async function readExposure(file) {
     const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
     const isTiff = (head[0] === 0x49 && head[1] === 0x49 && head[2] === 0x2A && head[3] === 0) ||
                    (head[0] === 0x4D && head[1] === 0x4D && head[2] === 0 && head[3] === 0x2A);
-    if (isTiff) { buf = new Uint8Array(await file.slice(0, 262144).arrayBuffer()); T = 0; }
+    if (isTiff) { buf = new Uint8Array(await file.slice(0, 2097152).arrayBuffer()); T = 0; }
     else { buf = await readExifSegment(file); T = 10; }
     if (!buf) return null;
     const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
