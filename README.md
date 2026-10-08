@@ -28,7 +28,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   12 MP e poi ridotta si media via; a 1080 sopravvive alla ricompressione di Instagram (test interni, compressione simulata).
 - **Pipeline GPU**: la foto va sulla GPU una volta, come texture 8-bit; lens + ricostruzione tono + matrice colore girano
   come primo pass della catena del motore (shader in `lens-gpu.js`, `Engine.process_frame`) e l'uscita torna già RGBA 8-bit
-  tramite la LUT di stampa. Nessun frame float attraversa JS↔wasm: ~4 ms di CPU per frame invece di ~100.
+  tramite la LUT di uscita (scanner). Nessun frame float attraversa JS↔wasm: ~4 ms di CPU per frame invece di ~100.
 - **Texture** (−1..+1): microcontrasto in luminanza log a ~60 µm (adiacenza della pellicola), edge-aware (niente aloni),
   solo sui mezzitoni, tap prefiltrati (niente aliasing all'export). Negativa = micro-toni più piatti.
 - **Chiarezza** (0..1): bagliore dreamy in luce lineare (stile Orton, ~220 µm): la luce delle forme chiare si spande
