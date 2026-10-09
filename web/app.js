@@ -196,7 +196,10 @@ function autoSetup() {
   const ev = Math.max(+$('ev').min, Math.min(+$('ev').max, Math.round(eng.auto_exposure_ev(rgb.slice(), w, h) * 10) / 10));
   scale(2 ** (ev - underEv()));
   // The scanner model arrives with the engine: until then the app loads with neutral scanner setup.
-  const auto = typeof eng.frontier_auto_setup === 'function' ? Array.from(eng.frontier_auto_setup(rgb, w, h)) : [0, 0, 0, 0];
+  // Engine.frontier_auto_setup takes linear RGBA f32 (w*h*4), not RGB.
+  const rgba = new Float32Array(w * h * 4);
+  for (let i = 0, j = 0; i < w * h * 3; i += 3, j += 4) { rgba[j] = rgb[i]; rgba[j + 1] = rgb[i + 1]; rgba[j + 2] = rgb[i + 2]; rgba[j + 3] = 1; }
+  const auto = typeof eng.frontier_auto_setup === 'function' ? Array.from(eng.frontier_auto_setup(rgba, w, h)) : [0, 0, 0, 0];
   return { ev, auto };
 }
 
