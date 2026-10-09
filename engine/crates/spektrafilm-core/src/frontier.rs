@@ -28,6 +28,8 @@
 //!    shoulder above `shoulder_start` (strength scaled by `1 + highlight`),
 //!    black/white points, and `black_lift` (same for R, G, B). The output is
 //!    sRGB-encoded.
+//!    Above mid grey the dimmer channels are pulled towards their mid-slope level so
+//!    bright saturated colours keep their chroma (greys unchanged).
 //! 6. **Colour.** Saturation about the Rec.709 luminance in linear light, re-encoded.
 //!
 //! The result is baked per pixel into a 17^3 (`settings.lut_resolution`) PCHIP
@@ -42,6 +44,12 @@ use crate::profile::Profile;
 
 const IDENTITY: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 const LUMA: [f64; 3] = [0.2126, 0.7152, 0.0722];
+/// Chroma-preserving highlights: encoded level where the blend starts / is complete, gain on
+/// the mid-tone slope used for the channel gaps, and the largest pull on one channel.
+const CHROMA_FROM: f64 = 0.5;
+const CHROMA_TO: f64 = 0.7;
+const CHROMA_SLOPE_GAIN: f64 = 2.0;
+const CHROMA_MAX_STEP: f64 = 0.03;
 const FIRST_WL_NM: f64 = 380.0;
 const STEP_WL_NM: f64 = 5.0;
 
@@ -314,6 +322,10 @@ impl FrontierBase {
             shift,
             curve: Gradation::solve_locked(a, m.gradation_a, sh, m),
             lift: keys.black_lift.clamp(0.0, 1.0) as f64 * m.black_lift_max,
+            mid_slope: {
+                let g = Gradation::solve(m.gradation_a, m.shoulder_sharpness, m);
+                (g.curve(0.52) - g.curve(0.48)) / 0.04
+            },
             sat: (m.saturation * keys.saturation as f64).max(0.0),
             out: IDENTITY,
         }
@@ -467,6 +479,8 @@ pub struct Stage {
     curve: Gradation,
     lift: f64,
     sat: f64,
+    /// Encoded slope of the gradation at mid grey (the film's mid-tone density -> level slope).
+    mid_slope: f64,
     /// Linear sRGB (the model's working primaries) -> linear output primaries.
     out: [[f64; 3]; 3],
 }
@@ -480,10 +494,38 @@ impl Stage {
 
     /// Setup densities `D'` -> encoded positive RGB (0..1).
     pub fn encode(&self, d: [f64; 3]) -> [f64; 3] {
+        let mut x = [0.0f64; 3];
         let mut y = [0.0f64; 3];
         for c in 0..3 {
-            let x = 0.5 + (d[c] + self.shift[c] - self.d_ref) / self.range;
-            y[c] = self.lift + (1.0 - self.lift) * self.curve.curve(x);
+            x[c] = (0.5 + (d[c] + self.shift[c] - self.d_ref) / self.range).clamp(0.0, 1.0);
+            y[c] = self.lift + (1.0 - self.lift) * self.curve.curve(x[c]);
+        }
+        // Chroma-preserving highlights. The sigmoid and its shoulder flatten the density
+        // differences between the channels, so bright saturated colours come out pale.
+        // From mid grey up to about the shoulder knee, the channels are pushed towards the
+        // gaps the mid-tone slope would give them. Greys (equal x) are untouched.
+        let (xm, ym) = ((x[0] + x[1] + x[2]) / 3.0, (y[0] + y[1] + y[2]) / 3.0);
+        let t = ((ym - CHROMA_FROM) / (CHROMA_TO - CHROMA_FROM)).clamp(0.0, 1.0);
+        let w = t * t * (3.0 - 2.0 * t);
+        if w > 0.0 {
+            // Spread about the channel mean, each channel's step soft-limited by tanh.
+            let cap = CHROMA_MAX_STEP * ((1.0 - ym) / 0.2).clamp(0.05, 1.0);
+            let mut e = [0.0f64; 3];
+            for c in 0..3 {
+                let want = CHROMA_SLOPE_GAIN * self.mid_slope * (1.0 - self.lift) * (x[c] - xm);
+                // the step fades with the channel's own curve slope (flat top: no step), which
+                // keeps every output channel non-decreasing in its density
+                let h = 0.01;
+                let sl = ((self.curve.curve((x[c] + h).min(1.0)) - self.curve.curve((x[c] - h).max(0.0))) * (1.0 - self.lift)
+                    / (((x[c] + h).min(1.0) - (x[c] - h).max(0.0)).max(1e-9)) / self.mid_slope.max(1e-9))
+                .clamp(0.0, 1.0);
+                e[c] = sl * sl * cap * ((want - (y[c] - ym)) / cap).tanh();
+            }
+            // smooth max: no channel is pushed up, so the brightest one (and the clipping) stays put
+            let em = 0.01 * (e.iter().map(|v| (v / 0.01).exp()).sum::<f64>()).ln();
+            for c in 0..3 {
+                y[c] = (y[c] + w * (e[c] - em)).clamp(0.0, 1.0);
+            }
         }
         // Saturation about the luminance, in linear light (Y-preserving). Scaling
         // about a gamma-encoded luma compressed bright saturated yellows.
@@ -764,6 +806,29 @@ mod tests {
             let slope = |g: &super::Gradation| (g.curve(0.52) - g.curve(0.48)) / 0.04;
             assert!((slope(&g) - slope(&base)).abs() > 0.1 * slope(&base), "mid slope unchanged at c={c}");
         }
+    }
+
+    #[test]
+    fn saturated_warm_highlight_keeps_hue_and_chroma() {
+        let Some(p) = pipeline() else { return };
+        let fr = p.frontier().unwrap();
+        let stage = |on: bool| {
+            let mut st = fr.base.stage(&p.params.scanner.frontier);
+            if !on {
+                st.mid_slope = 0.0;
+            }
+            st
+        };
+        // warm highlight: R at the top of the range, G and B progressively lower in density
+        let d = |st: &super::Stage| st.encode([fr.base.knee_density() + 0.25, fr.base.knee_density() - 0.05, fr.base.knee_density() - 0.3]);
+        let (on, off) = (d(&stage(true)), d(&stage(false)));
+        let chroma = |v: [f64; 3]| v[0] - v[2];
+        assert!(on[0] >= on[1] && on[1] >= on[2], "hue order kept: {on:?}");
+        assert!(chroma(on) >= chroma(off) - 1e-9, "chroma kept: {on:?} vs {off:?}");
+        assert!(on.iter().all(|v| (0.0..=1.0).contains(v)));
+        // greys untouched
+        let g = stage(true).encode([fr.base.knee_density(); 3]);
+        assert!((g[0] - g[1]).abs() < 1e-9 && (g[1] - g[2]).abs() < 1e-9);
     }
 
     #[test]
