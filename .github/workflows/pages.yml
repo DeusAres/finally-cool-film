@@ -2,46 +2,23 @@ name: Deploy web to GitHub Pages
 
 on:
   push:
-    branches: [claude/spektrafilm-mobile-web-har40e, main, claude/spektrafilm-debug]
+    branches: [claude/spektrafilm-mobile-web-har40e, main]
   workflow_dispatch:
 
 permissions:
   contents: read
-  actions: write
   pages: write
   id-token: write
 
 concurrency:
-  # The debug branch's redeploy run has its own group: the deploy it dispatches must not cancel it.
-  group: pages${{ github.ref_name == 'claude/spektrafilm-debug' && '-redeploy' || '' }}
+  group: pages
   cancel-in-progress: true
 
 jobs:
-  # The github-pages environment only accepts deploys from the normal branch: a push to
-  # the debug branch re-runs this workflow there, which also builds /debug/.
-  redeploy:
-    if: github.ref_name == 'claude/spektrafilm-debug'
-    runs-on: ubuntu-latest
-    steps:
-      - run: gh workflow run pages.yml --repo "${{ github.repository }}" --ref claude/spektrafilm-mobile-web-har40e
-        env:
-          GH_TOKEN: ${{ github.token }}
-
   build:
-    if: github.ref_name != 'claude/spektrafilm-debug'
     runs-on: ubuntu-latest
     steps:
-      # Site root: the pushed branch, or the normal branch when the debug branch is pushed.
-      # /debug/: the debug branch (claude/spektrafilm-debug), built alongside, so one deploy carries both.
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref_name == 'claude/spektrafilm-debug' && 'claude/spektrafilm-mobile-web-har40e' || github.ref_name }}
-      - uses: actions/checkout@v4
-        id: dbg
-        continue-on-error: true
-        with:
-          ref: claude/spektrafilm-debug
-          path: dbg
       - name: Rust toolchain (from rust-toolchain.toml)
         run: rustup show
       - uses: actions/cache@v4
@@ -58,18 +35,8 @@ jobs:
         run: for f in web/*.js web/lib/*.js; do node --input-type=module --check < "$f" || { echo "::error file=$f::syntax error"; exit 1; }; done
       - name: Build
         run: ./scripts/build-web.sh
-      # Same engine sources → reuse the wasm just built; otherwise build the debug engine too.
-      - name: Build debug
-        if: steps.dbg.outcome == 'success'
-        run: |
-          if diff -rq -x target engine dbg/engine >/dev/null; then cp -r web/pkg dbg/web/pkg
-          else (cd dbg && ./scripts/build-web.sh); fi
-          (cd dbg && ./scripts/stamp-version.sh web "dbg-$(git rev-parse --short=8 HEAD)")
       - name: Cache-busting version stamp
         run: ./scripts/stamp-version.sh web "$(git rev-parse --short=8 HEAD)"
-      - name: Put debug under /debug
-        if: steps.dbg.outcome == 'success'
-        run: rm -rf web/debug && cp -r dbg/web web/debug
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web
