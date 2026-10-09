@@ -1,10 +1,9 @@
 // DNG -> linear Rec.2020 float32 .npy (HxWx3), using the app's own decoder (web/lib/dng.js).
-// Also writes <out>.thumb.npy and <out>.json (baseline, under, indoor) for `sf-eval image --meta`.
+// Also writes <out>.thumb.npy and <out>.json (baseline; with --interno: under, gains, grain) for `sf-eval image --meta`.
 // usage: node eval/dng2npy.mjs <in.dng> <out.npy> [maxLongSide] [--interno]
-// --interno: meta gets under (U), gains (as-shot light vs D55, Rec.2020) and grain from web/lib/interno.js, as the app's toggle.
+// --interno: meta gets under (fixed INTERNO_EV), gains [1,1,1] and grain from web/lib/interno.js, as the app's toggle.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { isRaw, loadRaw, rawThumb } from '../web/lib/raw.js';
-import { readExposure } from '../web/lib/exif.js';
 import { internoParams } from '../web/lib/interno.js';
 import { THUMB_PX } from '../web/lib/common.js';
 
@@ -16,24 +15,17 @@ if (!input || !output) {
 }
 
 // Same steps as the app's raw path (web/app.js): loadRaw (decode + EXIF orientation via rawThumb's index
-// mapping), thumb for AutoSetup (rawThumb at THUMB_PX), Interno from EXIF (readExposure).
+// mapping), thumb for AutoSetup (rawThumb at THUMB_PX).
 const buf = readFileSync(input);
 const file = new File([buf], input.split('/').pop());
 const raw = await loadRaw(file, maxLongSide ? +maxLongSide : 2000);   // app preview size = 2000
 if (!(await isRaw(file))) throw new Error('not a DNG');
 const { w, h, rgb } = rawThumb(raw, 1e9);       // scale 1: oriented full copy, sensor values (no baseline)
 const thumb = rawThumb(raw, THUMB_PX);
-const exp = await readExposure(file);
-// app.js underExposure(), CAMERA = { iso: 200, N: 2.8, tMax: 1/30 }, MAX_UNDER_EV = 2 (app.js is DOM-bound, not importable).
-const evCam = Math.log2(2.8 ** 2 * 30) - Math.log2(2);
-let ev100 = null;
-if (exp) ev100 = Math.log2(exp.N ** 2 / exp.t) - Math.log2(exp.iso / 100);
-if (ev100 === null && exp?.bv != null) ev100 = exp.bv + 5;
-const under = ev100 !== null ? Math.min(2, Math.max(0, evCam - ev100)) : 0;
-const meta = { baseline: raw.baseline, orientation: raw.orientation, under, indoor: under >= 1, ev100 };
+const meta = { baseline: raw.baseline, orientation: raw.orientation };
 if (withInterno) {
-  const ip = internoParams({ under, isRaw: true, cctK: raw.cct });
-  Object.assign(meta, { cct: raw.cct, interno: true, under: ip.under, gains: ip.gains, grain: ip.grain });
+  const ip = internoParams();
+  Object.assign(meta, { interno: true, under: ip.under, gains: ip.gains, grain: ip.grain });
 }
 writeFileSync(output.replace(/\.npy$/, '') + '.json', JSON.stringify(meta));
 

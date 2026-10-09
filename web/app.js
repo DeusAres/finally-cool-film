@@ -2,7 +2,7 @@ import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decod
 import { sleep, store } from './lib/util.js';
 import { DISPLAY_GAIN_LUT } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
-import { readExifSegment, patchExif, insertExif, readExposure } from './lib/exif.js';
+import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
 import { isRaw, loadRaw, uploadRaw, rawThumb, rawPreviewRGBA } from './lib/raw.js';
 import { internoParams } from './lib/interno.js';
 import { iccSegment } from './lib/icc.js';
@@ -18,22 +18,10 @@ const EXPORT_TILE = 1024;         // export tile core size (px)
 const EXPORT_PAD = 128;           // tile overlap: covers halation / DIR diffusion reach at 12 MP
 const MAX_EXPORT_PIXELS = 12.5e6; // keeps native 12 MP iPhone frames; 48 MP gets downscaled (20 MP crashed the grain exporter)
 const IG_WIDTH = 1080;            // Instagram feed width (3:4 portrait = 1080 × 1440)
-// Film camera (Contax T3-like compact, handheld, no flash) loaded with Gold 200. Dim scenes
-// (indoors) are underexposed: iPhones auto-brighten, so the stops the camera would have missed
-// are estimated from the photo's real scene light (EXIF) and taken off the scene exposure
-// before the film (Interno). The lab scanner's AutoSetup (frontier.auto) decides what it does about the thin negative.
-const CAMERA = { iso: 200, N: 2.8, tMax: 1 / 30 };
-const MAX_UNDER_EV = 2;
+// Film camera (Contax T3-like compact, handheld, no flash) loaded with Gold 200. Interno (lib/interno.js) takes a fixed
+// INTERNO_EV off the scene exposure before the film: a pure function of the checkbox. The lab scanner's AutoSetup
+// (frontier.auto) decides what it does about the thin negative.
 const NO_AUTO = [0, 0, 0, 0];   // scanner AutoSetup result [d, c, m, y]: neutral
-/** Stops of underexposure for a photo's EXIF exposure, clamped to [0, MAX_UNDER_EV]; 0 without EXIF. */
-function underExposure(exp) {
-  const evCam = Math.log2(CAMERA.N ** 2 / CAMERA.tMax) - Math.log2(CAMERA.iso / 100);   // darkest scene the camera exposes correctly
-  let ev100 = null;
-  if (exp) ev100 = Math.log2(exp.N ** 2 / exp.t) - Math.log2(exp.iso / 100);
-  if (ev100 === null && exp?.bv != null) ev100 = exp.bv + 5;   // APEX: EV = BV + SV, SV(ISO 100) = 5
-  const u = ev100 !== null ? Math.min(MAX_UNDER_EV, Math.max(0, evCam - ev100)) : 0;
-  return { u, ev100 };
-}
 const JPEG_DISTANCE = 1.0;        // butteraugli distance for jpegli
 const PROGRESSIVE_PIXEL_LIMIT = 6e6; // progressive keeps all DCT coeffs in the wasm heap (~29 B/px): baseline above
 const BORDER_FRACTION = 0.01;     // mat (the image's paper white), fraction of the long side, all four sides (as in grain pro)
@@ -45,7 +33,7 @@ const ctx = view.getContext('2d', { colorSpace: 'display-p3' });
 let gpu = false;
 let engine = null;          // sf.Engine for the current photo (its input colour space is fixed at construction)
 let engineParams = '';      // JSON last given to `engine.update` (re-sending it is a no-op)
-let photo = null;           // { file, bitmap, preview, after, under, auto: scanner AutoSetup [d, c, m, y], ... }
+let photo = null;           // { file, bitmap, preview, after, auto: scanner AutoSetup [d, c, m, y], ... }
 let rendering = false, dirty = false, exporting = false, renderCount = 0;
 
 // ---------- params ----------
@@ -64,14 +52,10 @@ const FRONTIER_KEY = 0.01;
 // v2-calib: sign of frontier.cmy (+ = more filtration, i.e. the opposite colour); the sliders read +m greener, +y bluer.
 const frontierCmy = (u) => [0, -u.mshift * FRONTIER_KEY, -u.yshift * FRONTIER_KEY];
 
-/** Interno (lib/interno.js, one source of truth): thin negative U, real light colour, grain factor; null when off. */
-const interno = () => {
-  if (!photo || !$('indoor')?.checked) return null;
-  const { preview } = photo;
-  return internoParams({ under: photo.under, isRaw: !!preview.raw, cctK: preview.raw?.cct, space: preview.raw || preview.p3 ? 'rec2020' : 'srgb' });
-};
-const underEv = () => interno()?.under ?? 0;
-const sceneWb = () => interno()?.gains ?? [1, 1, 1];
+/** Interno (lib/interno.js, one source of truth): a pure function of the checkbox (or of `on`); null when off. */
+const interno = (on = $('indoor')?.checked) => (photo && on ? internoParams() : null);
+const underEv = (on) => interno(on)?.under ?? 0;
+const sceneWb = (on) => interno(on)?.gains ?? [1, 1, 1];
 const grainFactor = () => interno()?.grain ?? 1;
 const baselineEv = () => photo?.preview.raw?.baseline ?? 0;
 /** Scene exposure gain of the input pass: Esposizione, minus Interno's underexposure, plus the DNG baseline (physical, before the film). */
@@ -189,18 +173,19 @@ const q8 = (v) => Math.round(255 * Math.min(1, Math.max(0, v)));
 // ---------- auto ----------
 // Auto = the engine's own exposure metering on a thumb of the photo (Esposizione), then the
 // scanner's AutoSetup on that thumb as the film will see it (frontier.auto).
-// v2-calib: auto_exposure_ev's target (mid grey) and clamp; AutoSetup is re-run when Interno toggles (thin negative), not when Esposizione changes.
+// v2-calib: auto_exposure_ev's target (mid grey) and clamp. AutoSetup is a function of (Interno on/off, the exposure it ran at):
+// cached per photo, never touches the sliders, so toggling Interno off restores the exact previous result.
 
-function autoSetup(keepEv = false) {
+function autoSetup(on, evIn = null) {
   const eng = ensureEngine(), { preview } = photo, raw = preview.raw;
   updateEngine(renderParamsJson(ui()));   // a fresh engine still has the library defaults (camera auto-exposure on, no scanner model)
   const { rgb, w, h } = raw ? rawThumb(raw, THUMB_PX) : jpegThumb(preview);
   const scale = (k) => { for (let i = 0; i < rgb.length; i++) rgb[i] *= k; };
   scale(2 ** baselineEv());
   // The meter sees the scene as shot: it never compensates Interno's U (the negative stays thin).
-  const ev = keepEv ? +$('ev').value : Math.max(+$('ev').min, Math.min(+$('ev').max, Math.round(eng.auto_exposure_ev(rgb.slice(), w, h) * 10) / 10));
-  scale(2 ** (ev - underEv()));
-  const wb = sceneWb();
+  const ev = evIn !== null ? evIn : Math.max(+$('ev').min, Math.min(+$('ev').max, Math.round(eng.auto_exposure_ev(rgb.slice(), w, h) * 10) / 10));
+  scale(2 ** (ev - underEv(on)));
+  const wb = sceneWb(on);
   for (let i = 0; i < rgb.length; i += 3) { rgb[i] *= wb[0]; rgb[i + 1] *= wb[1]; rgb[i + 2] *= wb[2]; }
   // The scanner model arrives with the engine: until then the app loads with neutral scanner setup.
   // Engine.frontier_auto_setup takes linear RGBA f32 (w*h*4), not RGB.
@@ -453,28 +438,24 @@ async function loadPhoto(file) {
       // DNG (raw.js): scene-linear Rec.2020, half-float frame; output in Display P3.
       if (!gpu) throw new Error('I file DNG richiedono WebGPU');
       const t = performance.now(), raw = await loadRaw(file, PREVIEW_LONG_SIDE);
-      const ux = underExposure(await readExposure(file));   // every await before the wait: a render may start during one
       while (rendering || exporting) await sleep(20);
       const preview = { data: rawPreviewRGBA(raw), w: raw.w, h: raw.h, p3: true, raw };
       preview.before = new ImageData(preview.data, preview.w, preview.h, { colorSpace: 'display-p3' });
       log(`DNG ${raw.fullW}x${raw.fullH}, preview ${raw.w}x${raw.h}, orientation ${raw.orientation}, baseline ${raw.baseline} EV, ${Math.round(performance.now() - t)} ms`);
       photo?.bitmap?.close();
-      log(`under ${ux.u.toFixed(2)} EV (EV100 ${ux.ev100 === null ? 'n/a' : ux.ev100.toFixed(1)})`);
-      $('indoor').checked = ux.u >= 1;
-      photo = { file, bitmap: null, preview, under: ux.u, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
+      $('indoor').checked = false;
+      photo = { file, bitmap: null, preview, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
       uploadRaw(sf, raw);
     } else {
       const bitmap = await createImageBitmap(file);
-      const ux = underExposure(await readExposure(file));
       // A render or export in flight still uses the current photo, engine and GPU frame.
       while (rendering || exporting) await sleep(20);
       const preview = decodeRGBA(bitmap, PREVIEW_LONG_SIDE);
       preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
       log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
       photo?.bitmap?.close();   // full-resolution decode of the previous photo
-      log(`under ${ux.u.toFixed(2)} EV (EV100 ${ux.ev100 === null ? 'n/a' : ux.ev100.toFixed(1)})`);
-      $('indoor').checked = ux.u >= 1;   // preselected from EXIF; the user decides
-      photo = { file, bitmap, preview, under: ux.u, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
+      $('indoor').checked = false;
+      photo = { file, bitmap, preview, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
       if (gpu) {
         preview.clip = clipMask(bitmap, preview.w, preview.h);   // full-res clipping, see common.js
         uploadFrame(preview.data, preview.w, preview.h, preview.clip);
@@ -501,7 +482,8 @@ async function loadPhoto(file) {
 async function runAuto() {
   // render() returns early while another render / export is in flight: wait first (the engine is shared).
   while (rendering || exporting) await sleep(20);
-  const a = autoSetup();
+  const on = $('indoor').checked, a = autoSetup(on);
+  photo.autoEv = a.ev; photo.autoCache = { [on]: a.auto };
   $('ev').value = a.ev; photo.auto = a.auto;
   syncOutputs();
   log(`auto: ev ${a.ev}, scanner ${a.auto.map((v) => v.toFixed(3)).join(' ')}`);
@@ -721,7 +703,9 @@ $('auto').addEventListener('click', () => runAuto());
 $('indoor').addEventListener('change', async () => {
   if (!photo) return;
   while (rendering || exporting) await sleep(20);
-  photo.auto = autoSetup(true).auto;   // the lab re-reads the (thin) negative; Esposizione stays as set
+  const on = $('indoor').checked;   // the lab re-reads the (thin) negative; sliders are not touched
+  photo.autoCache[on] ??= autoSetup(on, photo.autoEv).auto;
+  photo.auto = photo.autoCache[on];
   render();
 });
 $('export').addEventListener('click', () => exportFull());
