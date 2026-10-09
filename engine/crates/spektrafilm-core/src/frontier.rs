@@ -801,4 +801,78 @@ mod tests {
         let lin = p.process(grey_row(&[-4.0]), &CpuBackend).data;
         assert!(lin[0] - lin[1] > 0.005, "expected the linear fit to leave a red/magenta toe: {lin:?}");
     }
+
+    fn de2000(l1: [f64; 3], l2: [f64; 3]) -> f64 {
+        let (pi, rad) = (std::f64::consts::PI, std::f64::consts::PI / 180.0);
+        let c = |l: [f64; 3]| (l[1] * l[1] + l[2] * l[2]).sqrt();
+        let cb = (c(l1) + c(l2)) / 2.0;
+        let g = 0.5 * (1.0 - (cb.powi(7) / (cb.powi(7) + 25f64.powi(7))).sqrt());
+        let ap = |l: [f64; 3]| (1.0 + g) * l[1];
+        let (a1, a2) = (ap(l1), ap(l2));
+        let (c1, c2) = ((a1 * a1 + l1[2] * l1[2]).sqrt(), (a2 * a2 + l2[2] * l2[2]).sqrt());
+        let hp = |b: f64, a: f64| if a == 0.0 && b == 0.0 { 0.0 } else { b.atan2(a).to_degrees().rem_euclid(360.0) };
+        let (h1, h2) = (hp(l1[2], a1), hp(l2[2], a2));
+        let dl = l2[0] - l1[0];
+        let dc = c2 - c1;
+        let mut dh = h2 - h1;
+        if dh > 180.0 { dh -= 360.0 } else if dh < -180.0 { dh += 360.0 }
+        if c1 * c2 == 0.0 { dh = 0.0 }
+        let dhh = 2.0 * (c1 * c2).sqrt() * (dh * rad / 2.0).sin();
+        let lb = (l1[0] + l2[0]) / 2.0;
+        let cbp = (c1 + c2) / 2.0;
+        let hb = if c1 * c2 == 0.0 { h1 + h2 } else if (h1 - h2).abs() <= 180.0 { (h1 + h2) / 2.0 }
+            else if h1 + h2 < 360.0 { (h1 + h2 + 360.0) / 2.0 } else { (h1 + h2 - 360.0) / 2.0 };
+        let t = 1.0 - 0.17 * ((hb - 30.0) * rad).cos() + 0.24 * (2.0 * hb * rad).cos()
+            + 0.32 * ((3.0 * hb + 6.0) * rad).cos() - 0.20 * ((4.0 * hb - 63.0) * rad).cos();
+        let sl = 1.0 + 0.015 * (lb - 50.0).powi(2) / (20.0 + (lb - 50.0).powi(2)).sqrt();
+        let sc = 1.0 + 0.045 * cbp;
+        let sh = 1.0 + 0.015 * cbp * t;
+        let dth = 30.0 * (-((hb - 275.0) / 25.0).powi(2)).exp();
+        let rc = 2.0 * (cbp.powi(7) / (cbp.powi(7) + 25f64.powi(7))).sqrt();
+        let rt = -(2.0 * dth * rad).sin() * rc;
+        let _ = pi;
+        ((dl / sl).powi(2) + (dc / sc).powi(2) + (dhh / sh).powi(2) + rt * (dc / sc) * (dhh / sh)).sqrt()
+    }
+
+    /// Encoded RGB in `space` -> CIELAB D50.
+    fn lab_d50(space: &str, rgb: [f64; 3]) -> [f64; 3] {
+        use spektrafilm_math::colorspace as cs;
+        let lin = rgb.map(super::srgb_decode);
+        let to_xyz = if space == "sRGB" { cs::SRGB_TO_XYZ_F64 } else { cs::REC2020_TO_XYZ_F64 };
+        let d50 = [0.96422, 1.0, 0.82521];
+        let adapt = cs::chromatic_adaptation_matrix_f64(spektrafilm_math::spectral::colorspace_white_xyz_f64(space), d50);
+        let mv = |m: &[[f64; 3]; 3], v: [f64; 3]| [0, 1, 2].map(|i| m[i][0] * v[0] + m[i][1] * v[1] + m[i][2] * v[2]);
+        let xyz = mv(&adapt, mv(&to_xyz, lin));
+        let f = |t: f64| if t > 216.0 / 24389.0 { t.cbrt() } else { (24389.0 / 27.0 * t + 16.0) / 116.0 };
+        let (fx, fy, fz) = (f(xyz[0] / d50[0]), f(xyz[1] / d50[1]), f(xyz[2] / d50[2]));
+        [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
+    }
+
+    #[test]
+    fn rendering_is_independent_of_the_output_space() {
+        let Some(p) = pipeline() else { return };
+        let mut params = p.params.clone();
+        params.io.output_color_space = "ITU-R BT.2020".into();
+        let q = p.clone().with_params(params);
+        let patches: [(&str, [f64; 3]); 4] = [
+            ("grey", [0.18, 0.18, 0.18]),
+            ("skin", [0.40, 0.25, 0.18]),
+            ("red", [0.35, 0.04, 0.03]),
+            ("sky", [0.15, 0.28, 0.5]),
+        ];
+        let img = ImageBuf::from_data(
+            4,
+            1,
+            patches.iter().flat_map(|(_, c)| c.map(from_f64)).collect(),
+        );
+        let a = p.process(img.clone(), &CpuBackend);
+        let b = q.process(img, &CpuBackend);
+        for (i, (name, _)) in patches.iter().enumerate() {
+            let px = |o: &ImageBuf| [0, 1, 2].map(|c| o.data[i * 3 + c] as f64);
+            let (la, lb) = (lab_d50("sRGB", px(&a)), lab_d50("Rec2020", px(&b)));
+            let de = de2000(la, lb);
+            eprintln!("{name}: sRGB Lab {la:.1?} BT2020 Lab {lb:.1?} dE00 {de:.2}");
+            assert!(de < 1.0, "{name}: output space leaks into the rendering, dE00 {de:.2}");
+        }
+    }
 }
