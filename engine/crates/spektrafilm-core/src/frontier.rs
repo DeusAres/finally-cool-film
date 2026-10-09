@@ -312,7 +312,7 @@ impl FrontierBase {
             d_ref: self.d_ref,
             range: m.range_density.max(1e-6),
             shift,
-            curve: Gradation::solve(a, sh, m),
+            curve: Gradation::solve_locked(a, m.gradation_a, sh, m),
             lift: keys.black_lift.clamp(0.0, 1.0) as f64 * m.black_lift_max,
             sat: (m.saturation * keys.saturation as f64).max(0.0),
             out: IDENTITY,
@@ -345,6 +345,12 @@ pub struct Gradation {
     /// sigmoid at x = 0 and x = 1 (rescale to 0..1)
     s0: f64,
     s1: f64,
+    /// Contrast-free sigmoid (a, m, s0, s1) the highlights stay locked to; `lock` is
+    /// false when the contrast is 0 (the curve is then the plain sigmoid).
+    base: [f64; 4],
+    lock: bool,
+    /// normalized sigmoid level at x = 0.5 (mid grey); the blend is 1 up to here
+    ya: f64,
 }
 
 impl Gradation {
@@ -359,6 +365,9 @@ impl Gradation {
             shoulder_one: 1.0,
             s0: 1.0 / (1.0 + (a * m_mid).exp()),
             s1: 1.0 / (1.0 + (-a * (1.0 - m_mid)).exp()),
+            base: [0.0; 4],
+            lock: false,
+            ya: 0.0,
         };
         g.shoulder_one = g.shoulder(1.0);
         g
@@ -377,6 +386,39 @@ impl Gradation {
             }
         }
         Self::new(a, 0.5 * (lo + hi), sh, p)
+    }
+
+    /// Contrast acts on mids and shadows only: `a` is the contrast-steepened slope, `a0` the
+    /// contrast-free one. Mid grey stays put, and from mid grey up to the shoulder knee the
+    /// curve blends C1-smoothly (smoothstep) back into the unchanged contrast-free sigmoid,
+    /// so the output at and above `shoulder_start` does not depend on contrast.
+    fn solve_locked(a: f64, a0: f64, sh: f64, p: &FrontierModelParams) -> Self {
+        let b = Self::solve(a0, sh, p);
+        // below ~0.3 a0 the sigmoid cannot keep mid grey on its level any more
+        let a = if a < a0 { a.max(0.3 * a0) } else { a };
+        if a == a0 {
+            return b;
+        }
+        let sig = |a: f64, m: f64, x: f64| 1.0 / (1.0 + (-a * (x - m)).exp());
+        let norm = |a: f64, m: f64, x: f64| {
+            let (s0, s1) = (sig(a, m, 0.0), sig(a, m, 1.0));
+            (sig(a, m, x) - s0) / (s1 - s0)
+        };
+        let ya = norm(a0, b.m, 0.5);
+        let (mut lo, mut hi) = (-200.0f64, 200.0f64);
+        for _ in 0..100 {
+            let mid = 0.5 * (lo + hi);
+            if norm(a, mid, 0.5) > ya {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let mut g = Self::new(a, 0.5 * (lo + hi), sh, p);
+        g.base = [a0, b.m, b.s0, b.s1];
+        g.lock = true;
+        g.ya = ya;
+        g
     }
 
     fn shoulder(&self, y: f64) -> f64 {
@@ -403,7 +445,14 @@ impl Gradation {
     pub fn curve(&self, x: f64) -> f64 {
         let x = x.clamp(0.0, 1.0);
         let s = |x: f64| 1.0 / (1.0 + (-self.a * (x - self.m)).exp());
-        let y = (s(x) - self.s0) / (self.s1 - self.s0);
+        let mut y = (s(x) - self.s0) / (self.s1 - self.s0);
+        if self.lock {
+            let [a0, m0, s00, s10] = self.base;
+            let y0 = (1.0 / (1.0 + (-a0 * (x - m0)).exp()) - s00) / (s10 - s00);
+            let t = ((y0 - self.ya) / (self.ys - self.ya).max(1e-6)).clamp(0.0, 1.0);
+            let w = 1.0 - t * t * (3.0 - 2.0 * t);
+            y = y0 + w * (y - y0);
+        }
         let y = self.shoulder(y) / self.shoulder_one;
         self.bp + (self.wp - self.bp) * y
     }
@@ -686,6 +735,35 @@ mod tests {
             .flat_map(|ev| [from_f64(0.18 * 2f64.powf(*ev)); 3])
             .collect();
         ImageBuf::from_data(evs.len() as u32, 1, data)
+    }
+
+    #[test]
+    fn contrast_locks_highlights_and_is_identity_at_zero() {
+        let p = crate::params::FrontierModelParams::default();
+        let base = super::Gradation::solve_locked(p.gradation_a, p.gradation_a, p.shoulder_sharpness, &p);
+        let plain = super::Gradation::solve(p.gradation_a, p.shoulder_sharpness, &p);
+        for i in 0..=100 {
+            let x = i as f64 / 100.0;
+            assert_eq!(base.curve(x).to_bits(), plain.curve(x).to_bits());
+        }
+        for c in [-1.0f64, -0.5, 0.5, 1.0] {
+            let a = (p.gradation_a * (1.0 + c)).max(0.05);
+            let g = super::Gradation::solve_locked(a, p.gradation_a, p.shoulder_sharpness, &p);
+            assert!((g.curve(0.5) - base.curve(0.5)).abs() < 1e-6, "{c} {} {} ys={} ya={}", g.curve(0.5), base.curve(0.5), g.ys, g.ya);
+            let knee = base.knee_x();
+            let mut prev = -1.0;
+            for i in 0..=1000 {
+                let x = i as f64 / 1000.0;
+                let y = g.curve(x);
+                assert!(y >= prev - 1e-12, "not monotonic at c={c} x={x}");
+                prev = y;
+                if x >= knee {
+                    assert!((y - base.curve(x)).abs() < 1e-9, "highlight moved at c={c} x={x}");
+                }
+            }
+            let slope = |g: &super::Gradation| (g.curve(0.52) - g.curve(0.48)) / 0.04;
+            assert!((slope(&g) - slope(&base)).abs() > 0.1 * slope(&base), "mid slope unchanged at c={c}");
+        }
     }
 
     #[test]
