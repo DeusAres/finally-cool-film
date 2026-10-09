@@ -192,6 +192,12 @@ impl FrontierBase {
         let (x, y) = (&self.lut_x[c], &self.lut_y);
         let n = x.len();
         let i = x.partition_point(|&v| v < d).clamp(1, n - 1);
+        if d < x[0] {
+            return y[0] + self.model.setup_toe_slope[if c == 0 { 0 } else { 1 }] * (d - x[0]); // below the neutralised range: native slope, offset held
+        }
+        if d > x[n - 1] {
+            return y[n - 1] + self.model.setup_toe_slope[if c == 0 { 0 } else { 1 }] * (d - x[n - 1]);
+        }
         let t = (d - x[i - 1]) / (x[i] - x[i - 1]);
         y[i - 1] + t * (y[i] - y[i - 1])
     }
@@ -232,7 +238,10 @@ impl FrontierBase {
             // scene is neutral at every level the ramp covers, not only at mid-scale.
             // Keep the ramp points where every channel is still rising (toe/shoulder plateaus drop out).
             let mut kept: Vec<[f64; 3]> = Vec::new();
-            for d in &dn {
+            for (d, ev) in dn.iter().zip(&evs) {
+                if ev.abs() > self.model.setup_neutral_ev + 1e-9 {
+                    continue;
+                }
                 if kept.last().is_none_or(|k| (0..3).all(|c| d[c] > k[c] + 1e-4)) {
                     kept.push(*d);
                 }
@@ -628,7 +637,7 @@ pub fn auto_setup(base: &FrontierBase, cmy: &[f32], width: usize, height: usize)
 fn thin_k_col(p: &FrontierAutoParams, ev: f64, k_col0: f64) -> f64 {
     let t = ((ev - p.thin_ev_lo) / (p.thin_ev_hi - p.thin_ev_lo).max(1e-6)).clamp(0.0, 1.0);
     let t = t * t * (3.0 - 2.0 * t);
-    k_col0 + t * (p.thin_k_col * p.strength).max(k_col0) - t * k_col0
+    k_col0 + t * (p.thin_k_col * p.strength - k_col0)
 }
 
 fn percentile(sorted: &[f64], pct: f64) -> f64 {
@@ -838,12 +847,18 @@ mod tests {
         params.scanner.frontier.model.setup_lut = true;
         params.scanner.frontier.model.setup_fit_ev = 4.5;
         params.scanner.frontier.model.setup_fit_steps = 19;
+        let params_neutral_ev = params.scanner.frontier.model.setup_neutral_ev;
         let q = p.clone().with_params(params);
         let evs: Vec<f64> = (-8..=8).map(|i| i as f64 / 2.0).collect();
         let out = q.process(grey_row(&evs), &CpuBackend);
         for (px, ev) in out.data.chunks(3).zip(&evs) {
-            assert!((px[0] - px[1]).abs() < 0.012 && (px[2] - px[1]).abs() < 0.012, "ev {ev} not neutral: {px:?}");
+            if ev.abs() <= params_neutral_ev {
+                assert!((px[0] - px[1]).abs() < 0.012 && (px[2] - px[1]).abs() < 0.012, "ev {ev} not neutral: {px:?}");
+            }
         }
+        // beyond the neutralised range the toe keeps its native imbalance: cyan, not neutral
+        let toe = out.data[0..3].to_vec();
+        assert!(toe[0] < toe[1] - 0.005, "expected a cyan (red-poor) toe at -4 EV: {toe:?}");
         // the linear fit leaves the toe crossover (R and B above G at -4 EV)
         let lin = p.process(grey_row(&[-4.0]), &CpuBackend).data;
         assert!(lin[0] - lin[1] > 0.005, "expected the linear fit to leave a red/magenta toe: {lin:?}");
@@ -930,7 +945,7 @@ mod tests {
             assert_eq!(super::thin_k_col(&p, ev, k0), k0, "ev {ev}");
         }
         let k = |ev| super::thin_k_col(&p, ev, k0);
-        assert!(k(1.2) > k0 && k(1.2) < k(p.thin_ev_hi));
+        assert!(k(1.2) < k0 && k(1.2) > k(p.thin_ev_hi));
         assert!((k(2.5) - p.thin_k_col * p.strength).abs() < 1e-12);
     }
 
@@ -948,6 +963,6 @@ mod tests {
         let normal = p.frontier_auto_setup(warm(0.18)).unwrap();
         assert!(thin[0] > 1.3, "2.5 EV thin frame should lift > 1.3 EV (k_den 0.8, strength 0.7 here): {thin:?}");
         assert!(normal[0].abs() < 0.3, "{normal:?}");
-        assert!(thin[3].abs() > normal[3].abs(), "thin frame colour key {thin:?} vs normal {normal:?}");
+        assert!(thin[3].abs() < normal[3].abs(), "thin frame colour key {thin:?} vs normal {normal:?}");
     }
 }

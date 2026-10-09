@@ -21,12 +21,12 @@ export async function isRaw(file) {
   return (h[0] === 0x49 && h[1] === 0x49 && h[2] === 0x2a && h[3] === 0) || (h[0] === 0x4d && h[1] === 0x4d && h[2] === 0 && h[3] === 0x2a);
 }
 
-/** Decode (optionally downscaled); returns { w, h, rgb, baseline, orientation, cct (as-shot, K), fullW, fullH }, sizes AFTER orientation. */
+/** Decode (optionally downscaled); returns { w, h, rgb, baseline, orientation, fullW, fullH }, sizes AFTER orientation. */
 export async function loadRaw(file, maxLongSide) {
   const d = await decodeDNG(await file.arrayBuffer(), maxLongSide ? { maxLongSide } : {});
   const o = d.meta?.orientation || 1, swap = o >= 5;
   const [cw, ch] = (d.meta?.crop || [0, 0, d.w, d.h]).slice(2);   // full (cropped) sensor size
-  return { sw: d.w, sh: d.h, w: swap ? d.h : d.w, h: swap ? d.w : d.h, rgb: d.rgb, baseline: d.exposure || 0, orientation: o, cct: d.meta?.cct,
+  return { sw: d.w, sh: d.h, w: swap ? d.h : d.w, h: swap ? d.w : d.h, rgb: d.rgb, baseline: d.exposure || 0, orientation: o,
     fullW: swap ? ch : cw, fullH: swap ? cw : ch };
 }
 

@@ -249,6 +249,12 @@ pub struct FrontierModelParams {
     /// Film-type setup as a per-channel LUT through the ramp (neutral at every ramp level)
     /// instead of a linear fit (neutral at mid-scale only).
     pub setup_lut: bool,
+    /// dD'/dDn of R and B beyond the neutralised range.
+    pub setup_toe_slope: [f64; 2],
+    /// Film-type LUT neutralises only ramp points within +-this many EV of mid-grey (the density
+    /// range of a normal exposure); beyond it the end slopes extrapolate and the toe/shoulder keep
+    /// their native layer imbalance.
+    pub setup_neutral_ev: f64,
     /// Film-type fit: number of ramp steps (odd, includes mid-grey).
     pub setup_fit_steps: u32,
     /// Density range (logD) mapped to the full gradation input 0..1.
@@ -285,6 +291,8 @@ impl Default for FrontierModelParams {
             sensor_fwhm_nm: [40.0, 50.0, 50.0],
             tmin_floor: 0.0005,
             setup_lut: true,
+            setup_toe_slope: [1.5, 0.8],
+            setup_neutral_ev: 2.0,
             setup_fit_ev: 4.5,
             setup_fit_steps: 19,
             range_density: 1.5923,
@@ -346,7 +354,7 @@ impl Default for FrontierAutoParams {
             thumb_size: 64,
             highlight_pct: 95.0,
             highlight_margin: 0.1672,
-            thin_k_col: 0.6,
+            thin_k_col: 0.0,
             thin_ev_lo: 0.8,
             thin_ev_hi: 1.6,
         }
