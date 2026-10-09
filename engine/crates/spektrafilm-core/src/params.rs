@@ -246,6 +246,9 @@ pub struct FrontierModelParams {
     pub tmin_floor: f64,
     /// Film-type fit: grey ramp half-range in EV about mid-grey (18 %).
     pub setup_fit_ev: f64,
+    /// Film-type setup as a per-channel LUT through the ramp (neutral at every ramp level)
+    /// instead of a linear fit (neutral at mid-scale only).
+    pub setup_lut: bool,
     /// Film-type fit: number of ramp steps (odd, includes mid-grey).
     pub setup_fit_steps: u32,
     /// Density range (logD) mapped to the full gradation input 0..1.
@@ -264,8 +267,13 @@ pub struct FrontierModelParams {
     pub white_point: f64,
     /// Encoded black raised by `black_lift = 1`.
     pub black_lift_max: f64,
-    /// Saturation about Rec.709 luma (encoded RGB) at `saturation = 1`.
+    /// Saturation about Rec.709 luminance (linear light) at `saturation = 1`.
     pub saturation: f64,
+    /// Film-type balance of this stock (Fuji "film master" setup): fixed C, M, Y
+    /// offset in logD, same sign as `FrontierParams::cmy` (+ = more of that
+    /// colour). Applied with the keys but outside AutoSetup, which keeps
+    /// neutralising the frame and so never erases it.
+    pub balance_cmy: [f64; 3],
     /// AutoSetup constants.
     pub auto: FrontierAutoParams,
 }
@@ -276,6 +284,7 @@ impl Default for FrontierModelParams {
             sensor_peak_nm: [650.0, 545.0, 445.0],
             sensor_fwhm_nm: [45.0, 50.0, 50.0],
             tmin_floor: 0.0005,
+            setup_lut: false,
             setup_fit_ev: 2.0,
             setup_fit_steps: 9,
             range_density: 2.0,
@@ -287,6 +296,7 @@ impl Default for FrontierModelParams {
             white_point: 0.98,
             black_lift_max: 0.25,
             saturation: 1.12,
+            balance_cmy: [0.0; 3],
             auto: FrontierAutoParams::default(),
         }
     }

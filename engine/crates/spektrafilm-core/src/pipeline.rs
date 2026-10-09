@@ -257,6 +257,7 @@ impl Pipeline {
             &p.scanner.frontier,
             p.film_render.grain.density_min,
             p.settings.lut_resolution,
+            &p.io.output_color_space,
             &base_key,
         ));
         if let Some(f) = &self.frontier {
@@ -275,6 +276,7 @@ impl Pipeline {
             dmin,
             dmax,
             self.params.settings.lut_resolution as usize,
+            stages::scanning::frontier_output_matrix(&self.params.io.output_color_space),
         );
         self.frontier = Some(Arc::new(FrontierRuntime { base, base_key, lut, lut_key }));
     }

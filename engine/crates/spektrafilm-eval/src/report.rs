@@ -162,9 +162,14 @@ fn item(label: String, checks: &[(&str, f64, [f64; 2])]) -> (f64, Vec<String>) {
 }
 
 /// Fills `pass`/`de00` on `cc24` and returns (score, fails).
-pub fn score(spec: &Spec, grey: &[(f64, V3)], cc24: &mut [Cc24Out], glob: &BTreeMap<String, f64>) -> (f64, Vec<String>) {
+///
+/// `relative` grades shape only (exposure/AutoSetup sweeps): no absolute L*, no de00,
+/// no black/white level; slopes, grey a*/b*, chroma ratios and hue shifts stay.
+pub fn score(spec: &Spec, grey: &[(f64, V3)], cc24: &mut [Cc24Out], glob: &BTreeMap<String, f64>, relative: bool) -> (f64, Vec<String>) {
     let (mut fails, mut cats) = (Vec::new(), Vec::new());
     let mut run = |weight: f64, items: Vec<(f64, Vec<String>)>| {
+        // Items without any check (relative mode on the neutrals) do not count.
+        let items: Vec<_> = items.into_iter().filter(|i| !i.0.is_nan()).collect();
         if !items.is_empty() {
             cats.push((weight, mean(items.iter().map(|i| i.0))));
         }
@@ -175,6 +180,7 @@ pub fn score(spec: &Spec, grey: &[(f64, V3)], cc24: &mut [Cc24Out], glob: &BTree
         .grey
         .iter()
         .map(|g| match grey.iter().find(|(ev, _)| (ev - g.ev).abs() < 1e-3) {
+            Some((_, lab)) if relative => item(format!("grey {:+.2} EV", g.ev), &[("a", lab[1], g.a), ("b", lab[2], g.b)]),
             Some((_, lab)) => item(format!("grey {:+.2} EV", g.ev), &[("L", lab[0], g.l), ("a", lab[1], g.a), ("b", lab[2], g.b)]),
             None => (0.0, vec![format!("grey {:+.2} EV: not measured", g.ev)]),
         })
@@ -191,7 +197,7 @@ pub fn score(spec: &Spec, grey: &[(f64, V3)], cc24: &mut [Cc24Out], glob: &BTree
             let reference = ref_lab(p.id);
             let ratio = color::chroma(lab) / color::chroma(reference);
             let shift = color::hue_diff(color::hue(reference), color::hue(lab));
-            let mut checks = vec![("de00", row.de00, [0.0, p.tol_de00])];
+            let mut checks = if relative { Vec::new() } else { vec![("de00", row.de00, [0.0, p.tol_de00])] };
             checks.extend(p.chroma_ratio.map(|r| ("chroma_ratio", ratio, r)));
             checks.extend(p.hue_shift_deg.map(|r| ("hue_shift_deg", shift, r)));
             let it = item(format!("cc24 {} {}", p.id, CC24[p.id - 1].0), &checks);
@@ -204,6 +210,7 @@ pub fn score(spec: &Spec, grey: &[(f64, V3)], cc24: &mut [Cc24Out], glob: &BTree
     let global_items = spec
         .global
         .iter()
+        .filter(|g| !relative || !matches!(g.id.as_str(), "black_L" | "white_L"))
         .map(|g| match glob.get(&g.id) {
             Some(&v) => item(format!("global {}", g.id), &[("value", v, g.target)]),
             None => (0.0, vec![format!("global {}: unknown id", g.id)]),

@@ -487,6 +487,30 @@ pub fn select_illuminant_f64(name: &str) -> &'static [f64] {
     }
 }
 
+/// Frontier working space (sRGB primaries, D65) -> linear RGB of `output_color_space`:
+/// the only place the output primaries enter the Frontier model.
+pub fn frontier_output_matrix(output_color_space: &str) -> [[f64; 3]; 3] {
+    const I: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    if output_color_space == "sRGB" {
+        return I;
+    }
+    let adapt = colorspace::chromatic_adaptation_matrix_f64(
+        spectral::colorspace_white_xyz_f64("sRGB"),
+        spectral::colorspace_white_xyz_f64(output_color_space),
+    );
+    let to_out = output_colorspace_from_xyz_f64(output_color_space);
+    let mul = |a: &[[f64; 3]; 3], b: &[[f64; 3]; 3]| {
+        let mut m = [[0.0f64; 3]; 3];
+        for i in 0..3 {
+            for j in 0..3 {
+                m[i][j] = (0..3).map(|k| a[i][k] * b[k][j]).sum();
+            }
+        }
+        m
+    };
+    mul(&to_out, &mul(&adapt, &colorspace::SRGB_TO_XYZ_F64))
+}
+
 fn output_colorspace_from_xyz_f64(name: &str) -> [[f64; 3]; 3] {
     match name {
         "sRGB" => colorspace::XYZ_TO_SRGB_F64,

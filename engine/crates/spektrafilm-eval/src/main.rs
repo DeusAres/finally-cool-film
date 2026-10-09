@@ -1,6 +1,10 @@
 //! `sf-eval`: measurement harness for the film pipeline (contract: eval/SCHEMA.md).
 //!
 //!   sf-eval chart --params <overrides.json> --out <dir> [--spec <spec.json>] [--data <web/data>]
+//!                 [--exposure-ev <x>] [--relative <0|1>] [--output-space srgb|bt2020]
+//!     --exposure-ev: scene exposure error in EV; the lab's AutoSetup (core `frontier`) then runs on the
+//!                    ColorChecker frame as the app does on its thumbnail, and the chart is re-rendered with it.
+//!     --relative 1:  grade shape only (slopes, grey a*/b*, chroma ratios, hue shifts), not absolute L*.
 //!   sf-eval image --params <overrides.json> --in <linear.npy> --out <png> [--data <web/data>]
 mod chart;
 mod color;
@@ -20,7 +24,7 @@ use spektrafilm_math::npy;
 use render::Renderer;
 use report::{Cc24Out, GreyOut, Report, Spec};
 
-const USAGE: &str = "usage:\n  sf-eval chart --params <overrides.json> --out <dir> [--spec <spec.json>] [--data <dir>]\n  sf-eval image --params <overrides.json> --in <linear.npy> --out <png> [--data <dir>]";
+const USAGE: &str = "usage:\n  sf-eval chart --params <overrides.json> --out <dir> [--spec <spec.json>] [--data <dir>] [--exposure-ev <x>] [--relative 1]\n  sf-eval image --params <overrides.json> --in <linear.npy> --out <png> [--data <dir>]";
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
     let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -47,20 +51,31 @@ impl Args {
         self.opt(name).ok_or_else(|| format!("missing --{name}\n{USAGE}"))
     }
     /// The pipeline built from `--params` (and `--data`).
-    fn renderer(&self) -> Result<impl Renderer, String> {
-        let overrides = read_json(&self.req("params")?)?;
+    fn renderer(&self) -> Result<render::EngineRenderer, String> {
+        let mut overrides: serde_json::Value = read_json(&self.req("params")?)?;
+        if self.0.get("output-space").is_some_and(|v| v == "bt2020") {
+            overrides["io"]["output_color_space"] = "ITU-R BT.2020".into();
+        }
         render::build(overrides, &self.opt("data").unwrap_or_else(render::default_data_dir))
     }
 }
 
 fn chart_cmd(args: &Args) -> Result<(), String> {
-    let renderer = args.renderer()?;
+    let mut renderer = args.renderer()?;
     let out = args.req("out")?;
+    let relative = args.0.get("relative").is_some_and(|v| v != "0");
+    let exposure: Option<f64> = args.0.get("exposure-ev").map(|v| v.parse().map_err(|_| format!("bad --exposure-ev {v}"))).transpose()?;
+    let gain = exposure.map_or(1.0, f64::exp2);
+    if exposure.is_some() {
+        let auto = renderer.apply_autosetup(chart::cc24_frame(gain)).ok_or("AutoSetup needs a negative film")?;
+        eprintln!("autosetup [density_ev, c, m, y] = {auto:?}");
+    }
+    let space = if args.0.get("output-space").is_some_and(|v| v == "bt2020") { color::Rgb::rec2020() } else { color::Rgb::srgb() };
     let spec: Option<Spec> = args.opt("spec").map(|p| read_json(&p)).transpose()?;
 
     let evs = chart::grey_evs();
-    let grey: Vec<_> = evs.iter().map(|&ev| chart::measure(&renderer, chart::grey_scene(ev))).collect();
-    let cc24: Vec<_> = chart::CC24.iter().map(|(_, lab)| chart::measure(&renderer, chart::lab_scene(*lab))).collect();
+    let grey: Vec<_> = evs.iter().map(|&ev| chart::measure(&renderer, chart::grey_scene(ev).map(|v| v * gain), &space)).collect();
+    let cc24: Vec<_> = chart::CC24.iter().map(|(_, lab)| chart::measure(&renderer, chart::lab_scene(*lab).map(|v| v * gain), &space)).collect();
 
     let grey_lab: Vec<_> = evs.iter().zip(&grey).map(|(&ev, m)| (ev, m.lab)).collect();
     let cc_lab: Vec<_> = cc24.iter().map(|m| m.lab).collect();
@@ -83,7 +98,7 @@ fn chart_cmd(args: &Args) -> Result<(), String> {
         .collect();
     let (score, fails) = match &spec {
         Some(spec) => {
-            let (s, f) = report::score(spec, &grey_lab, &mut rows, &global);
+            let (s, f) = report::score(spec, &grey_lab, &mut rows, &global, relative);
             (Some(s), f)
         }
         None => (None, Vec::new()),

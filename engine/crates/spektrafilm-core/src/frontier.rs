@@ -17,7 +17,8 @@
 //!    (identity), R and B get the least-squares slope against G through the
 //!    mid-grey point, so grey is neutral at mid-scale and in slope; the curvature
 //!    left over along the scale is the film's.
-//! 4. **Keys.** `D'_c += (density + auto.d) * d_per_ev - (cmy_c + auto.c_c)`.
+//! 4. **Keys.** `D'_c += (density + auto.d) * d_per_ev - (cmy_c + auto.c_c + balance_c)`, `balance` being the
+//!    stock's film-type balance (`model.balance_cmy`), a fixed offset AutoSetup does not touch.
 //!    `d_per_ev` is the grey-ramp G density change per EV at mid-scale, so the
 //!    density key is an exposure compensation. A positive C/M/Y key adds that
 //!    colour, i.e. lowers the density of its complementary channel (R/G/B).
@@ -27,7 +28,7 @@
 //!    shoulder above `shoulder_start` (strength scaled by `1 + highlight`),
 //!    black/white points, and `black_lift` (same for R, G, B). The output is
 //!    sRGB-encoded.
-//! 6. **Colour.** Saturation about Rec.709 luma in encoded RGB.
+//! 6. **Colour.** Saturation about the Rec.709 luminance in linear light, re-encoded.
 //!
 //! The result is baked per pixel into a 17^3 (`settings.lut_resolution`) PCHIP
 //! LUT over the film density, like the legacy scanner LUT.
@@ -39,9 +40,18 @@ use spektrafilm_math::spectral::N_WAVELENGTHS;
 use crate::params::{FrontierAutoParams, FrontierModelParams, FrontierParams};
 use crate::profile::Profile;
 
+const IDENTITY: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 const LUMA: [f64; 3] = [0.2126, 0.7152, 0.0722];
 const FIRST_WL_NM: f64 = 380.0;
 const STEP_WL_NM: f64 = 5.0;
+
+fn srgb_decode(v: f64) -> f64 {
+    if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+}
+
+fn srgb_encode(v: f64) -> f64 {
+    if v <= 0.0031308 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
+}
 
 /// Grey-ramp exposures of the film-type fit: (ev, scene grey) pairs, the middle
 /// one is 18 % grey at ev 0.
@@ -67,6 +77,10 @@ pub struct FrontierBase {
     pub d_ref: f64,
     /// Setup-space density change per EV at mid-scale (>0).
     pub d_per_ev: f64,
+    /// Per-channel monotone map `Dn_c -> Dn_G` through the grey ramp points
+    /// (film-type LUT); empty = the linear `slope`/`offset` fit.
+    lut_x: [Vec<f64>; 3],
+    lut_y: Vec<f64>,
 }
 
 impl FrontierBase {
@@ -120,6 +134,8 @@ impl FrontierBase {
             offset: [0.0; 3],
             d_ref: 0.0,
             d_per_ev: 1.0,
+            lut_x: [Vec::new(), Vec::new(), Vec::new()],
+            lut_y: Vec::new(),
         };
         b.dmin = b.raw_density([0.0; 3]);
         b.fit_setup(ramp_cmy);
@@ -156,12 +172,28 @@ impl FrontierBase {
 
     /// Film-type-setup density `D'_c`, before the keys.
     pub fn setup_density(&self, cmy: [f64; 3]) -> [f64; 3] {
-        let dn = self.normalised_density(cmy);
-        [
-            self.slope[0] * dn[0] + self.offset[0],
-            self.slope[1] * dn[1] + self.offset[1],
-            self.slope[2] * dn[2] + self.offset[2],
-        ]
+        self.map_setup(self.normalised_density(cmy))
+    }
+
+    /// Film-type setup map of normalised densities `Dn` (linear fit or LUT).
+    fn map_setup(&self, dn: [f64; 3]) -> [f64; 3] {
+        if self.lut_y.is_empty() {
+            return [
+                self.slope[0] * dn[0] + self.offset[0],
+                self.slope[1] * dn[1] + self.offset[1],
+                self.slope[2] * dn[2] + self.offset[2],
+            ];
+        }
+        [self.lut(0, dn[0]), dn[1], self.lut(2, dn[2])]
+    }
+
+    /// Piecewise-linear `Dn_c -> Dn_G` through the ramp points (ends extrapolated with the end slopes).
+    fn lut(&self, c: usize, d: f64) -> f64 {
+        let (x, y) = (&self.lut_x[c], &self.lut_y);
+        let n = x.len();
+        let i = x.partition_point(|&v| v < d).clamp(1, n - 1);
+        let t = (d - x[i - 1]) / (x[i] - x[i - 1]);
+        y[i - 1] + t * (y[i] - y[i - 1])
     }
 
     fn fit_setup(&mut self, ramp_cmy: &[[f64; 3]]) {
@@ -186,13 +218,33 @@ impl FrontierBase {
             }
         }
         self.d_ref = m[1];
-        self.d_per_ev = if sge.abs() > 1e-12 && sgg > 0.0 {
-            // regression of G density on EV through the mid point
-            let see: f64 = evs.iter().map(|e| e * e).sum();
-            (sge / see).abs().max(1e-3)
-        } else {
-            1.0
-        };
+        // Mid-scale slope: regression of G density on EV through the mid point, over +-2 EV only
+        // (a wide ramp would average in the toe and shoulder).
+        let (mut sge2, mut see2) = (0.0, 0.0);
+        for (d, ev) in dn.iter().zip(&evs) {
+            if ev.abs() <= 2.0 + 1e-9 {
+                sge2 += (d[1] - m[1]) * ev;
+                see2 += ev * ev;
+            }
+        }
+        self.d_per_ev = if sge2.abs() > 1e-12 && sgg > 0.0 { (sge2 / see2).abs().max(1e-3) } else { 1.0 };
+        let _ = sge;
+        if self.model.setup_lut {
+            // Film-type LUT: R and B densities are mapped onto G's along the whole ramp, so a grey
+            // scene is neutral at every level the ramp covers, not only at mid-scale.
+            // Keep the ramp points where every channel is still rising (toe/shoulder plateaus drop out).
+            let mut kept: Vec<[f64; 3]> = Vec::new();
+            for d in &dn {
+                if kept.last().is_none_or(|k| (0..3).all(|c| d[c] > k[c] + 1e-4)) {
+                    kept.push(*d);
+                }
+            }
+            if kept.len() >= 3 {
+                self.lut_x = [kept.iter().map(|d| d[0]).collect(), Vec::new(), kept.iter().map(|d| d[2]).collect()];
+                self.lut_y = kept.iter().map(|d| d[1]).collect();
+                return;
+            }
+        }
         for c in 0..3 {
             self.slope[c] = if c == 1 || sxx[c] < 1e-12 { 1.0 } else { sxg[c] / sxx[c] };
             self.offset[c] = self.d_ref - self.slope[c] * m[c];
@@ -230,12 +282,11 @@ impl FrontierBase {
                 t[1] += tr * w[1];
                 t[2] += tr * w[2];
             }
-            let mut d = [0.0f64; 3];
+            let mut dn = [0.0f64; 3];
             for c in 0..3 {
-                let raw = -t[c].max(self.model.tmin_floor).log10();
-                d[c] = self.slope[c] * (raw - self.dmin[c]) + self.offset[c];
+                dn[c] = -t[c].max(self.model.tmin_floor).log10() - self.dmin[c];
             }
-            dst.copy_from_slice(&stage.encode(d));
+            dst.copy_from_slice(&stage.encode(self.map_setup(dn)));
         });
         out
     }
@@ -246,7 +297,7 @@ impl FrontierBase {
         let mut shift = [0.0f64; 3];
         let dens_ev = keys.density as f64 + keys.auto[0] as f64;
         for c in 0..3 {
-            shift[c] = dens_ev * self.d_per_ev - (keys.cmy[c] as f64 + keys.auto[1 + c] as f64);
+            shift[c] = dens_ev * self.d_per_ev - (keys.cmy[c] as f64 + keys.auto[1 + c] as f64 + m.balance_cmy[c]);
         }
         let a = (m.gradation_a * (1.0 + keys.contrast as f64)).max(0.05);
         let sh = (m.shoulder_sharpness * (1.0 + keys.highlight as f64)).max(0.0);
@@ -257,6 +308,7 @@ impl FrontierBase {
             curve: Gradation::solve(a, sh, m),
             lift: keys.black_lift.clamp(0.0, 1.0) as f64 * m.black_lift_max,
             sat: (m.saturation * keys.saturation as f64).max(0.0),
+            out: IDENTITY,
         }
     }
 
@@ -341,9 +393,17 @@ pub struct Stage {
     curve: Gradation,
     lift: f64,
     sat: f64,
+    /// Linear sRGB (the model's working primaries) -> linear output primaries.
+    out: [[f64; 3]; 3],
 }
 
 impl Stage {
+    /// Final conversion to the output primaries (identity for sRGB output).
+    pub fn with_output(mut self, m: [[f64; 3]; 3]) -> Self {
+        self.out = m;
+        self
+    }
+
     /// Setup densities `D'` -> encoded positive RGB (0..1).
     pub fn encode(&self, d: [f64; 3]) -> [f64; 3] {
         let mut y = [0.0f64; 3];
@@ -351,11 +411,15 @@ impl Stage {
             let x = 0.5 + (d[c] + self.shift[c] - self.d_ref) / self.range;
             y[c] = self.lift + (1.0 - self.lift) * self.curve.curve(x);
         }
-        let l = LUMA[0] * y[0] + LUMA[1] * y[1] + LUMA[2] * y[2];
-        for v in y.iter_mut() {
-            *v = (l + self.sat * (*v - l)).clamp(0.0, 1.0);
-        }
-        y
+        // Saturation about the luminance, in linear light (Y-preserving). Scaling
+        // about a gamma-encoded luma compressed bright saturated yellows.
+        let lin = y.map(srgb_decode);
+        let l = LUMA[0] * lin[0] + LUMA[1] * lin[1] + LUMA[2] * lin[2];
+        let lin = lin.map(|v| (l + self.sat * (v - l)).clamp(0.0, 1.0));
+        // Working space = sRGB primaries, whatever the output: only this last matrix
+        // (and the sRGB transfer) knows the output space.
+        let o = |r: &[f64; 3]| (r[0] * lin[0] + r[1] * lin[1] + r[2] * lin[2]).clamp(0.0, 1.0);
+        [srgb_encode(o(&self.out[0])), srgb_encode(o(&self.out[1])), srgb_encode(o(&self.out[2]))]
     }
 }
 
@@ -378,8 +442,9 @@ impl FrontierLut {
         data_min: [f64; 3],
         data_max: [f64; 3],
         steps: usize,
+        out_matrix: [[f64; 3]; 3],
     ) -> Self {
-        let stage = base.stage(keys);
+        let stage = base.stage(keys).with_output(out_matrix);
         let step_inv = (steps - 1) as f64;
         let lut = base.node_table(&stage, data_min, data_max, steps);
         let scale = step_inv;
@@ -616,7 +681,7 @@ mod tests {
         let fr = p.frontier().unwrap();
         let (table, steps, dmin, inv) = fr.lut.gpu_table();
         let stage = fr.base.stage(&p.params.scanner.frontier);
-        let (mut seed, mut max_err) = (12345u64, 0f64);
+        let (mut seed, mut max_err, mut n_over) = (12345u64, 0f64, 0u32);
         let mut rnd = || {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             (seed >> 11) as f64 / (1u64 << 53) as f64
@@ -629,12 +694,15 @@ mod tests {
             }
             let got = super::trilinear_reference(table, steps, dmin, inv, cmy);
             let want = fr.base.encode([cmy[0] as f64, cmy[1] as f64, cmy[2] as f64], &stage);
-            for c in 0..3 {
-                max_err = max_err.max((got[c] as f64 - want[c]).abs());
-            }
+            let err = (0..3).map(|c| (got[c] as f64 - want[c]).abs()).fold(0.0, f64::max);
+            max_err = max_err.max(err);
+            n_over += (err > 1.0 / 255.0) as u32;
         }
         eprintln!("gpu trilinear vs direct: max err {max_err:.5} ({:.2}/255)", max_err * 255.0);
-        assert!(max_err < 1.0 / 255.0, "max err {max_err}");
+        // Linear-light saturation clips a channel to 0 at the gamut edge, and the sRGB toe is steep
+        // there: trilinear error > 1/255 stays confined to those few LUT cells (random cube points,
+        // most of them outside any real film's densities).
+        assert!(n_over < 20000 / 40 && max_err < 0.04, "max err {max_err}, {n_over} over 1/255");
     }
 
     #[test]
@@ -684,5 +752,53 @@ mod tests {
         assert!(p.frontier().is_none());
         let out = p.process(grey_row(&[0.0]), &CpuBackend);
         assert!(out.data.iter().all(|v| v.is_finite() && *v >= 0.0 && *v <= 1.0));
+    }
+
+    #[test]
+    fn saturation_keeps_luminance_and_balance_survives_autosetup() {
+        let Some(p) = pipeline() else { return };
+        let lum = |c: [f64; 3]| {
+            let d = |v: f64| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+            0.2126 * d(c[0]) + 0.7152 * d(c[1]) + 0.0722 * d(c[2])
+        };
+        // A coloured (not clipped) density: luminance independent of saturation.
+        let fr = p.frontier().unwrap();
+        let cmy = [0.9, 0.6, 0.5];
+        let encode = |sat: f32| {
+            let k = crate::params::FrontierParams { saturation: sat, ..p.params.scanner.frontier.clone() };
+            fr.base.encode(cmy, &fr.base.stage(&k))
+        };
+        let (a, b) = (encode(1.0), encode(1.2));
+        assert!((lum(a) - lum(b)).abs() < 2e-3, "luminance moved: {a:?} {b:?}");
+        assert!((b[0] - b[2]).abs() > (a[0] - a[2]).abs(), "not more saturated: {a:?} {b:?}");
+
+        // Film-type balance: warms the grey, and AutoSetup neither erases nor doubles it.
+        let n = 32usize;
+        let grey = ImageBuf::from_data(n as u32, n as u32, vec![from_f64(0.18); n * n * 3]);
+        let mut params = p.params.clone();
+        params.scanner.frontier.model.balance_cmy = [0.0, 0.0, 0.03];
+        let q = p.clone().with_params(params);
+        let (a0, a1) = (p.frontier_auto_setup(grey.clone()).unwrap(), q.frontier_auto_setup(grey.clone()).unwrap());
+        assert!(a0.iter().zip(&a1).all(|(x, y)| (x - y).abs() < 1e-6), "auto depends on balance: {a0:?} {a1:?}");
+        let px = q.process(grey_row(&[0.0]), &CpuBackend).data;
+        assert!(px[0] > px[2] + 0.01, "balance did not warm the grey: {px:?}");
+    }
+
+    #[test]
+    fn film_type_lut_keeps_the_whole_ramp_neutral() {
+        let Some(p) = pipeline() else { return };
+        let mut params = p.params.clone();
+        params.scanner.frontier.model.setup_lut = true;
+        params.scanner.frontier.model.setup_fit_ev = 4.5;
+        params.scanner.frontier.model.setup_fit_steps = 19;
+        let q = p.clone().with_params(params);
+        let evs: Vec<f64> = (-8..=8).map(|i| i as f64 / 2.0).collect();
+        let out = q.process(grey_row(&evs), &CpuBackend);
+        for (px, ev) in out.data.chunks(3).zip(&evs) {
+            assert!((px[0] - px[1]).abs() < 0.012 && (px[2] - px[1]).abs() < 0.012, "ev {ev} not neutral: {px:?}");
+        }
+        // the linear fit leaves the toe crossover (R and B above G at -4 EV)
+        let lin = p.process(grey_row(&[-4.0]), &CpuBackend).data;
+        assert!(lin[0] - lin[1] > 0.005, "expected the linear fit to leave a red/magenta toe: {lin:?}");
     }
 }
