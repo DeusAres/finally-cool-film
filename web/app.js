@@ -616,7 +616,7 @@ async function exportFull(ig = false) {
     encoder.postMessage({ cmd: 'finish' });
     const result = await done;
     let bytes = result.jpeg;
-    bytes = insertExif(bytes, iccSegment(outP3() ? 'p3' : 'srgb'));   // generic segment insert: the JPEG says which space it is in
+    bytes = insertExif(bytes, iccSegment(outP3() ? 'p3' : 'srgb'));   // segments go right after SOI, JFIF dropped; Exif is inserted last so it ends up first
     try {
       const seg = await readExifSegment(photo.file);
       if (seg) { bytes = insertExif(bytes, patchExif(seg, result.width, result.height, outP3())); log(`EXIF carried over (${seg.length} B)`); }
