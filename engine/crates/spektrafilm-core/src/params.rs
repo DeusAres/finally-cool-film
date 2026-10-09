@@ -281,22 +281,22 @@ pub struct FrontierModelParams {
 impl Default for FrontierModelParams {
     fn default() -> Self {
         Self {
-            sensor_peak_nm: [650.0, 545.0, 445.0],
-            sensor_fwhm_nm: [45.0, 50.0, 50.0],
+            sensor_peak_nm: [640.0, 540.0, 450.0],
+            sensor_fwhm_nm: [40.0, 50.0, 50.0],
             tmin_floor: 0.0005,
-            setup_lut: false,
-            setup_fit_ev: 2.0,
-            setup_fit_steps: 9,
-            range_density: 2.0,
-            gradation_a: 4.2,
-            mid_grey_out: 0.46,
-            shoulder_start: 0.82,
-            shoulder_sharpness: 1.6,
-            black_point: 0.02,
-            white_point: 0.98,
+            setup_lut: true,
+            setup_fit_ev: 4.5,
+            setup_fit_steps: 19,
+            range_density: 1.5923,
+            gradation_a: 5.8184,
+            mid_grey_out: 0.4683,
+            shoulder_start: 0.6928,
+            shoulder_sharpness: 1.7142,
+            black_point: 0.022,
+            white_point: 0.9908,
             black_lift_max: 0.25,
             saturation: 1.12,
-            balance_cmy: [0.0; 3],
+            balance_cmy: [0.0, 0.0, 0.02],
             auto: FrontierAutoParams::default(),
         }
     }
@@ -327,19 +327,19 @@ pub struct FrontierAutoParams {
 impl Default for FrontierAutoParams {
     fn default() -> Self {
         Self {
-            k_den: 0.8,
-            k_col: 0.6,
+            k_den: 1.0,
+            k_col: 0.2,
             clamp_density: 0.30,
             clamp_colour: 0.15,
             border_mask_frac: 0.08,
             trim_lo_pct: 10.0,
             trim_hi_pct: 90.0,
             exclude_pct: 0.5,
-            target_offset: 0.0,
-            strength: 0.7,
+            target_offset: 0.0109,
+            strength: 0.85,
             thumb_size: 64,
             highlight_pct: 95.0,
-            highlight_margin: 0.0,
+            highlight_margin: 0.1672,
         }
     }
 }
@@ -554,9 +554,9 @@ impl Default for DirCouplersParams {
     fn default() -> Self {
         Self {
             active: true,
-            amount: 1.0,
-            inhibition_samelayer: 1.0,
-            inhibition_interlayer: 1.0,
+            amount: 0.7, // Gold 200 calibration (eval/calib/CALIB.md)
+            inhibition_samelayer: 0.6,
+            inhibition_interlayer: 0.6,
             gamma_samelayer_rgb: [0.341, 0.324, 0.273],
             gamma_interlayer_r_to_gb: [0.355, 0.305],
             gamma_interlayer_g_to_rb: [0.154, 0.358],
