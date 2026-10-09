@@ -176,7 +176,7 @@ struct PendingReadback {
 /// the JS↔wasm boundary as floats:
 /// - `frame`: the photo as an 8-bit sRGB-encoded texture, uploaded once;
 /// - `input`: a caller-supplied WGSL pass that fills the chain input from
-///   that texture (lens, tone, colour matrix), replacing the upload;
+///   that texture (lens, display→scene, colour matrix), replacing the upload;
 /// - `pack`: an 8-bit LUT; the chain output is packed to RGBA through it, by
 ///   PACK_WGSL or a caller-supplied shader with the same bindings (e.g. one
 ///   that also adds procedural grain), with caller params.
@@ -204,7 +204,7 @@ struct OutputPass {
 struct InputPass {
     wgsl: String,
     uniform: Vec<f32>,
-    tone: Vec<f32>,
+    gain_lut: Vec<f32>,
 }
 
 /// Chain output (interleaved RGB f32, display-encoded) → RGBA8 through a
@@ -542,9 +542,9 @@ impl WgpuBackend {
     /// Fill the next chain input on the GPU with `wgsl` (entry `main`,
     /// workgroup 16×16 over the region): binding 0 the frame texture, 1 a
     /// linear clamp sampler, 2 `uniform` (its fields 14/15 are the region
-    /// width/height), 3 the chain input (RGB f32), 4 `tone` (storage, read).
-    pub fn set_input_pass(&self, wgsl: &str, uniform: Vec<f32>, tone: Vec<f32>) {
-        self.io.lock().unwrap().input = Some(InputPass { wgsl: wgsl.to_owned(), uniform, tone });
+    /// width/height), 3 the chain input (RGB f32), 4 `gain_lut` (storage, read).
+    pub fn set_input_pass(&self, wgsl: &str, uniform: Vec<f32>, gain_lut: Vec<f32>) {
+        self.io.lock().unwrap().input = Some(InputPass { wgsl: wgsl.to_owned(), uniform, gain_lut });
     }
 
     /// Pack the next chain output to RGBA8 through `lut` (4096 entries); read
@@ -600,7 +600,7 @@ impl WgpuBackend {
             contents: bytemuck::cast_slice(&req.uniform),
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let tone = self.static_storage("input_tone", bytemuck::cast_slice(&req.tone));
+        let gain_lut = self.static_storage("input_gain_lut", bytemuck::cast_slice(&req.gain_lut));
         let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &pipe.get_bind_group_layout(0),
@@ -609,7 +609,7 @@ impl WgpuBackend {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
                 wgpu::BindGroupEntry { binding: 2, resource: uni.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: out.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: tone.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: gain_lut.as_entire_binding() },
             ],
         });
         let mut pass = encoder.begin_compute_pass(&Default::default());

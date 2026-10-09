@@ -295,6 +295,8 @@ impl Pipeline {
         };
         let mut p = self.params.clone();
         p.film_render.grain.active = false;
+        // The thumb arrives already exposed: re-metering it would cancel Esposizione / Interno.
+        p.camera.auto_exposure = false;
         let (w, h) = (thumb.width as usize, thumb.height as usize);
         let d = self.film_density(&thumb, &p);
         let cmy: Vec<f32> = d.data.iter().map(|&v| v as f32).collect();
@@ -687,7 +689,7 @@ impl Pipeline {
 
         if self.params.io.scan_film {
             let t = Instant::now();
-            let result = stages::scanning::process_frontier(
+            let result = stages::scanning::scan_frontier(
                 &filmed,
                 &self.film,
                 &self.params,

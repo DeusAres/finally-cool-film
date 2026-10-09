@@ -457,18 +457,6 @@ pub fn process(
     scan(density_cmy, profile, params, backend, color_ref, gamut)
 }
 
-pub fn process_frontier(
-    density_cmy: &ImageBuf,
-    profile: &Profile,
-    params: &RuntimeParams,
-    backend: &dyn ComputeBackend,
-    color_ref: &crate::color_reference::ColorReference,
-    gamut: &crate::gamut_compression::OutputGamutCompress,
-    frontier: Option<&crate::frontier::FrontierLut>,
-) -> ImageBuf {
-    scan_frontier(density_cmy, profile, params, backend, color_ref, gamut, frontier)
-}
-
 fn select_illuminant(name: &str) -> &'static [f32] {
     match name {
         "D50" => &spectral::ILLUMINANT_D50,

@@ -185,8 +185,8 @@ impl Engine {
 
     /// Whole frame-to-screen run on the GPU, nothing but 8-bit pixels crossing
     /// to JS: the input region (width × height) is computed from the frame
-    /// last given to `set_frame` by the `input_wgsl` pass (lens, tone, colour
-    /// matrix; see `WgpuBackend::set_input_pass`), the film chain runs, and its
+    /// last given to `set_frame` by the `input_wgsl` pass (lens, display→scene
+    /// inverse, exposure, colour matrix; see `WgpuBackend::set_input_pass`), the film chain runs, and its
     /// output is packed to RGBA through `lut` (4096 entries) into `out`
     /// (width × height × 4 bytes), by `output_wgsl` when not empty (bindings:
     /// see `WgpuBackend::set_output_pack`) with `output_params`. Resolves to
@@ -196,7 +196,7 @@ impl Engine {
         &self,
         input_wgsl: &str,
         uniform: Vec<f32>,
-        tone: Vec<f32>,
+        display_gain: Vec<f32>,
         width: u32,
         height: u32,
         lut: &[u8],
@@ -211,7 +211,7 @@ impl Engine {
             return Err(JsError::new("output buffer size mismatch"));
         }
         let gpu = gpu()?;
-        gpu.set_input_pass(input_wgsl, uniform, tone);
+        gpu.set_input_pass(input_wgsl, uniform, display_gain);
         gpu.set_output_pack(lut, (!output_wgsl.is_empty()).then_some(output_wgsl), output_params);
         // Dimensions only: the input pass fills the chain input on the GPU.
         let image = ImageBuf { width, height, data: Vec::new() };

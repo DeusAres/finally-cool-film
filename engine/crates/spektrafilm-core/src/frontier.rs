@@ -204,13 +204,12 @@ impl FrontierBase {
         let dn: Vec<[f64; 3]> = ramp_cmy.iter().map(|&c| self.normalised_density(c)).collect();
         let mid = dn.len() / 2;
         let m = dn[mid];
-        let (mut sgg, mut sge) = (0.0, 0.0);
+        let mut sgg = 0.0;
         let mut sxx = [0.0f64; 3];
         let mut sxg = [0.0f64; 3];
-        for (d, ev) in dn.iter().zip(&evs) {
+        for d in &dn {
             let dg = d[1] - m[1];
             sgg += dg * dg;
-            sge += dg * ev;
             for c in 0..3 {
                 let dx = d[c] - m[c];
                 sxx[c] += dx * dx;
@@ -228,7 +227,6 @@ impl FrontierBase {
             }
         }
         self.d_per_ev = if sge2.abs() > 1e-12 && sgg > 0.0 { (sge2 / see2).abs().max(1e-3) } else { 1.0 };
-        let _ = sge;
         if self.model.setup_lut {
             // Film-type LUT: R and B densities are mapped onto G's along the whole ramp, so a grey
             // scene is neutral at every level the ramp covers, not only at mid-scale.
@@ -833,7 +831,7 @@ mod tests {
     }
 
     fn de2000(l1: [f64; 3], l2: [f64; 3]) -> f64 {
-        let (pi, rad) = (std::f64::consts::PI, std::f64::consts::PI / 180.0);
+        let rad = std::f64::consts::PI / 180.0;
         let c = |l: [f64; 3]| (l[1] * l[1] + l[2] * l[2]).sqrt();
         let cb = (c(l1) + c(l2)) / 2.0;
         let g = 0.5 * (1.0 - (cb.powi(7) / (cb.powi(7) + 25f64.powi(7))).sqrt());
@@ -860,7 +858,6 @@ mod tests {
         let dth = 30.0 * (-((hb - 275.0) / 25.0).powi(2)).exp();
         let rc = 2.0 * (cbp.powi(7) / (cbp.powi(7) + 25f64.powi(7))).sqrt();
         let rt = -(2.0 * dth * rad).sin() * rc;
-        let _ = pi;
         ((dl / sl).powi(2) + (dc / sc).powi(2) + (dhh / sh).powi(2) + rt * (dc / sc) * (dhh / sh)).sqrt()
     }
 
