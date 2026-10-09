@@ -4,6 +4,7 @@ import { DISPLAY_GAIN_LUT } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif, readExposure } from './lib/exif.js';
 import { isRaw, loadRaw, uploadRaw, rawThumb, rawPreviewRGBA } from './lib/raw.js';
+import { internoParams } from './lib/interno.js';
 import { iccSegment } from './lib/icc.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, inputUniform } from './lib/lens-gpu.js';
@@ -63,9 +64,17 @@ const FRONTIER_KEY = 0.01;
 // v2-calib: sign of frontier.cmy (+ = more filtration, i.e. the opposite colour); the sliders read +m greener, +y bluer.
 const frontierCmy = (u) => [0, -u.mshift * FRONTIER_KEY, -u.yshift * FRONTIER_KEY];
 
-/** Scene exposure gain of the input pass: Esposizione, minus Interno's underexposure, plus the DNG baseline (physical, before the film). */
-const underEv = () => (photo && $('indoor')?.checked ? photo.under : 0);
+/** Interno (lib/interno.js, one source of truth): thin negative U, real light colour, grain factor; null when off. */
+const interno = () => {
+  if (!photo || !$('indoor')?.checked) return null;
+  const { preview } = photo;
+  return internoParams({ under: photo.under, isRaw: !!preview.raw, cctK: preview.raw?.cct, space: preview.raw || preview.p3 ? 'rec2020' : 'srgb' });
+};
+const underEv = () => interno()?.under ?? 0;
+const sceneWb = () => interno()?.gains ?? [1, 1, 1];
+const grainFactor = () => interno()?.grain ?? 1;
 const baselineEv = () => photo?.preview.raw?.baseline ?? 0;
+/** Scene exposure gain of the input pass: Esposizione, minus Interno's underexposure, plus the DNG baseline (physical, before the film). */
 const sceneGain = (u) => 2 ** (u.ev - underEv() + baselineEv());
 
 // Everything else is read at render time and goes through `engine.update`.
@@ -98,7 +107,7 @@ function renderParams(u, { noGrain = false } = {}) {
     film_render: {
       // On the GPU path grain is ours (grain.js, in the output pass); the engine's is the CPU fallback.
       // (Inactive on the GPU path: a constant area keeps the grain slider from changing the params JSON, so no engine.update.)
-      grain: { active: !gpu && !noGrain && u.grain > 0, agx_particle_area_um2: GRAIN_AREA_UM2 * (gpu ? 1 : Math.max(u.grain, 0.01)) },
+      grain: { active: !gpu && !noGrain && u.grain > 0, agx_particle_area_um2: GRAIN_AREA_UM2 * (gpu ? 1 : Math.max(u.grain * grainFactor(), 0.01)) },
       // v2-calib: strength comes from the profile's antihalation; halation_amount is a multiplier on it (Halation slider).
       halation: { active: u.halation > 0, halation_amount: u.halation },
     },
@@ -155,17 +164,18 @@ function uploadFrame(data, w, h, mask = null) {
 
 /** 8-bit render of a region of `frame` into `target` (RGBA, w×h×4 bytes). */
 async function renderRegion(frame, x0, y0, w, h, target, u) {
-  const lens = lensOf(u), expo = sceneGain(u);
+  const lens = lensOf(u), expo = sceneGain(u), wb = sceneWb();
   if (gpu) {
     const space = frame.raw ? 'rec2020' : frame.p3 ? 'p3' : 'srgb';
-    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture),
+    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb),
       DISPLAY_GAIN_LUT, w, h, PACK_LUT,
-      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), u.grain, photo.grainSeed, outP3()), target);
+      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), u.grain * grainFactor(), photo.grainSeed, outP3()), target);
   }
   // (the CPU path has no clip boost: exposure is a plain scale)
   const rgb = lensActive(lens)
     ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, expo, lensGeometry(frame.w, frame.h, lens), true)
     : extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, expo, true);
+  if (wb.some((g) => g !== 1)) for (let i = 0; i < rgb.length; i += 3) { rgb[i] *= wb[0]; rgb[i + 1] *= wb[1]; rgb[i + 2] *= wb[2]; }
   const out = engine.process(rgb, w, h), d32 = new Uint32Array(target.buffer, target.byteOffset, w * h);
   const px = new Float32Array(3), p3 = outP3();
   for (let p = 0, j = 0; p < w * h; p++, j += 3) {
@@ -179,16 +189,19 @@ const q8 = (v) => Math.round(255 * Math.min(1, Math.max(0, v)));
 // ---------- auto ----------
 // Auto = the engine's own exposure metering on a thumb of the photo (Esposizione), then the
 // scanner's AutoSetup on that thumb as the film will see it (frontier.auto).
-// v2-calib: auto_exposure_ev's target (mid grey) and clamp; AutoSetup is not re-run when Esposizione / Interno change afterwards.
+// v2-calib: auto_exposure_ev's target (mid grey) and clamp; AutoSetup is re-run when Interno toggles (thin negative), not when Esposizione changes.
 
-function autoSetup() {
+function autoSetup(keepEv = false) {
   const eng = ensureEngine(), { preview } = photo, raw = preview.raw;
   updateEngine(renderParamsJson(ui()));   // a fresh engine still has the library defaults (camera auto-exposure on, no scanner model)
   const { rgb, w, h } = raw ? rawThumb(raw, THUMB_PX) : jpegThumb(preview);
   const scale = (k) => { for (let i = 0; i < rgb.length; i++) rgb[i] *= k; };
   scale(2 ** baselineEv());
-  const ev = Math.max(+$('ev').min, Math.min(+$('ev').max, Math.round(eng.auto_exposure_ev(rgb.slice(), w, h) * 10) / 10));
+  // The meter sees the scene as shot: it never compensates Interno's U (the negative stays thin).
+  const ev = keepEv ? +$('ev').value : Math.max(+$('ev').min, Math.min(+$('ev').max, Math.round(eng.auto_exposure_ev(rgb.slice(), w, h) * 10) / 10));
   scale(2 ** (ev - underEv()));
+  const wb = sceneWb();
+  for (let i = 0; i < rgb.length; i += 3) { rgb[i] *= wb[0]; rgb[i + 1] *= wb[1]; rgb[i + 2] *= wb[2]; }
   // The scanner model arrives with the engine: until then the app loads with neutral scanner setup.
   // Engine.frontier_auto_setup takes linear RGBA f32 (w*h*4), not RGB.
   const rgba = new Float32Array(w * h * 4);
@@ -705,7 +718,12 @@ $('reseed').addEventListener('click', () => {
 $('pick').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadPhoto(f); });
 $('newPhoto').addEventListener('click', () => $('pick').click());
 $('auto').addEventListener('click', () => runAuto());
-$('indoor').addEventListener('change', () => render());
+$('indoor').addEventListener('change', async () => {
+  if (!photo) return;
+  while (rendering || exporting) await sleep(20);
+  photo.auto = autoSetup(true).auto;   // the lab re-reads the (thin) negative; Esposizione stays as set
+  render();
+});
 $('export').addEventListener('click', () => exportFull());
 $('exportIG').addEventListener('click', () => exportFull(true));
 $('border').checked = store.get('fcf_border') !== '0';   // on by default
