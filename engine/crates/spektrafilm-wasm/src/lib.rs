@@ -133,6 +133,27 @@ impl Engine {
         stages::filming::measure_autoexposure_ev(&image, &rgb_to_xyz, &params.camera.auto_exposure_method)
     }
 
+    /// Frontier AutoSetup. `rgba` is a thumbnail (at most 256 px on the long
+    /// side) of linear f32 RGBA in the engine's input space (w*h*4). It is
+    /// rendered to the negative on the CPU and analysed; resolves to
+    /// `[density_ev, c, m, y]`, to be passed back as `scanner.frontier.auto`.
+    /// Needs a negative film (the scanner model need not be active).
+    pub fn frontier_auto_setup(&self, rgba: Vec<f32>, width: u32, height: u32) -> Result<js_sys::Float32Array, JsError> {
+        let n = width as usize * height as usize;
+        if rgba.len() != n * 4 {
+            return Err(JsError::new("thumbnail must be width*height*4 floats"));
+        }
+        let mut rgb = Vec::with_capacity(n * 3);
+        for px in rgba.chunks_exact(4) {
+            rgb.extend_from_slice(&px[..3]);
+        }
+        let out = self
+            .pipeline()
+            .frontier_auto_setup(ImageBuf::from_data(width, height, rgb))
+            .ok_or_else(|| JsError::new("frontier_auto_setup needs a negative film"))?;
+        Ok(js_sys::Float32Array::from(out.as_slice()))
+    }
+
     fn pipeline(&self) -> &Pipeline {
         self.pipeline.as_ref().expect("pipeline present")
     }
@@ -164,8 +185,8 @@ impl Engine {
 
     /// Whole frame-to-screen run on the GPU, nothing but 8-bit pixels crossing
     /// to JS: the input region (width × height) is computed from the frame
-    /// last given to `set_frame` by the `input_wgsl` pass (lens, tone, colour
-    /// matrix; see `WgpuBackend::set_input_pass`), the film chain runs, and its
+    /// last given to `set_frame` by the `input_wgsl` pass (lens, display→scene
+    /// inverse, exposure, colour matrix; see `WgpuBackend::set_input_pass`), the film chain runs, and its
     /// output is packed to RGBA through `lut` (4096 entries) into `out`
     /// (width × height × 4 bytes), by `output_wgsl` when not empty (bindings:
     /// see `WgpuBackend::set_output_pack`) with `output_params`. Resolves to
@@ -175,7 +196,7 @@ impl Engine {
         &self,
         input_wgsl: &str,
         uniform: Vec<f32>,
-        tone: Vec<f32>,
+        display_gain: Vec<f32>,
         width: u32,
         height: u32,
         lut: &[u8],
@@ -190,7 +211,7 @@ impl Engine {
             return Err(JsError::new("output buffer size mismatch"));
         }
         let gpu = gpu()?;
-        gpu.set_input_pass(input_wgsl, uniform, tone);
+        gpu.set_input_pass(input_wgsl, uniform, display_gain);
         gpu.set_output_pack(lut, (!output_wgsl.is_empty()).then_some(output_wgsl), output_params);
         // Dimensions only: the input pass fills the chain input on the GPU.
         let image = ImageBuf { width, height, data: Vec::new() };

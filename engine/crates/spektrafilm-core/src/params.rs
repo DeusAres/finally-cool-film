@@ -169,6 +169,13 @@ pub struct ScannerParams {
     pub black_level: f32,
     #[serde(default = "default_unsharp")]
     pub unsharp_mask: [f32; 2],
+    /// Scanner model. `None` keeps the legacy `scan_film` behaviour (the
+    /// negative as a 17^3-LUT spectral scan). `"frontier"` (with `io.scan_film`
+    /// on a negative stock) returns the positive made by the Frontier model.
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub frontier: FrontierParams,
 }
 
 impl Default for ScannerParams {
@@ -180,6 +187,159 @@ impl Default for ScannerParams {
             white_level: 0.98,
             black_level: 0.01,
             unsharp_mask: [0.7, 0.7],
+            model: None,
+            frontier: FrontierParams::default(),
+        }
+    }
+}
+
+/// Frontier SP-3000 scanner: operator keys (neutral defaults = lab default)
+/// plus the inferred model constants (`model`). See `eval/V2_CONTRACT.md` and
+/// `eval/frontier_model.json`; `crate::frontier` documents the maths.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FrontierParams {
+    /// Brightness key in EV, + = brighter positive.
+    pub density: f32,
+    /// C, M, Y keys in density units (logD); + = more of that colour.
+    pub cmy: [f32; 3],
+    /// Gradation steepness about mid-grey, 0 = standard (`a *= 1 + contrast`).
+    pub contrast: f32,
+    /// Colour saturation, 1 = standard.
+    pub saturation: f32,
+    /// Highlight shoulder, 0 = standard (`shoulder *= 1 + highlight`).
+    pub highlight: f32,
+    /// 0..1, raises black equally in R, G, B (scanner space, hue-neutral).
+    pub black_lift: f32,
+    /// AutoSetup result `[density_ev, c, m, y]` (set by the app from
+    /// `Engine.frontier_auto_setup`), same units as `density` and `cmy`.
+    pub auto: [f32; 4],
+    /// Inferred model constants (all `G`/`I` in `eval/frontier_model.json`).
+    pub model: FrontierModelParams,
+}
+
+impl Default for FrontierParams {
+    fn default() -> Self {
+        Self {
+            density: 0.0,
+            cmy: [0.0; 3],
+            contrast: 0.0,
+            saturation: 1.0,
+            highlight: 0.0,
+            black_lift: 0.0,
+            auto: [0.0; 4],
+            model: FrontierModelParams::default(),
+        }
+    }
+}
+
+/// Inferred Frontier model constants. Defaults are the values of
+/// `eval/frontier_model.json`; every one is meant to be calibrated.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FrontierModelParams {
+    /// Sensor channel peak wavelengths (nm), R G B (Status-M-like Gaussians).
+    pub sensor_peak_nm: [f64; 3],
+    /// Sensor channel FWHM (nm).
+    pub sensor_fwhm_nm: [f64; 3],
+    /// Transmittance floor (ADC clip): `T = max(T, tmin_floor)`.
+    pub tmin_floor: f64,
+    /// Film-type fit: grey ramp half-range in EV about mid-grey (18 %).
+    pub setup_fit_ev: f64,
+    /// Film-type setup as a per-channel LUT through the ramp (neutral at every ramp level)
+    /// instead of a linear fit (neutral at mid-scale only).
+    pub setup_lut: bool,
+    /// Film-type fit: number of ramp steps (odd, includes mid-grey).
+    pub setup_fit_steps: u32,
+    /// Density range (logD) mapped to the full gradation input 0..1.
+    pub range_density: f64,
+    /// Sigmoid steepness `a`.
+    pub gradation_a: f64,
+    /// Encoded output at mid-scale (x = 0.5); the sigmoid midpoint is solved
+    /// so that this holds whatever `contrast` is (0.46 = 18 % grey, sRGB).
+    pub mid_grey_out: f64,
+    /// Shoulder start (fraction of the curve output).
+    pub shoulder_start: f64,
+    /// Shoulder strength.
+    pub shoulder_sharpness: f64,
+    /// Encoded black / white points of the curve.
+    pub black_point: f64,
+    pub white_point: f64,
+    /// Encoded black raised by `black_lift = 1`.
+    pub black_lift_max: f64,
+    /// Saturation about Rec.709 luminance (linear light) at `saturation = 1`.
+    pub saturation: f64,
+    /// Film-type balance of this stock (Fuji "film master" setup): fixed C, M, Y
+    /// offset in logD, same sign as `FrontierParams::cmy` (+ = more of that
+    /// colour). Applied with the keys but outside AutoSetup, which keeps
+    /// neutralising the frame and so never erases it.
+    pub balance_cmy: [f64; 3],
+    /// AutoSetup constants.
+    pub auto: FrontierAutoParams,
+}
+
+impl Default for FrontierModelParams {
+    fn default() -> Self {
+        Self {
+            sensor_peak_nm: [650.0, 545.0, 445.0],
+            sensor_fwhm_nm: [45.0, 50.0, 50.0],
+            tmin_floor: 0.0005,
+            setup_lut: false,
+            setup_fit_ev: 2.0,
+            setup_fit_steps: 9,
+            range_density: 2.0,
+            gradation_a: 4.2,
+            mid_grey_out: 0.46,
+            shoulder_start: 0.82,
+            shoulder_sharpness: 1.6,
+            black_point: 0.02,
+            white_point: 0.98,
+            black_lift_max: 0.25,
+            saturation: 1.12,
+            balance_cmy: [0.0; 3],
+            auto: FrontierAutoParams::default(),
+        }
+    }
+}
+
+/// AutoSetup constants (`autosetup.params` of the model file).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FrontierAutoParams {
+    pub k_den: f64,
+    pub k_col: f64,
+    pub clamp_density: f64,
+    pub clamp_colour: f64,
+    pub border_mask_frac: f64,
+    pub trim_lo_pct: f64,
+    pub trim_hi_pct: f64,
+    pub exclude_pct: f64,
+    /// Density target of the frame mean (G) relative to mid-grey density.
+    pub target_offset: f64,
+    pub strength: f64,
+    pub thumb_size: u32,
+    /// Highlight guard: percentile of G (0 = off) of the large-area highlights.
+    pub highlight_pct: f64,
+    /// Density allowed above the shoulder knee for that percentile.
+    pub highlight_margin: f64,
+}
+
+impl Default for FrontierAutoParams {
+    fn default() -> Self {
+        Self {
+            k_den: 0.8,
+            k_col: 0.6,
+            clamp_density: 0.30,
+            clamp_colour: 0.15,
+            border_mask_frac: 0.08,
+            trim_lo_pct: 10.0,
+            trim_hi_pct: 90.0,
+            exclude_pct: 0.5,
+            target_offset: 0.0,
+            strength: 0.7,
+            thumb_size: 64,
+            highlight_pct: 95.0,
+            highlight_margin: 0.0,
         }
     }
 }

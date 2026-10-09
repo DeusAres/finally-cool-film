@@ -6,6 +6,7 @@
 ///   3. Compute print exposure normalization factor from midgray spectral density
 ///   4. Pass all calibration data to the pipeline stages
 use std::path::Path;
+use std::sync::Arc;
 use web_time::Instant;
 
 use spektrafilm_gpu::ComputeBackend;
@@ -65,6 +66,14 @@ fn apply_film_specific_params(film: &Profile, params: &mut RuntimeParams) {
         params.film_render.dir_couplers.gamma_interlayer_b_to_rg = [0.168, 0.226];
     }
 
+    // Halation strength from the stock's antihalation layer. The defaults in
+    // `HalationParams` describe a "weak" layer (scale 1); `params` is always
+    // freshly parsed here, so the scale does not compound across updates.
+    let ah = antihalation_scale(&film.info.antihalation);
+    for s in params.film_render.halation.halation_strength.iter_mut() {
+        *s *= ah;
+    }
+
     // Monochrome grain is derived from the film, never user-set — clear it
     // for colour so a stray params file can't correlate the colour channels'
     // noise.
@@ -93,6 +102,29 @@ fn apply_film_specific_params(film: &Profile, params: &mut RuntimeParams) {
     }
 }
 
+/// Multiplier on the default (weak antihalation) `halation_strength`.
+///
+/// Halation is light reflected by the film base back into the emulsion; it
+/// crosses the antihalation layer twice, so it scales with `T_ah^2`. With
+/// `T_ah` ~ 0.6 for "weak" this gives none ~ 1/0.36 = 2.8 (rounded to 3),
+/// strong (`T_ah` ~ 0.3) ~ 0.09/0.36 = 0.25. Unknown values count as weak.
+pub fn antihalation_scale(antihalation: &str) -> f64 {
+    match antihalation {
+        "none" => 3.0,
+        "strong" => 0.25,
+        _ => 1.0,
+    }
+}
+
+/// Frontier scanner state: the film-type setup (cached on what it depends on)
+/// and the baked LUT (cached on the operator keys).
+pub struct FrontierRuntime {
+    pub base: Arc<crate::frontier::FrontierBase>,
+    base_key: String,
+    pub lut: crate::frontier::FrontierLut,
+    lut_key: String,
+}
+
 #[derive(Clone)]
 pub struct Pipeline {
     pub film: Profile,
@@ -116,6 +148,8 @@ pub struct Pipeline {
     preflash_raw: [f64; 3],
     /// Output gamut compressor (built once; identity unless oklch is enabled).
     output_gamut: crate::gamut_compression::OutputGamutCompress,
+    /// Frontier scanner (scan_film on a negative with `scanner.model="frontier"`).
+    frontier: Option<Arc<FrontierRuntime>>,
 }
 
 impl Pipeline {
@@ -147,7 +181,137 @@ impl Pipeline {
             &params.io.output_color_space,
         );
         self.params = params;
+        self.refresh_frontier();
         self
+    }
+
+    /// True when the scan returns the Frontier positive.
+    pub fn frontier_active(&self) -> bool {
+        Self::frontier_wanted(&self.film, &self.params)
+    }
+
+    fn frontier_wanted(film: &Profile, params: &RuntimeParams) -> bool {
+        params.io.scan_film
+            && film.is_negative()
+            && params.scanner.model.as_deref() == Some("frontier")
+    }
+
+    /// The frontier scanner state, when active.
+    pub fn frontier(&self) -> Option<&FrontierRuntime> {
+        self.frontier.as_deref()
+    }
+
+    /// Developed film density (CPU, deterministic): filming expose + develop.
+    fn film_density(&self, image: &ImageBuf, params: &RuntimeParams) -> ImageBuf {
+        let backend = spektrafilm_gpu::cpu_backend::CpuBackend;
+        let log_raw = stages::filming::expose(
+            image,
+            &self.film,
+            params,
+            &backend,
+            self.tc_lut.as_ref(),
+            self.mallett_core.as_ref(),
+            select_illuminant(&self.front_illuminant),
+            1.0,
+        );
+        stages::filming::develop(&log_raw, &self.film, params, &backend)
+    }
+
+    /// Film-type setup: fit the sensor/setup on the stock's grey ramp.
+    fn build_frontier_base(&self, params: &RuntimeParams) -> crate::frontier::FrontierBase {
+        let model = &params.scanner.frontier.model;
+        let mut p = params.clone();
+        p.film_render.grain.active = false;
+        p.camera.auto_exposure = false;
+        p.camera.exposure_compensation_ev = 0.0;
+        let ramp: Vec<[f64; 3]> = crate::frontier::ramp_evs(model)
+            .iter()
+            .map(|ev| {
+                let v = spektrafilm_math::precision::from_f64(0.18 * 2f64.powf(*ev));
+                let img = ImageBuf::from_data(8, 8, vec![v; 8 * 8 * 3]);
+                let d = self.film_density(&img, &p);
+                let i = (4 * 8 + 4) * 3;
+                [d.data[i] as f64, d.data[i + 1] as f64, d.data[i + 2] as f64]
+            })
+            .collect();
+        crate::frontier::FrontierBase::new(&self.film, model, &ramp)
+    }
+
+    /// (Re)build the Frontier state for `self.params`, reusing what the changed
+    /// params do not touch: the grey-ramp fit depends on the model constants and
+    /// the film development only; the LUT on the operator keys.
+    fn refresh_frontier(&mut self) {
+        let p = &self.params;
+        if !Self::frontier_wanted(&self.film, p) {
+            self.frontier = None;
+            return;
+        }
+        let key = |v: &dyn erased::Ser| v.json();
+        let base_key = key(&(
+            &p.scanner.frontier.model,
+            &p.film_render.dir_couplers,
+            p.film_render.density_curve_gamma,
+            &p.io.input_color_space,
+        ));
+        let lut_key = key(&(
+            &p.scanner.frontier,
+            p.film_render.grain.density_min,
+            p.settings.lut_resolution,
+            &p.io.output_color_space,
+            &base_key,
+        ));
+        if let Some(f) = &self.frontier {
+            if f.lut_key == lut_key {
+                return;
+            }
+        }
+        let base = match &self.frontier {
+            Some(f) if f.base_key == base_key => f.base.clone(),
+            _ => Arc::new(self.build_frontier_base(&self.params)),
+        };
+        let (dmin, dmax) = stages::scanning::scanner_lut_bounds(&self.film, &self.params);
+        let lut = crate::frontier::FrontierLut::build(
+            &base,
+            &self.params.scanner.frontier,
+            dmin,
+            dmax,
+            self.params.settings.lut_resolution as usize,
+            stages::scanning::frontier_output_matrix(&self.params.io.output_color_space),
+        );
+        self.frontier = Some(Arc::new(FrontierRuntime { base, base_key, lut, lut_key }));
+    }
+
+    /// Frontier AutoSetup on a thumbnail (linear RGB in the engine's input
+    /// space, w*h*3): renders it to the negative on the CPU and returns
+    /// `[density_ev, c, m, y]` for `scanner.frontier.auto`. `None` unless the
+    /// film is a negative.
+    pub fn frontier_auto_setup(&self, thumb: ImageBuf) -> Option<[f32; 4]> {
+        if !self.film.is_negative() {
+            return None;
+        }
+        let base = match &self.frontier {
+            Some(f) => f.base.clone(),
+            None => Arc::new(self.build_frontier_base(&self.params)),
+        };
+        let mut p = self.params.clone();
+        p.film_render.grain.active = false;
+        // The thumb arrives already exposed: re-metering it would cancel Esposizione / Interno.
+        p.camera.auto_exposure = false;
+        let (w, h) = (thumb.width as usize, thumb.height as usize);
+        let d = self.film_density(&thumb, &p);
+        let cmy: Vec<f32> = d.data.iter().map(|&v| v as f32).collect();
+        Some(crate::frontier::auto_setup(&base, &cmy, w, h))
+    }
+}
+
+mod erased {
+    pub trait Ser {
+        fn json(&self) -> String;
+    }
+    impl<T: serde::Serialize> Ser for T {
+        fn json(&self) -> String {
+            serde_json::to_string(self).unwrap_or_default()
+        }
     }
 }
 
@@ -181,6 +345,7 @@ impl Pipeline {
             print_illuminant,
             preflash_raw: [0.0; 3],
             output_gamut,
+            frontier: None,
         }
     }
 
@@ -445,7 +610,7 @@ impl Pipeline {
             &params.io.output_gamut_compress,
             &params.io.output_color_space,
         );
-        Ok(Self {
+        let mut pipeline = Self {
             film,
             print,
             params,
@@ -456,7 +621,10 @@ impl Pipeline {
             print_illuminant,
             preflash_raw,
             output_gamut,
-        })
+            frontier: None,
+        };
+        pipeline.refresh_frontier();
+        Ok(pipeline)
     }
 
     pub fn process(&self, image: ImageBuf, backend: &dyn ComputeBackend) -> ImageBuf {
@@ -521,13 +689,14 @@ impl Pipeline {
 
         if self.params.io.scan_film {
             let t = Instant::now();
-            let result = stages::scanning::process(
+            let result = stages::scanning::scan_frontier(
                 &filmed,
                 &self.film,
                 &self.params,
                 backend,
                 &color_ref,
                 &self.output_gamut,
+                self.frontier.as_deref().map(|f| &f.lut),
             );
             print_stage_timing(stage_timings, "scanning", t);
             tracing::info!("pipeline: scanning complete (film scan)");
@@ -1031,7 +1200,8 @@ impl Pipeline {
         } else {
             &self.params.print_render.glare
         };
-        let glare = if glare_params.active && glare_params.percent > 0.0 {
+        // The Frontier positive has no viewing glare (as on the CPU path).
+        let glare = if self.frontier.is_none() && glare_params.active && glare_params.percent > 0.0 {
             let g = glare_params;
             // LogNormal parameters (same derivation as `compute_random_glare_amount`).
             let m = g.percent as f64;
@@ -1161,6 +1331,10 @@ impl Pipeline {
             enlarger_diffusion,
             print_exposure_scale,
             output_cctf_encoding: self.params.io.output_cctf_encoding,
+            frontier: self.frontier.as_ref().map(|f| {
+                let (table, steps, data_min, inv) = f.lut.gpu_table();
+                spektrafilm_gpu::FrontierGpuLut { table, steps, data_min, inv }
+            }),
         };
         backend.try_run_film_chain(&params)
     }

@@ -37,7 +37,7 @@ fn build_lut_grid(steps: usize, data_min: [f64; 3], data_max: [f64; 3]) -> Image
 /// Scanner LUT bounds. When scan_film=true: `-grain.density_min` to
 /// `nanmax(film.density_curves)`. Else: `nanmin..nanmax` of
 /// `print.density_curves`. Mirrors Python `ScanningStage._density_to_rgb`.
-fn scanner_lut_bounds(profile: &Profile, params: &RuntimeParams) -> ([f64; 3], [f64; 3]) {
+pub(crate) fn scanner_lut_bounds(profile: &Profile, params: &RuntimeParams) -> ([f64; 3], [f64; 3]) {
     let curves = profile.density_curves_f64();
     let mut dmin_curves = [f64::INFINITY; 3];
     let mut dmax_curves = [f64::NEG_INFINITY; 3];
@@ -163,6 +163,22 @@ pub fn scan(
     color_ref: &crate::color_reference::ColorReference,
     gamut: &crate::gamut_compression::OutputGamutCompress,
 ) -> ImageBuf {
+    scan_frontier(density_cmy, profile, params, backend, color_ref, gamut, None)
+}
+
+/// `scan`, with the Frontier scanner LUT when given: the LUT maps the film
+/// density straight to the sRGB-encoded positive, which is decoded to linear
+/// here so lens blur, unsharp, gamut compression and the output encoding stay
+/// as they are. Viewing glare does not apply to the digital positive.
+pub fn scan_frontier(
+    density_cmy: &ImageBuf,
+    profile: &Profile,
+    params: &RuntimeParams,
+    backend: &dyn ComputeBackend,
+    color_ref: &crate::color_reference::ColorReference,
+    gamut: &crate::gamut_compression::OutputGamutCompress,
+    frontier: Option<&crate::frontier::FrontierLut>,
+) -> ImageBuf {
     // Python parity — channel_density / base_density are f64 in the JSON profile.
     let channel_density: Vec<[f64; 3]> = profile
         .data
@@ -240,7 +256,19 @@ pub fn scan(
     // through the LUT path when it's active (the LUT result matches the
     // direct spectral path to sub-LSB, and only this path exposes the
     // pre-CAT XYZ hook). Otherwise honour use_scanner_lut.
-    let mut rgb = if color_ref.has_remap() || params.settings.use_scanner_lut {
+    let mut rgb = if let Some(lut) = frontier {
+        let mut out = density_cmy.clone();
+        out.data
+            .par_chunks_exact_mut(3)
+            .zip(density_cmy.data.par_chunks_exact(3))
+            .for_each(|(dst, src)| {
+                let y = lut.apply([src[0] as f64, src[1] as f64, src[2] as f64]);
+                for c in 0..3 {
+                    dst[c] = spektrafilm_math::precision::srgb_decode(from_f64(y[c]));
+                }
+            });
+        out
+    } else if color_ref.has_remap() || params.settings.use_scanner_lut {
         let (data_min, data_max) = scanner_lut_bounds(profile, params);
         scan_spectral_via_lut(
             density_cmy,
@@ -286,7 +314,7 @@ pub fn scan(
     } else {
         &params.print_render.glare
     };
-    if glare.active && glare.percent > 0.0 {
+    if frontier.is_none() && glare.active && glare.percent > 0.0 {
         // Illuminant XYZ (Y=1) from the SPD (matches Python `contract('k,kl->l', illu, CMFs)/norm`).
         // Use the unnormalized integration here — the scaling cancels because we apply M next.
         let mut illu_xyz = [0.0f64; 3];
@@ -445,6 +473,30 @@ pub fn select_illuminant_f64(name: &str) -> &'static [f64] {
         "D65" => &spectral::ILLUMINANT_D65_F64,
         _ => &spectral::ILLUMINANT_D50_F64,
     }
+}
+
+/// Frontier working space (sRGB primaries, D65) -> linear RGB of `output_color_space`:
+/// the only place the output primaries enter the Frontier model.
+pub fn frontier_output_matrix(output_color_space: &str) -> [[f64; 3]; 3] {
+    const I: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    if output_color_space == "sRGB" {
+        return I;
+    }
+    let adapt = colorspace::chromatic_adaptation_matrix_f64(
+        spectral::colorspace_white_xyz_f64("sRGB"),
+        spectral::colorspace_white_xyz_f64(output_color_space),
+    );
+    let to_out = output_colorspace_from_xyz_f64(output_color_space);
+    let mul = |a: &[[f64; 3]; 3], b: &[[f64; 3]; 3]| {
+        let mut m = [[0.0f64; 3]; 3];
+        for i in 0..3 {
+            for j in 0..3 {
+                m[i][j] = (0..3).map(|k| a[i][k] * b[k][j]).sum();
+            }
+        }
+        m
+    };
+    mul(&to_out, &mul(&adapt, &colorspace::SRGB_TO_XYZ_F64))
 }
 
 fn output_colorspace_from_xyz_f64(name: &str) -> [[f64; 3]; 3] {

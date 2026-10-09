@@ -38,3 +38,10 @@ rustfft = "6"
 lto = "thin"
 codegen-units = 1
 opt-level = 3
+
+# Fast iteration for sf-eval calibration (release maths, no LTO, parallel + incremental codegen).
+[profile.eval]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true

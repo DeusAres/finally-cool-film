@@ -101,14 +101,7 @@ function renderParams(u, { noGrain = false } = {}) {
       grain: { active: !gpu && !noGrain && u.grain > 0, agx_particle_area_um2: GRAIN_AREA_UM2 * (gpu ? 1 : Math.max(u.grain, 0.01)) },
       // v2-calib: strength comes from the profile's antihalation; halation_amount is a multiplier on it (Halation slider).
       halation: { active: u.halation > 0, halation_amount: u.halation },
-      // Viewing glare: same mean (E = percent whatever the roughness), but no
-      // random per-pixel field: that field is seeded by the pixel's index in
-      // the region, so every export tile drew a different one (measured: the
-      // same pixel varied ~0.3 levels between tiles, and seams showed at tile
-      // boundaries). Our grain supplies the texture.
-      glare: { roughness: 0 },
     },
-    print_render: { glare: { roughness: 0 } },
   };
 }
 
@@ -190,13 +183,17 @@ const q8 = (v) => Math.round(255 * Math.min(1, Math.max(0, v)));
 
 function autoSetup() {
   const eng = ensureEngine(), { preview } = photo, raw = preview.raw;
+  updateEngine(renderParamsJson(ui()));   // a fresh engine still has the library defaults (camera auto-exposure on, no scanner model)
   const { rgb, w, h } = raw ? rawThumb(raw, THUMB_PX) : jpegThumb(preview);
   const scale = (k) => { for (let i = 0; i < rgb.length; i++) rgb[i] *= k; };
   scale(2 ** baselineEv());
   const ev = Math.max(+$('ev').min, Math.min(+$('ev').max, Math.round(eng.auto_exposure_ev(rgb.slice(), w, h) * 10) / 10));
   scale(2 ** (ev - underEv()));
   // The scanner model arrives with the engine: until then the app loads with neutral scanner setup.
-  const auto = typeof eng.frontier_auto_setup === 'function' ? Array.from(eng.frontier_auto_setup(rgb, w, h)) : [0, 0, 0, 0];
+  // Engine.frontier_auto_setup takes linear RGBA f32 (w*h*4), not RGB.
+  const rgba = new Float32Array(w * h * 4);
+  for (let i = 0, j = 0; i < w * h * 3; i += 3, j += 4) { rgba[j] = rgb[i]; rgba[j + 1] = rgb[i + 1]; rgba[j + 2] = rgb[i + 2]; rgba[j + 3] = 1; }
+  const auto = typeof eng.frontier_auto_setup === 'function' ? Array.from(eng.frontier_auto_setup(rgba, w, h)) : [0, 0, 0, 0];
   return { ev, auto };
 }
 
@@ -443,25 +440,25 @@ async function loadPhoto(file) {
       // DNG (raw.js): scene-linear Rec.2020, half-float frame; output in Display P3.
       if (!gpu) throw new Error('I file DNG richiedono WebGPU');
       const t = performance.now(), raw = await loadRaw(file, PREVIEW_LONG_SIDE);
+      const ux = underExposure(await readExposure(file));   // every await before the wait: a render may start during one
       while (rendering || exporting) await sleep(20);
       const preview = { data: rawPreviewRGBA(raw), w: raw.w, h: raw.h, p3: true, raw };
       preview.before = new ImageData(preview.data, preview.w, preview.h, { colorSpace: 'display-p3' });
       log(`DNG ${raw.fullW}x${raw.fullH}, preview ${raw.w}x${raw.h}, orientation ${raw.orientation}, baseline ${raw.baseline} EV, ${Math.round(performance.now() - t)} ms`);
       photo?.bitmap?.close();
-      const ux = underExposure(await readExposure(file));
       log(`under ${ux.u.toFixed(2)} EV (EV100 ${ux.ev100 === null ? 'n/a' : ux.ev100.toFixed(1)})`);
       $('indoor').checked = ux.u >= 1;
       photo = { file, bitmap: null, preview, under: ux.u, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
       uploadRaw(sf, raw);
     } else {
       const bitmap = await createImageBitmap(file);
+      const ux = underExposure(await readExposure(file));
       // A render or export in flight still uses the current photo, engine and GPU frame.
       while (rendering || exporting) await sleep(20);
       const preview = decodeRGBA(bitmap, PREVIEW_LONG_SIDE);
       preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
       log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
       photo?.bitmap?.close();   // full-resolution decode of the previous photo
-      const ux = underExposure(await readExposure(file));
       log(`under ${ux.u.toFixed(2)} EV (EV100 ${ux.ev100 === null ? 'n/a' : ux.ev100.toFixed(1)})`);
       $('indoor').checked = ux.u >= 1;   // preselected from EXIF; the user decides
       photo = { file, bitmap, preview, under: ux.u, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };

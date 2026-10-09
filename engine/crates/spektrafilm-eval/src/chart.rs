@@ -56,6 +56,21 @@ pub fn lab_scene(lab: V3) -> V3 {
     color::lab_d50_to_linear(lab, &Rgb::rec2020())
 }
 
+/// The ColorChecker as one frame (6x4 blocks), scaled by `gain`: the thumbnail
+/// the lab's AutoSetup sees.
+pub fn cc24_frame(gain: f64) -> ImageBuf {
+    const B: u32 = 16;
+    let (w, h) = (6 * B, 4 * B);
+    let px: Vec<V3> = CC24.iter().map(|(_, lab)| lab_scene(*lab).map(|v| v * gain)).collect();
+    let mut data = Vec::with_capacity((w * h * 3) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            data.extend(px[((y / B) * 6 + x / B) as usize].map(|v| v as f32));
+        }
+    }
+    ImageBuf::from_data(w, h, data)
+}
+
 fn uniform(rgb: V3) -> ImageBuf {
     let px = rgb.map(|v| v as f32);
     ImageBuf::from_data(PATCH_PX, PATCH_PX, (0..PATCH_PX * PATCH_PX).flat_map(|_| px).collect())
@@ -84,13 +99,14 @@ pub struct Measured {
 }
 
 /// sRGB-encoded pipeline output to CIELAB D50 (Bradford from D65).
-pub fn output_lab(rgb: V3) -> V3 {
-    color::linear_to_lab_d50(rgb.map(color::srgb_decode), &Rgb::srgb())
+pub fn output_lab(rgb: V3, space: &Rgb) -> V3 {
+    color::linear_to_lab_d50(rgb.map(color::srgb_decode), space)
 }
 
-pub fn measure(r: &dyn Renderer, scene: V3) -> Measured {
+/// `space`: primaries of the encoded output (the pipeline's `io.output_color_space`).
+pub fn measure(r: &dyn Renderer, scene: V3, space: &Rgb) -> Measured {
     let rgb = render_patch(r, scene);
-    Measured { rgb, lab: output_lab(rgb) }
+    Measured { rgb, lab: output_lab(rgb, space) }
 }
 
 fn fill(img: &mut RgbImage, x: u32, y: u32, w: u32, h: u32, rgb: V3) {
