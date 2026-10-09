@@ -649,6 +649,16 @@ mod tests {
         p.camera.auto_exposure = false;
         p.film_render.grain.active = false;
         p.film_render.halation.active = false;
+        // Neutral-stock structural tests: the calibrated Gold 200 balance / density offset are not under test.
+        let m = &mut p.scanner.frontier.model;
+        m.balance_cmy = [0.0; 3];
+        m.auto.target_offset = 0.0;
+        m.sensor_peak_nm = [650.0, 545.0, 445.0];
+        m.sensor_fwhm_nm = [45.0, 50.0, 50.0];
+        (m.setup_lut, m.setup_fit_ev, m.setup_fit_steps) = (false, 2.0, 9);
+        (m.range_density, m.gradation_a, m.mid_grey_out) = (2.0, 4.2, 0.46);
+        (m.shoulder_start, m.shoulder_sharpness, m.black_point, m.white_point) = (0.82, 1.6, 0.02, 0.98);
+        (m.auto.k_den, m.auto.k_col, m.auto.strength) = (0.8, 0.6, 0.7);
         Pipeline::new_with_spectral(film, print, p, &dir).ok()
     }
 

@@ -48,3 +48,17 @@ prints for the subject highlights, not for the dark mean. Camera auto exposure s
 only corrects residual density. Identity on a neutral mid-dense frame is unchanged (guard is loose there).
 `black_point` 0.06 -> 0.05 (deeper blacks; grey -4 EV L* 4.9 (approx), spec 2-12; -2 EV detail 22.1 vs spec 16-26; 0.04 already costs score).
 After: AutoSetup d = +0.171 EV, 0.31 % >= 250, L* p1/p50/p99 = 6.0/35.8/96.7, min code 12. Chart score 97.5 (was 97.9).
+
+## v4: brighter mids, longer shoulder (iPhone DNGs a/b/c, L* p1/p10/p50/p90/p99, % >= 250)
+| img | before | after (v4) |
+|---|---|---|
+| a | 6.0/14.2/35.8/76.8/96.7, 0.31 | 9.4/19.9/46.0/87.1/97.2, 0.39 |
+| b | 4.0/8.1/38.8/79.5/95.1, 0.00 | 5.0/11.5/48.2/87.9/96.0, 0.00 |
+| c | 11.6/19.8/41.6/86.9/89.5, 0.01 | 11.8/20.6/44.3/88.4/90.2, 0.00 |
+Chart 97.2 (was 97.5), grey 0 EV L* ~50. Changes: auto.highlight_margin 0 -> 0.167 (the guard was holding the frame ~0.4 EV dark),
+shoulder_start 0.70 -> 0.69 with sharpness 2.8 -> 1.71 (gentler compression), range_density 1.4 -> 1.59 with gradation_a 4.5 -> 5.82,
+mid_grey_out 0.49 -> 0.468, black_point 0.05 -> 0.022, white_point 0.9908, auto.target_offset 0.011.
+Trade-off: c p1 <= 6 and p90-p10 >= 68 are not reached (11.8, 67.8). Scene p1 of c is 0.0144 linear = -3.6 EV, near the chart's -4 EV
+grey (L* 6), so the veil is not flare; p1 sits ~11 because c is exposed ~+1 EV by camera+AutoSetup. A deeper toe (a >= 8) gets c p1 6 but
+costs the chart (86-92) and clips a. The app has no overrides: the same values are now the defaults in params.rs (DIR couplers are not,
+they stay at the profile default 1.0, and shift the app render slightly vs the eval).

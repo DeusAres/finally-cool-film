@@ -2,14 +2,14 @@
  "scanner": {
   "frontier": {
    "model": {
-    "range_density": 1.4,
-    "gradation_a": 4.5,
-    "mid_grey_out": 0.49,
-    "shoulder_start": 0.7,
-    "shoulder_sharpness": 2.8,
+    "range_density": 1.5923,
+    "gradation_a": 5.8184,
+    "mid_grey_out": 0.4683,
+    "shoulder_start": 0.6928,
+    "shoulder_sharpness": 1.7142,
     "saturation": 1.12,
-    "black_point": 0.05,
-    "white_point": 0.99,
+    "black_point": 0.022,
+    "white_point": 0.9908,
     "sensor_peak_nm": [
      640,
      540,
@@ -30,9 +30,10 @@
     "setup_fit_steps": 19,
     "auto": {
      "k_col": 0.2,
-     "target_offset": 0.02,
+     "target_offset": 0.0109,
      "k_den": 1.0,
-     "strength": 0.85
+     "strength": 0.85,
+     "highlight_margin": 0.1672
     }
    }
   }
