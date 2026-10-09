@@ -322,6 +322,12 @@ pub struct FrontierAutoParams {
     pub highlight_pct: f64,
     /// Density allowed above the shoulder knee for that percentile.
     pub highlight_margin: f64,
+    /// Thin negatives (Interno): once the density key lifts more than `thin_ev_lo` EV the lab trusts its
+    /// colour reading more, ramping `k_col` to `thin_k_col` at `thin_ev_hi` EV. Frames needing <= `thin_ev_lo`
+    /// (every normally exposed frame) keep `k_col` exactly.
+    pub thin_k_col: f64,
+    pub thin_ev_lo: f64,
+    pub thin_ev_hi: f64,
 }
 
 impl Default for FrontierAutoParams {
@@ -329,7 +335,7 @@ impl Default for FrontierAutoParams {
         Self {
             k_den: 1.0,
             k_col: 0.2,
-            clamp_density: 0.30,
+            clamp_density: 0.45,
             clamp_colour: 0.15,
             border_mask_frac: 0.08,
             trim_lo_pct: 10.0,
@@ -340,6 +346,9 @@ impl Default for FrontierAutoParams {
             thumb_size: 64,
             highlight_pct: 95.0,
             highlight_margin: 0.1672,
+            thin_k_col: 0.6,
+            thin_ev_lo: 0.8,
+            thin_ev_hi: 1.6,
         }
     }
 }

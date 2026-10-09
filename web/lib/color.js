@@ -87,3 +87,32 @@ fn displayGain(m: f32) -> f32 {
   if (i >= ${SQRT_N}u) { return ${arr}[${SQRT_N}u]; }
   return mix(${arr}[i], ${arr}[i + 1u], f - f32(i));
 }`;
+
+// ---------- illuminants (Interno: the real colour of the scene light) ----------
+
+/** XYZ → linear RGB of a space (D65 white = 1,1,1). */
+export const XYZ_TO_RGB = Object.fromEntries(Object.entries(RGB_TO_XYZ).map(([k, m]) => [k, inv3(m)]));
+
+/**
+ * CIE xy chromaticity of a light of correlated colour temperature `T` (K): the CIE daylight locus
+ * from 4000 K up, the Planckian locus (Kim et al. cubic spline) below it. T is clamped to 1667..25000 K.
+ */
+export function cctToXY(T) {
+  T = Math.min(25000, Math.max(1667, T));
+  if (T >= 4000) {
+    const t = 1e3 / T, t2 = t * t, t3 = t2 * t;
+    const x = T <= 7000 ? 0.244063 + 0.09911 * t + 2.9678 * t2 - 4.6070 * t3 : 0.237040 + 0.24748 * t + 1.9018 * t2 - 2.0064 * t3;
+    return [x, -3 * x * x + 2.87 * x - 0.275];
+  }
+  const t = 1e3 / T, t2 = t * t, t3 = t2 * t;
+  const x = -0.2661239 * t3 - 0.2343589 * t2 + 0.8776956 * t + 0.179910;
+  const y = T <= 2222 ? -1.1063814 * x ** 3 - 1.34811020 * x * x + 2.18555832 * x - 0.20219683
+    : -0.9549476 * x ** 3 - 1.37418593 * x * x + 2.09137015 * x - 0.16748867;
+  return [x, y];
+}
+
+/** Linear RGB (of `space`) of the white of a light with CCT `T`, at luminance Y = 1. */
+export function illuminantRgb(T, space) {
+  const [x, y] = cctToXY(T), X = [x / y, 1, (1 - x - y) / y];
+  return XYZ_TO_RGB[space].map((r) => r[0] * X[0] + r[1] * X[1] + r[2] * X[2]);
+}

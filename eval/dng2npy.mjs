@@ -1,12 +1,15 @@
 // DNG -> linear Rec.2020 float32 .npy (HxWx3), using the app's own decoder (web/lib/dng.js).
 // Also writes <out>.thumb.npy and <out>.json (baseline, under, indoor) for `sf-eval image --meta`.
-// usage: node eval/dng2npy.mjs <in.dng> <out.npy> [maxLongSide]
+// usage: node eval/dng2npy.mjs <in.dng> <out.npy> [maxLongSide] [--interno]
+// --interno: meta gets under (U), gains (as-shot light vs D55, Rec.2020) and grain from web/lib/interno.js, as the app's toggle.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { isRaw, loadRaw, rawThumb } from '../web/lib/raw.js';
 import { readExposure } from '../web/lib/exif.js';
+import { internoParams } from '../web/lib/interno.js';
 import { THUMB_PX } from '../web/lib/common.js';
 
-const [input, output, maxLongSide] = process.argv.slice(2);
+const args = process.argv.slice(2), withInterno = args.includes('--interno');
+const [input, output, maxLongSide] = args.filter((a) => !a.startsWith('--'));
 if (!input || !output) {
   console.error('usage: node eval/dng2npy.mjs <in.dng> <out.npy> [maxLongSide]');
   process.exit(1);
@@ -28,6 +31,10 @@ if (exp) ev100 = Math.log2(exp.N ** 2 / exp.t) - Math.log2(exp.iso / 100);
 if (ev100 === null && exp?.bv != null) ev100 = exp.bv + 5;
 const under = ev100 !== null ? Math.min(2, Math.max(0, evCam - ev100)) : 0;
 const meta = { baseline: raw.baseline, orientation: raw.orientation, under, indoor: under >= 1, ev100 };
+if (withInterno) {
+  const ip = internoParams({ under, isRaw: true, cctK: raw.cct });
+  Object.assign(meta, { cct: raw.cct, interno: true, under: ip.under, gains: ip.gains, grain: ip.grain });
+}
 writeFileSync(output.replace(/\.npy$/, '') + '.json', JSON.stringify(meta));
 
 // npy v1.0: magic, version, u16 header length, dict padded so the data starts 64-byte aligned.

@@ -34,6 +34,7 @@ struct P {
   scale: f32, expo: f32, regionW: f32, regionH: f32,   // lens gain; scene exposure gain (Esposizione, Interno, DNG baseline)
   m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, // frame primaries → engine input primaries, rows (xyz)
   fx: vec4<f32>,                               // micro-contrast radius (px), Texture strength, Chiarezza glow, frame px per µm
+  wb: vec4<f32>,                               // per-channel gains in the engine input space (Interno: real light colour); 1 otherwise
   luma: vec4<f32>,                             // luma weights of the frame's primaries; w = 1: JPEG, apply the display→scene inverse
 };
 @group(0) @binding(0) var tex: texture_2d<f32>;
@@ -178,19 +179,20 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   }
   c = vec3<f32>(dot(p.m0.xyz, c), dot(p.m1.xyz, c), dot(p.m2.xyz, c));
   let i = (id.y * u32(p.regionW) + id.x) * 3u;
+  c *= p.wb.xyz;
   outBuf[i] = c.r * gainOut; outBuf[i + 1u] = c.g * gainOut; outBuf[i + 2u] = c.b * gainOut;
 }`;
 
 const IDENTITY = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
-const UNIFORM_FLOATS = 36;
+const UNIFORM_FLOATS = 40;
 
 /**
  * Uniforms of INPUT_WGSL for the region (x0, y0, w, h) of a W×H frame, scaled by `scale`
  * (lens gain); same contract as lens.js extractLens. `space`: primaries of the frame,
  * 'srgb' | 'p3' | 'rec2020' (a raw frame, already scene-linear: no display→scene inverse).
- * `expo`: scene exposure gain.
+ * `expo`: scene exposure gain; `wb`: per-channel gains in the engine input space.
  */
-export function inputUniform(W, H, space, x0, y0, w, h, scale, lens, expo, clarity = 0, texture = 0) {
+export function inputUniform(W, H, space, x0, y0, w, h, scale, lens, expo, clarity = 0, texture = 0, wb = [1, 1, 1]) {
   const kpx = Math.max(W, H) / FRAME_UM;   // frame px per µm
   const geo = lensGeometry(W, H, lens), M = space === 'p3' ? P3_TO_REC2020 : IDENTITY;
   const u = new Float32Array([
@@ -200,6 +202,7 @@ export function inputUniform(W, H, space, x0, y0, w, h, scale, lens, expo, clari
     scale, expo, w, h,
     ...M[0], 0, ...M[1], 0, ...M[2], 0,
     MICRO_UM * kpx, texture * MICRO_MAX, clarity, kpx,
+    ...wb, 0,
     ...LUMA[space], space === 'rec2020' ? 0 : 1,
   ]);
   if (u.length !== UNIFORM_FLOATS) throw new Error('inputUniform: layout drift');

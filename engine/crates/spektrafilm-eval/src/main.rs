@@ -24,7 +24,7 @@ use spektrafilm_math::npy;
 use render::Renderer;
 use report::{Cc24Out, GreyOut, Report, Spec};
 
-const USAGE: &str = "usage:\n  sf-eval chart --params <overrides.json> --out <dir> [--spec <spec.json>] [--data <dir>] [--exposure-ev <x>] [--relative 1]\n  sf-eval image --params <overrides.json> --in <linear.npy> --out <png> [--data <dir>]";
+const USAGE: &str = "usage:\n  sf-eval chart --params <overrides.json> --out <dir> [--spec <spec.json>] [--data <dir>] [--exposure-ev <x>] [--relative 1] [--under U] [--gains r,g,b]\n  sf-eval image --params <overrides.json> --in <linear.npy> --out <png> [--data <dir>] [--under U] [--gains r,g,b]";
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
     let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -65,17 +65,20 @@ fn chart_cmd(args: &Args) -> Result<(), String> {
     let out = args.req("out")?;
     let relative = args.0.get("relative").is_some_and(|v| v != "0");
     let exposure: Option<f64> = args.0.get("exposure-ev").map(|v| v.parse().map_err(|_| format!("bad --exposure-ev {v}"))).transpose()?;
-    let gain = exposure.map_or(1.0, f64::exp2);
-    if exposure.is_some() {
-        let auto = renderer.apply_autosetup(chart::cc24_frame(gain)).ok_or("AutoSetup needs a negative film")?;
+    let interno = interno(args, None)?;
+    let (under, gains) = interno.unwrap_or((0.0, [1.0; 3]));
+    let gain = exposure.map_or(1.0, f64::exp2) * (-under).exp2();
+    let gains = gains.map(|g| g * gain);
+    if exposure.is_some() || interno.is_some() {
+        let auto = renderer.apply_autosetup(gained(&chart::cc24_frame(1.0), gains)).ok_or("AutoSetup needs a negative film")?;
         eprintln!("autosetup [density_ev, c, m, y] = {auto:?}");
     }
     let space = if args.0.get("output-space").is_some_and(|v| v == "bt2020") { color::Rgb::rec2020() } else { color::Rgb::srgb() };
     let spec: Option<Spec> = args.opt("spec").map(|p| read_json(&p)).transpose()?;
 
     let evs = chart::grey_evs();
-    let grey: Vec<_> = evs.iter().map(|&ev| chart::measure(&renderer, chart::grey_scene(ev).map(|v| v * gain), &space)).collect();
-    let cc24: Vec<_> = chart::CC24.iter().map(|(_, lab)| chart::measure(&renderer, chart::lab_scene(*lab).map(|v| v * gain), &space)).collect();
+    let grey: Vec<_> = evs.iter().map(|&ev| chart::measure(&renderer, { let s = chart::grey_scene(ev); [s[0] * gains[0], s[1] * gains[1], s[2] * gains[2]] }, &space)).collect();
+    let cc24: Vec<_> = chart::CC24.iter().map(|(_, lab)| chart::measure(&renderer, { let s = chart::lab_scene(*lab); [s[0] * gains[0], s[1] * gains[1], s[2] * gains[2]] }, &space)).collect();
 
     let grey_lab: Vec<_> = evs.iter().zip(&grey).map(|(&ev, m)| (ev, m.lab)).collect();
     let cc_lab: Vec<_> = cc24.iter().map(|m| m.lab).collect();
@@ -135,6 +138,38 @@ fn scaled(img: &ImageBuf, k: f64) -> ImageBuf {
     ImageBuf::from_data(img.width, img.height, img.data.iter().map(|&v| (f64::from(v) * k) as f32).collect())
 }
 
+/// Scene-linear per-channel multiply (the real illuminant the film sees).
+fn gained(img: &ImageBuf, g: [f64; 3]) -> ImageBuf {
+    let mut out = img.clone();
+    for p in out.pixels_mut() {
+        for c in 0..3 {
+            p[c] = (f64::from(p[c]) * g[c]) as f32;
+        }
+    }
+    out
+}
+
+fn parse_gains(v: &str) -> Result<[f64; 3], String> {
+    let g: Vec<f64> = v.split(',').map(|s| s.trim().parse().map_err(|_| format!("bad --gains {v}"))).collect::<Result<_, _>>()?;
+    <[f64; 3]>::try_from(g).map_err(|_| format!("--gains needs r,g,b, got {v}"))
+}
+
+/// Interno: `--under U` (EV, thin negative, no compensation) and `--gains r,g,b` (scene-linear, before the film);
+/// `meta` supplies `under` / `gains` when the flags are absent. `None` = Interno off.
+fn interno(args: &Args, meta: Option<&serde_json::Value>) -> Result<Option<(f64, [f64; 3])>, String> {
+    let cli_under = args.0.get("under").map(|v| v.parse::<f64>().map_err(|_| format!("bad --under {v}"))).transpose()?;
+    let cli_gains = args.0.get("gains").map(|v| parse_gains(v)).transpose()?;
+    let meta_gains = meta.and_then(|m| m.get("gains")).and_then(|g| g.as_array()).and_then(|a| {
+        let v: Vec<f64> = a.iter().filter_map(serde_json::Value::as_f64).collect();
+        <[f64; 3]>::try_from(v).ok()
+    });
+    if cli_under.is_none() && cli_gains.is_none() && meta_gains.is_none() {
+        return Ok(None);
+    }
+    let under = cli_under.or_else(|| meta.and_then(|m| m["under"].as_f64())).unwrap_or(0.0);
+    Ok(Some((under, cli_gains.or(meta_gains).unwrap_or([1.0; 3]))))
+}
+
 fn save(img: &ImageBuf, path: &Path) -> Result<(), String> {
     let bytes: Vec<u8> = img.data.iter().map(|&v| (f64::from(v).clamp(0.0, 1.0) * 255.0).round() as u8).collect();
     let rgb = RgbImage::from_raw(img.width, img.height, bytes).ok_or("output size mismatch")?;
@@ -168,17 +203,28 @@ fn neutral(scene: &ImageBuf) -> ImageBuf {
 fn image_cmd(args: &Args) -> Result<(), String> {
     let mut renderer = args.renderer()?;
     let mut scene = load_npy(&args.req("in")?)?;
-    if let Some(meta) = args.opt("meta") {
-        let meta: serde_json::Value = read_json(&meta)?;
+    let meta: Option<serde_json::Value> = args.opt("meta").map(|p| read_json(&p)).transpose()?;
+    let interno = interno(args, meta.as_ref())?;
+    if let Some(meta) = &meta {
         let num = |k: &str| meta[k].as_f64().unwrap_or(0.0);
-        let under = if meta["indoor"].as_bool().unwrap_or(false) { num("under") } else { 0.0 };
+        let under = match interno {
+            Some((u, _)) => u,
+            None if meta["indoor"].as_bool().unwrap_or(false) => num("under"),
+            None => 0.0,
+        };
+        let gains = interno.map_or([1.0; 3], |(_, g)| g);
         let thumb = load_npy(&args.req("thumb")?)?;
         let thumb_b = scaled(&thumb, num("baseline").exp2());
         let metered = f64::from(renderer.auto_exposure_ev(&thumb_b));
         let ev = ((metered.clamp(-2.0, 2.5)) * 10.0).round() / 10.0;   // clamp then round: as the app's slider
-        let auto = renderer.apply_autosetup(scaled(&thumb_b, (ev - under).exp2())).ok_or("AutoSetup needs a negative film")?;
+        let auto = renderer.apply_autosetup(gained(&scaled(&thumb_b, (ev - under).exp2()), gains)).ok_or("AutoSetup needs a negative film")?;
         eprintln!("exposure: baseline {} EV, auto ev {ev}, Interno -{under}, autosetup [density_ev, c, m, y] = {auto:?}", num("baseline"));
-        scene = scaled(&scene, (ev - under + num("baseline")).exp2());
+        scene = gained(&scaled(&scene, (ev - under + num("baseline")).exp2()), gains);
+    } else if let Some((under, gains)) = interno {
+        // no meta: the .npy as is, thinned by U and lit by the gains; AutoSetup on that thin negative
+        scene = gained(&scaled(&scene, (-under).exp2()), gains);
+        let auto = renderer.apply_autosetup(scene.clone()).ok_or("AutoSetup needs a negative film")?;
+        eprintln!("interno -{under} EV, gains {gains:?}, autosetup [density_ev, c, m, y] = {auto:?}");
     }
     if let Some(p) = args.opt("neutral") {
         save(&neutral(&scene), &p)?;
