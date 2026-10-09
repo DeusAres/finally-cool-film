@@ -37,3 +37,14 @@ In the app AutoSetup would re-centre the density, which this chart cannot show.
 - skin chroma 1.14 (dark skin 1.35 over, light skin 0.93 under): tone-dependent, same curve cannot serve both.
 - Grey is neutral rather than warm (spec b* +4, low-med): film-type setup neutralises it; no warm-mid key used.
 - Debug print used for diagnosis was removed; note it had been swept into commit 334dceb by the concurrent agent, so frontier.rs shows a 2-line uncommitted deletion.
+
+## AutoSetup highlight guard + black point (backlit white cat, iPhone DNG)
+Diagnosis: camera meter +1.4 EV, then AutoSetup +1.124 EV (G density 10-90 trimmed mean 0.601 vs d_ref 0.792 + 0.02, because the
+dark room dominates the frame; fur p90/p95/p99 = 0.98/1.08/1.23, i.e. x 0.64-0.81, beyond the shoulder knee). Result: 3.0 % of
+pixels >= 250 (any channel), L* p1/p50/p99 = 14.3/51.2/98.6, min code 23 (the +1.1 EV lifted the blacks too).
+Fix (`frontier.rs::auto_setup`, `FrontierBase::knee_density`): the density term is min(mean term, guard), the guard
+bringing the `highlight_pct` (95) percentile of G to the shoulder knee density (+ `highlight_margin`, 0); a lab operator
+prints for the subject highlights, not for the dark mean. Camera auto exposure stays (it is the negative exposure); AutoSetup
+only corrects residual density. Identity on a neutral mid-dense frame is unchanged (guard is loose there).
+`black_point` 0.06 -> 0.05 (deeper blacks; grey -4 EV L* 4.9 (approx), spec 2-12; -2 EV detail 22.1 vs spec 16-26; 0.04 already costs score).
+After: AutoSetup d = +0.171 EV, 0.31 % >= 250, L* p1/p50/p99 = 6.0/35.8/96.7, min code 12. Chart score 97.5 (was 97.9).

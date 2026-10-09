@@ -318,6 +318,10 @@ pub struct FrontierAutoParams {
     pub target_offset: f64,
     pub strength: f64,
     pub thumb_size: u32,
+    /// Highlight guard: percentile of G (0 = off) of the large-area highlights.
+    pub highlight_pct: f64,
+    /// Density allowed above the shoulder knee for that percentile.
+    pub highlight_margin: f64,
 }
 
 impl Default for FrontierAutoParams {
@@ -334,6 +338,8 @@ impl Default for FrontierAutoParams {
             target_offset: 0.0,
             strength: 0.7,
             thumb_size: 64,
+            highlight_pct: 95.0,
+            highlight_margin: 0.0,
         }
     }
 }

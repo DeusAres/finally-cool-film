@@ -312,6 +312,13 @@ impl FrontierBase {
         }
     }
 
+    /// Setup-space G density that lands on the paper shoulder knee (zero keys): the
+    /// brightest density a large-area highlight may have before it compresses.
+    pub fn knee_density(&self) -> f64 {
+        let g = Gradation::solve(self.model.gradation_a, self.model.shoulder_sharpness, &self.model);
+        self.d_ref + self.model.range_density * (g.knee_x() - 0.5)
+    }
+
     /// sRGB-encoded positive for a film density.
     pub fn encode(&self, cmy: [f64; 3], stage: &Stage) -> [f64; 3] {
         stage.encode(self.setup_density(cmy))
@@ -373,6 +380,17 @@ impl Gradation {
         // C1 at the knee: slope 1, then compressing; sh -> 0 is the identity.
         let f = if self.sh < 1e-6 { t } else { (1.0 - (-self.sh * t).exp()) / self.sh };
         self.ys + (1.0 - self.ys) * f
+    }
+
+    /// x at which the sigmoid reaches the shoulder knee (`shoulder_start`).
+    fn knee_x(&self) -> f64 {
+        let s = |x: f64| 1.0 / (1.0 + (-self.a * (x - self.m)).exp());
+        let (mut lo, mut hi) = (0.0f64, 1.0f64);
+        for _ in 0..50 {
+            let mid = 0.5 * (lo + hi);
+            if (s(mid) - self.s0) / (self.s1 - self.s0) < self.ys { lo = mid } else { hi = mid }
+        }
+        0.5 * (lo + hi)
     }
 
     pub fn curve(&self, x: f64) -> f64 {
@@ -585,7 +603,19 @@ pub fn auto_setup(base: &FrontierBase, cmy: &[f32], width: usize, height: usize)
     let target = base.d_ref + p.target_offset;
     let k_den = p.k_den * p.strength;
     let k_col = p.k_col * p.strength;
-    let d_den = (k_den * (target - mean[1])).clamp(-p.clamp_density, p.clamp_density);
+    // Density: bring the trimmed mean to mid-scale, but never past the highlight guard. A lab
+    // operator prints for the subject's highlights: the bright, large-area part of the frame
+    // (the `highlight_pct` percentile of G, which skips specular points and whiskers) must sit
+    // at or below the paper shoulder knee. A backlit white subject on a dark room has a low
+    // mean but a dense subject; the mean alone would brighten it into the shoulder. The guard
+    // only limits brightening (it can also pull a frame down), and never loosens the mean term.
+    let mut d_den = k_den * (target - mean[1]);
+    if p.highlight_pct > 0.0 {
+        let hi = percentile(&g, p.highlight_pct);
+        let cap = base.knee_density() + p.highlight_margin - hi;
+        d_den = d_den.min(p.strength * cap);
+    }
+    let d_den = d_den.clamp(-p.clamp_density, p.clamp_density);
     let mut out = [(d_den / base.d_per_ev) as f32, 0.0, 0.0, 0.0];
     for c in 0..3 {
         let dd = (k_col * (mean[1] - mean[c])).clamp(-p.clamp_colour, p.clamp_colour);
