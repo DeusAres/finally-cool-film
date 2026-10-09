@@ -40,6 +40,15 @@ impl EngineRenderer {
     }
 }
 
+impl EngineRenderer {
+    /// The app's `auto_exposure_ev` (Engine.auto_exposure_ev in spektrafilm-wasm) on a scene-linear thumb.
+    pub fn auto_exposure_ev(&self, thumb: &ImageBuf) -> f32 {
+        let params = &self.0.params;
+        let to_xyz = spektrafilm_core::stages::filming::input_colorspace_to_xyz(&params.io.input_color_space);
+        spektrafilm_core::stages::filming::measure_autoexposure_ev(thumb, &to_xyz, &params.camera.auto_exposure_method)
+    }
+}
+
 impl Renderer for EngineRenderer {
     fn render(&self, scene: ImageBuf) -> ImageBuf {
         self.0.process(scene, &CpuBackend)

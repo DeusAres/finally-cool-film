@@ -122,19 +122,68 @@ fn chart_cmd(args: &Args) -> Result<(), String> {
     Ok(())
 }
 
-fn image_cmd(args: &Args) -> Result<(), String> {
-    let renderer = args.renderer()?;
-    let input = args.req("in")?;
-    let file = File::open(&input).map_err(|e| format!("{}: {e}", input.display()))?;
-    let (shape, data) = npy::load_npy_f32(BufReader::new(file)).map_err(|e| format!("{}: {e:?}", input.display()))?;
+fn load_npy(path: &Path) -> Result<ImageBuf, String> {
+    let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (shape, data) = npy::load_npy_f32(BufReader::new(file)).map_err(|e| format!("{}: {e:?}", path.display()))?;
     let [h, w, 3] = shape[..] else {
-        return Err(format!("{}: expected shape HxWx3, got {shape:?}", input.display()));
+        return Err(format!("{}: expected shape HxWx3, got {shape:?}", path.display()));
     };
-    let out = renderer.render(ImageBuf::from_data(w as u32, h as u32, data));
-    let bytes = out.data.iter().map(|&v| (f64::from(v).clamp(0.0, 1.0) * 255.0).round() as u8).collect();
-    let png = RgbImage::from_raw(out.width, out.height, bytes).ok_or("output size mismatch")?;
-    let path = args.req("out")?;
-    png.save(&path).map_err(|e| format!("{}: {e}", path.display()))
+    Ok(ImageBuf::from_data(w as u32, h as u32, data))
+}
+
+fn scaled(img: &ImageBuf, k: f64) -> ImageBuf {
+    ImageBuf::from_data(img.width, img.height, img.data.iter().map(|&v| (f64::from(v) * k) as f32).collect())
+}
+
+fn save(img: &ImageBuf, path: &Path) -> Result<(), String> {
+    let bytes: Vec<u8> = img.data.iter().map(|&v| (f64::from(v).clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+    let rgb = RgbImage::from_raw(img.width, img.height, bytes).ok_or("output size mismatch")?;
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg")) {
+        let file = File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(file), 90);
+        enc.encode_image(&rgb).map_err(|e| e.to_string())
+    } else {
+        rgb.save(path).map_err(|e| format!("{}: {e}", path.display()))
+    }
+}
+
+/// Plain sRGB view of scene-linear Rec.2020 (no film), the comparison baseline.
+fn neutral(scene: &ImageBuf) -> ImageBuf {
+    let (src, dst) = (color::Rgb::rec2020(), color::Rgb::srgb());
+    let m = color::mul_m(&dst.from_xyz, &src.to_xyz);
+    let mut out = scene.clone();
+    for p in out.pixels_mut() {
+        let v = color::mul_v(&m, [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])]);
+        for c in 0..3 {
+            p[c] = color::srgb_encode(v[c].clamp(0.0, 1.0)) as f32;
+        }
+    }
+    out
+}
+
+/// Without `--meta`: the .npy goes through the engine as is. With `--meta <dng2npy .json> --thumb <.thumb.npy>`
+/// the app's raw path: Auto = engine exposure metering on the thumb (+ baseline), clamped to the Esposizione
+/// range, rounded to 0.1 (web/app.js autoSetup); frontier AutoSetup on the thumb at that exposure; the frame is
+/// rendered with gain 2^(ev - Interno + baseline). `--neutral <png|jpg>` also writes the film-less render.
+fn image_cmd(args: &Args) -> Result<(), String> {
+    let mut renderer = args.renderer()?;
+    let mut scene = load_npy(&args.req("in")?)?;
+    if let Some(meta) = args.opt("meta") {
+        let meta: serde_json::Value = read_json(&meta)?;
+        let num = |k: &str| meta[k].as_f64().unwrap_or(0.0);
+        let under = if meta["indoor"].as_bool().unwrap_or(false) { num("under") } else { 0.0 };
+        let thumb = load_npy(&args.req("thumb")?)?;
+        let thumb_b = scaled(&thumb, num("baseline").exp2());
+        let metered = f64::from(renderer.auto_exposure_ev(&thumb_b));
+        let ev = ((metered.clamp(-2.0, 2.5)) * 10.0).round() / 10.0;   // clamp then round: as the app's slider
+        let auto = renderer.apply_autosetup(scaled(&thumb_b, (ev - under).exp2())).ok_or("AutoSetup needs a negative film")?;
+        eprintln!("exposure: baseline {} EV, auto ev {ev}, Interno -{under}, autosetup [density_ev, c, m, y] = {auto:?}", num("baseline"));
+        scene = scaled(&scene, (ev - under + num("baseline")).exp2());
+    }
+    if let Some(p) = args.opt("neutral") {
+        save(&neutral(&scene), &p)?;
+    }
+    save(&renderer.render(scene), &args.req("out")?)
 }
 
 fn main() {
