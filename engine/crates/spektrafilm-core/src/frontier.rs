@@ -48,6 +48,15 @@ use crate::profile::Profile;
 /// Both are linear in the key.
 const HIGHLIGHT_DOWN: (f64, f64, f64, f64) = (0.22, 0.7, 0.7, 0.8);
 const HIGHLIGHT_UP: (f64, f64) = (0.85, 0.6);
+/// Contrast key: mid-grey slope factor `1 + SLOPE_UP c` (c > 0) / `1 + SLOPE_DOWN c` (c < 0).
+const SLOPE_UP: f64 = 1.9;
+const SLOPE_DOWN: f64 = 0.85;
+/// Contrast key: toe slope (d out / d base-out at black) the shadows keep.
+const MID_BULGE_UP: f64 = 0.45;
+const MID_BULGE_DOWN: f64 = 0.8;
+const SHADOW_BULGE: f64 = 0.7;
+const TOE_LIFT: f64 = 1.2;
+const TOE_SLOPE: f64 = 0.85;
 
 const IDENTITY: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 const LUMA: [f64; 3] = [0.2126, 0.7152, 0.0722];
@@ -321,7 +330,9 @@ impl FrontierBase {
         for c in 0..3 {
             shift[c] = dens_ev * self.d_per_ev - (keys.cmy[c] as f64 + keys.auto[1 + c] as f64 + m.balance_cmy[c]);
         }
-        let a = (m.gradation_a * (1.0 + keys.contrast as f64)).max(0.05);
+        let c = keys.contrast as f64;
+        // mid-slope factor: x(1 + SLOPE_UP c) up to ~2.8 at +1, down to 0.2 at -1
+        let a = m.gradation_a * if c > 0.0 { 1.0 + SLOPE_UP * c } else { 1.0 + SLOPE_DOWN * c };
         // Highlights key (-1..+1, + = brighter, more open): a smooth bump on the
         // output fading in above mid grey, so mid grey and shadows keep the model curve. Exactly the model curve at 0.
         let h = (keys.highlight as f64).clamp(-1.0, 1.0);
@@ -369,8 +380,8 @@ pub struct Gradation {
     s1: f64,
     /// Contrast-free sigmoid (a, m, s0, s1) the highlights stay locked to; `lock` is
     /// false when the contrast is 0 (the curve is then the plain sigmoid).
-    base: [f64; 4],
     lock: bool,
+    k: f64,
     /// normalized sigmoid level at x = 0.5 (mid grey); the blend is 1 up to here
     ya: f64,
     /// Highlights key: alternative shoulder (knee, sharpness, its white normalization) blended in
@@ -391,8 +402,8 @@ impl Gradation {
             shoulder_one: 1.0,
             s0: 1.0 / (1.0 + (a * m_mid).exp()),
             s1: 1.0 / (1.0 + (-a * (1.0 - m_mid)).exp()),
-            base: [0.0; 4],
             lock: false,
+            k: 1.0,
             ya: 0.0,
             hl_on: false,
             hl: 0.0,
@@ -421,32 +432,47 @@ impl Gradation {
     /// curve blends C1-smoothly (smoothstep) back into the unchanged contrast-free sigmoid,
     /// so the output at and above `shoulder_start` does not depend on contrast.
     fn solve_locked(a: f64, a0: f64, sh: f64, p: &FrontierModelParams) -> Self {
-        let b = Self::solve(a0, sh, p);
-        // below ~0.3 a0 the sigmoid cannot keep mid grey on its level any more
-        let a = if a < a0 { a.max(0.3 * a0) } else { a };
-        if a == a0 {
-            return b;
+        let mut g = Self::solve(a0, sh, p);
+        let k = (a / a0).clamp(0.15, 2.9);
+        if k == 1.0 {
+            return g;
         }
-        let sig = |a: f64, m: f64, x: f64| 1.0 / (1.0 + (-a * (x - m)).exp());
-        let norm = |a: f64, m: f64, x: f64| {
-            let (s0, s1) = (sig(a, m, 0.0), sig(a, m, 1.0));
-            (sig(a, m, x) - s0) / (s1 - s0)
-        };
-        let ya = norm(a0, b.m, 0.5);
-        let (mut lo, mut hi) = (-200.0f64, 200.0f64);
-        for _ in 0..100 {
-            let mid = 0.5 * (lo + hi);
-            if norm(a, mid, 0.5) > ya {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-        }
-        let mut g = Self::new(a, 0.5 * (lo + hi), sh, p);
-        g.base = [a0, b.m, b.s0, b.s1];
+        g.ya = g.pre(0.5);
         g.lock = true;
-        g.ya = ya;
+        g.k = k;
         g
+    }
+
+    /// Monotone Hermite remap of the contrast-free pre-shoulder output `y`: identity at 0, at
+    /// mid grey (`ya`, slope `k`) and from the shoulder knee up (slope 1), so only shadows and mids move.
+    fn remap(&self, y: f64) -> f64 {
+        let (ya, ys, k) = (self.ya, self.ys, self.k);
+        if y >= ys || y <= 0.0 {
+            return y;
+        }
+        // knots: black, half way to mid grey, mid grey (slope k), half way to the knee, the knee.
+        // Between them the curve bulges by `(k - 1) lam (y - ya)` so the mid-slope change is paid
+        // back towards both ends.
+        let lam = if k > 1.0 { MID_BULGE_UP } else { MID_BULGE_DOWN };
+        let xs = [0.0, 0.5 * ya, ya, ya + 0.5 * (ys - ya), ys];
+        let mut vs = xs;
+        for i in 1..4 {
+            vs[i] = xs[i] + (k - 1.0) * lam * (xs[i] - ya) * if i < 2 && k > 1.0 { SHADOW_BULGE } else { 1.0 };
+        }
+        let sec = |i: usize| (vs[i + 1] - vs[i]) / (xs[i + 1] - xs[i]);
+        let mut ms = [0.0; 5];
+        ms[2] = k;
+        ms[4] = 1.0;
+        for i in [1usize, 3] {
+            let (a, b) = (sec(i - 1), sec(i));
+            ms[i] = if a > 0.0 && b > 0.0 { 2.0 * a * b / (a + b) } else { 0.0 };
+        }
+        ms[0] = (if k > 1.0 { TOE_SLOPE } else { 1.0 + (1.0 - k) * TOE_LIFT }).min(3.0 * sec(0));
+        let i = if y <= xs[1] { 0 } else if y <= xs[2] { 1 } else if y <= xs[3] { 2 } else { 3 };
+        let w = xs[i + 1] - xs[i];
+        let t = (y - xs[i]) / w;
+        let (t2, t3) = (t * t, t * t * t);
+        (2.0 * t3 - 3.0 * t2 + 1.0) * vs[i] + (t3 - 2.0 * t2 + t) * w * ms[i] + (-2.0 * t3 + 3.0 * t2) * vs[i + 1] + (t3 - t2) * w * ms[i + 1]
     }
 
     fn shoulder(&self, y: f64) -> f64 {
@@ -481,11 +507,7 @@ impl Gradation {
         let s = |x: f64| 1.0 / (1.0 + (-self.a * (x - self.m)).exp());
         let mut y = (s(x) - self.s0) / (self.s1 - self.s0);
         if self.lock {
-            let [a0, m0, s00, s10] = self.base;
-            let y0 = (1.0 / (1.0 + (-a0 * (x - m0)).exp()) - s00) / (s10 - s00);
-            let t = ((y0 - self.ya) / (self.ys - self.ya).max(1e-6)).clamp(0.0, 1.0);
-            let w = 1.0 - t * t * (3.0 - 2.0 * t);
-            y = y0 + w * (y - y0);
+            y = self.remap(y);
         }
         y
     }
