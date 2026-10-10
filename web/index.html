@@ -61,6 +61,12 @@
   .row label { font-size: 14px; color: var(--muted); }
   .row output { font: 12px ui-monospace, Menlo, monospace; text-align: right; color: var(--muted); }
   input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; }
+  .pane[hidden] { display: none; }
+  .pane { padding-top: 4px; }
+  #tabs { flex: none; display: flex; background: var(--card); border-top: 1px solid var(--line); padding: 0 4px; }
+  #tabs button { flex: 1; background: none; border: 0; color: var(--muted); padding: 6px 0 4px; display: flex; flex-direction: column;
+         align-items: center; gap: 2px; font: 500 10px system-ui; cursor: pointer; min-width: 0; }
+  #tabs button[aria-selected=true] { color: var(--accent); }
   #status { flex: none; font-size: 12px; color: var(--muted); padding: 3px 16px 6px; min-height: 20px; white-space: nowrap;
          overflow: hidden; text-overflow: ellipsis; background: var(--card); }
   #histo { top: 8px; left: 8px; width: 128px; height: 56px; background: #000a; border-radius: 6px;
@@ -101,29 +107,41 @@
 
 <div id="grip" title="Trascina per ridimensionare"><span></span></div>
 <div id="controls">
-  <div class="section">Tono e colore</div>
+  <div class="pane" data-pane="light" role="tabpanel">
   <div class="row"><label for="ev">Esposizione</label><input type="range" id="ev" min="-2" max="2.5" step="0.1" value="0"><output for="ev"></output></div>
   <div class="row"><label for="contrast">Contrasto</label><input type="range" id="contrast" min="-1" max="1" step="0.01" value="0"><output for="contrast"></output></div>
   <div class="row"><label for="highlight">Alte luci</label><input type="range" id="highlight" min="-1" max="1" step="0.01" value="0"><output for="highlight"></output></div>
-  <div class="row"><label for="mshift">Magenta ↔ Verde</label><input type="range" id="mshift" min="-30" max="30" step="1" value="0"><output for="mshift"></output></div>
-  <div class="row"><label for="yshift">Giallo ↔ Blu</label><input type="range" id="yshift" min="-30" max="30" step="1" value="0"><output for="yshift"></output></div>
   <div class="row"><label for="black">Nero</label><input type="range" id="black" min="0" max="1" step="0.01" value="0"><output for="black"></output></div>
   <div class="row check"><label><input type="checkbox" id="indoor"> Interno / luce scarsa (negativo sottile)</label></div>
-  <div class="section">Pellicola</div>
+  </div>
+  <div class="pane" data-pane="color" role="tabpanel" hidden>
+  <div class="row"><label for="mshift">Magenta ↔ Verde</label><input type="range" id="mshift" min="-30" max="30" step="1" value="0"><output for="mshift"></output></div>
+  <div class="row"><label for="yshift">Giallo ↔ Blu</label><input type="range" id="yshift" min="-30" max="30" step="1" value="0"><output for="yshift"></output></div>
+  </div>
+  <div class="pane" data-pane="film" role="tabpanel" hidden>
   <div class="row"><label for="grain">Grana</label><input type="range" id="grain" min="0" max="3" step="0.1" value="0.4"><output for="grain"></output></div>
+  <div class="row"><label for="halation">Halation</label><input type="range" id="halation" min="0" max="3" step="0.1" value="1"><output for="halation"></output></div>
   <div class="row"><label for="texture">Texture</label><input type="range" id="texture" min="-1" max="1" step="0.01" value="0.2"><output for="texture"></output></div>
   <div class="row"><label for="clarity">Chiarezza</label><input type="range" id="clarity" min="0" max="1" step="0.01" value="0.1"><output for="clarity"></output></div>
-  <div class="row"><label for="halation">Halation</label><input type="range" id="halation" min="0" max="3" step="0.1" value="1"><output for="halation"></output></div>
-  <div class="section">Obiettivo</div>
+  </div>
+  <div class="pane" data-pane="optics" role="tabpanel" hidden>
   <div class="row"><label for="ca">Aberrazione</label><input type="range" id="ca" min="0" max="1" step="0.01" value="1"><output for="ca"></output></div>
   <div class="row"><label for="vignette">Vignettatura</label><input type="range" id="vignette" min="0" max="1" step="0.01" value="0.65"><output for="vignette"></output></div>
   <div class="row"><label for="falloff">Falloff</label><input type="range" id="falloff" min="0" max="1" step="0.01" value="0.4"><output for="falloff"></output></div>
-  <div class="section">Polvere e graffi</div>
+  </div>
+  <div class="pane" data-pane="dust" role="tabpanel" hidden>
   <div class="row"><label for="dust">Quantità</label><input type="range" id="dust" min="0" max="1" step="0.01" value="0.27"><output for="dust"></output></div>
   <div class="row check"><label><span class="chip" id="reseed">Rimescola</span></label></div>
-  <div class="section">Export</div>
   <div class="row check"><label><input type="checkbox" id="border" checked> Bordo bianco (1% del lato lungo)</label></div>
+  </div>
 </div>
+<nav id="tabs" role="tablist">
+  <button type="button" role="tab" data-tab="light" aria-selected="true"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></svg><span>Luce</span></button>
+  <button type="button" role="tab" data-tab="color" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.2c3.6 4.2 6 7.2 6 10.3a6 6 0 0 1-12 0c0-3.1 2.4-6.1 6-10.300z"/><path d="M9 14a3 3 0 0 0 2.5 2.9"/></svg><span>Colore</span></button>
+  <button type="button" role="tab" data-tab="film" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="2.5" width="16" height="19" rx="2"/><path d="M4 7h16M4 17h16M8 2.500v19M16 2.500v19"/></svg><span>Pellicola</span></button>
+  <button type="button" role="tab" data-tab="optics" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M15.5 8.500l1.2-1.2"/></svg><span>Ottica</span></button>
+  <button type="button" role="tab" data-tab="dust" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 5.200L19 10l-5.2 1.800L12 17l-1.8-5.200L5 10l5.2-1.800z"/><circle cx="18.5" cy="17.5" r="1"/><circle cx="5.5" cy="18" r=".8"/></svg><span>Polvere</span></button>
+</nav>
 <div id="status">Caricamento motore…</div>
 
 <div id="logPanel">

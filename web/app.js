@@ -414,6 +414,22 @@ grip.addEventListener('dblclick', () => {
   store.set('fcf_panel', String(next || 1));
 });
 
+// Bottom tab bar: one section of sliders at a time; tapping while collapsed expands the sheet.
+{
+  const tabBtns = [...document.querySelectorAll('#tabs button')], panes = [...document.querySelectorAll('.pane')];
+  const showTab = (t) => {
+    tabBtns.forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === t)));
+    panes.forEach((p) => { p.hidden = p.dataset.pane !== t; });
+    controls.scrollTop = 0;
+  };
+  const savedTab = store.get('fcf_tab');
+  if (tabBtns.some((b) => b.dataset.tab === savedTab)) showTab(savedTab);
+  tabBtns.forEach((b) => b.addEventListener('click', () => {
+    showTab(b.dataset.tab); store.set('fcf_tab', b.dataset.tab);
+    if (controls.getBoundingClientRect().height <= 8) store.set('fcf_panel', String(setPanel(innerHeight * 0.18) || 1));
+  }));
+}
+
 // ---------- photo ----------
 
 async function loadPhoto(file) {
