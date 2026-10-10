@@ -25,7 +25,7 @@
 //! 5. **Gradation.** `x = 0.5 + (D'_c - d_ref) / range_density`, clamped to
 //!    0..1, then a sigmoid `1/(1+exp(-a (x-m)))` rescaled to 0..1 (`a` scaled by
 //!    `1 + contrast`, `m` solved so x = 0.5 gives `mid_grey_out`), a C1 soft
-//!    shoulder above `shoulder_start` (strength scaled by `1 + highlight`),
+//!    shoulder above `shoulder_start` (knee shifted and strength scaled by `3^highlight`),
 //!    black/white points, and `black_lift` (same for R, G, B). The output is
 //!    sRGB-encoded.
 //!    Above mid grey the dimmer channels are pulled towards their mid-slope level so
@@ -41,6 +41,9 @@ use spektrafilm_math::spectral::N_WAVELENGTHS;
 
 use crate::params::{FrontierAutoParams, FrontierModelParams, FrontierParams};
 use crate::profile::Profile;
+
+/// Shoulder-knee shift (in encoded level) at highlight = +-1.
+const HIGHLIGHT_KNEE_SHIFT: f64 = 0.08;
 
 const IDENTITY: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 const LUMA: [f64; 3] = [0.2126, 0.7152, 0.0722];
@@ -315,12 +318,20 @@ impl FrontierBase {
             shift[c] = dens_ev * self.d_per_ev - (keys.cmy[c] as f64 + keys.auto[1 + c] as f64 + m.balance_cmy[c]);
         }
         let a = (m.gradation_a * (1.0 + keys.contrast as f64)).max(0.05);
-        let sh = (m.shoulder_sharpness * (1.0 + keys.highlight as f64)).max(0.0);
+        // Highlights key (-1..+1, + = brighter, more open): a second shoulder (knee shifted by
+        // -HIGHLIGHT_KNEE_SHIFT * h, sharpness scaled by 3^h) blended in above mid grey, so
+        // mid grey and shadows keep the model curve. Exactly the model curve at 0.
+        let h = (keys.highlight as f64).clamp(-1.0, 1.0);
+        let sh = m.shoulder_sharpness;
         Stage {
             d_ref: self.d_ref,
             range: m.range_density.max(1e-6),
             shift,
-            curve: Gradation::solve_locked(a, m.gradation_a, sh, m),
+            curve: Gradation::solve_locked(a, m.gradation_a, sh, m).with_highlight(
+                (m.shoulder_start - HIGHLIGHT_KNEE_SHIFT * h).clamp(0.05, 0.98),
+                m.shoulder_sharpness * 3f64.powf(h),
+                h,
+            ),
             lift: keys.black_lift.clamp(0.0, 1.0) as f64 * m.black_lift_max,
             mid_slope: {
                 let g = Gradation::solve(m.gradation_a, m.shoulder_sharpness, m);
@@ -363,6 +374,12 @@ pub struct Gradation {
     lock: bool,
     /// normalized sigmoid level at x = 0.5 (mid grey); the blend is 1 up to here
     ya: f64,
+    /// Highlights key: alternative shoulder (knee, sharpness, its white normalization) blended in
+    /// above mid grey; `hl_on` is false at 0 (the curve is then untouched).
+    hl_on: bool,
+    hl_ys: f64,
+    hl_sh: f64,
+    hl_one: f64,
 }
 
 impl Gradation {
@@ -380,6 +397,10 @@ impl Gradation {
             base: [0.0; 4],
             lock: false,
             ya: 0.0,
+            hl_on: false,
+            hl_ys: 0.0,
+            hl_sh: 0.0,
+            hl_one: 1.0,
         };
         g.shoulder_one = g.shoulder(1.0);
         g
@@ -434,13 +455,45 @@ impl Gradation {
     }
 
     fn shoulder(&self, y: f64) -> f64 {
-        if y <= self.ys {
+        Self::shoulder_with(y, self.ys, self.sh)
+    }
+
+    fn shoulder_with(y: f64, ys: f64, sh: f64) -> f64 {
+        if y <= ys {
             return y;
         }
-        let t = (y - self.ys) / (1.0 - self.ys);
+        let t = (y - ys) / (1.0 - ys);
         // C1 at the knee: slope 1, then compressing; sh -> 0 is the identity.
-        let f = if self.sh < 1e-6 { t } else { (1.0 - (-self.sh * t).exp()) / self.sh };
-        self.ys + (1.0 - self.ys) * f
+        let f = if sh < 1e-6 { t } else { (1.0 - (-sh * t).exp()) / sh };
+        ys + (1.0 - ys) * f
+    }
+
+    /// Highlights key: blend (smoothstep from mid grey to the lower knee) towards a shoulder with
+    /// knee `ys` and sharpness `sh`. Mid grey, shadows and h = 0 are untouched.
+    fn with_highlight(mut self, ys: f64, sh: f64, h: f64) -> Self {
+        if h == 0.0 {
+            return self;
+        }
+        self.hl_on = true;
+        self.hl_ys = ys;
+        self.hl_sh = sh;
+        self.hl_one = Self::shoulder_with(1.0, ys, sh);
+        self.ya = self.pre(0.5);
+        self
+    }
+
+    /// Curve before the shoulder (sigmoid, contrast-locked), normalized 0..1.
+    fn pre(&self, x: f64) -> f64 {
+        let s = |x: f64| 1.0 / (1.0 + (-self.a * (x - self.m)).exp());
+        let mut y = (s(x) - self.s0) / (self.s1 - self.s0);
+        if self.lock {
+            let [a0, m0, s00, s10] = self.base;
+            let y0 = (1.0 / (1.0 + (-a0 * (x - m0)).exp()) - s00) / (s10 - s00);
+            let t = ((y0 - self.ya) / (self.ys - self.ya).max(1e-6)).clamp(0.0, 1.0);
+            let w = 1.0 - t * t * (3.0 - 2.0 * t);
+            y = y0 + w * (y - y0);
+        }
+        y
     }
 
     /// x at which the sigmoid reaches the shoulder knee (`shoulder_start`).
@@ -456,17 +509,14 @@ impl Gradation {
 
     pub fn curve(&self, x: f64) -> f64 {
         let x = x.clamp(0.0, 1.0);
-        let s = |x: f64| 1.0 / (1.0 + (-self.a * (x - self.m)).exp());
-        let mut y = (s(x) - self.s0) / (self.s1 - self.s0);
-        if self.lock {
-            let [a0, m0, s00, s10] = self.base;
-            let y0 = (1.0 / (1.0 + (-a0 * (x - m0)).exp()) - s00) / (s10 - s00);
-            let t = ((y0 - self.ya) / (self.ys - self.ya).max(1e-6)).clamp(0.0, 1.0);
-            let w = 1.0 - t * t * (3.0 - 2.0 * t);
-            y = y0 + w * (y - y0);
+        let y = self.pre(x);
+        let mut o = self.shoulder(y) / self.shoulder_one;
+        if self.hl_on {
+            let o2 = Self::shoulder_with(y, self.hl_ys, self.hl_sh) / self.hl_one;
+            let t = ((y - self.ya) / (self.ys.min(self.hl_ys) - self.ya).max(1e-6)).clamp(0.0, 1.0);
+            o += t * t * (3.0 - 2.0 * t) * (o2 - o);
         }
-        let y = self.shoulder(y) / self.shoulder_one;
-        self.bp + (self.wp - self.bp) * y
+        self.bp + (self.wp - self.bp) * o
     }
 }
 
@@ -777,6 +827,38 @@ mod tests {
             .flat_map(|ev| [from_f64(0.18 * 2f64.powf(*ev)); 3])
             .collect();
         ImageBuf::from_data(evs.len() as u32, 1, data)
+    }
+
+    #[test]
+    fn highlight_key_is_monotone_directional_and_identity_at_zero() {
+        let p = crate::params::FrontierModelParams::default();
+        let mk = |h: f64| {
+            super::Gradation::solve_locked(p.gradation_a, p.gradation_a, p.shoulder_sharpness, &p).with_highlight(
+                (p.shoulder_start - super::HIGHLIGHT_KNEE_SHIFT * h).clamp(0.05, 0.98),
+                p.shoulder_sharpness * 3f64.powf(h),
+                h,
+            )
+        };
+        let base = mk(0.0);
+        for i in 0..=100 {
+            let x = i as f64 / 100.0;
+            assert_eq!(base.curve(x).to_bits(), super::Gradation::solve(p.gradation_a, p.shoulder_sharpness, &p).curve(x).to_bits());
+        }
+        for h in [-1.0f64, -0.5, 0.5, 1.0] {
+            let g = mk(h);
+            let mut prev = -1.0;
+            for i in 0..=2000 {
+                let y = g.curve(i as f64 / 2000.0);
+                assert!(y >= prev - 1e-12, "not monotone at h={h} i={i}");
+                prev = y;
+            }
+            assert!((g.curve(0.5) - base.curve(0.5)).abs() < 1e-9, "mid grey moved at h={h}");
+            assert!((g.curve(0.2) - base.curve(0.2)).abs() < 1e-9, "shadow moved at h={h}");
+            for x in [0.75, 0.85, 0.95] {
+                let d = g.curve(x) - base.curve(x);
+                assert!(d * h > 0.0, "wrong direction at h={h} x={x} d={d}");
+            }
+        }
     }
 
     #[test]
