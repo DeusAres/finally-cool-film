@@ -158,16 +158,17 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   // +5 EV islands. 8 taps, only on clipped pixels; reach 450 µm (100 px at 48 MP).
   if (clipA > 0.0) {
     let k = p.fx.w;
-    var nb = 0.0; var nd = 1.0;
-    for (var t = 0; t < 8; t++) {
-      let rad = select(${wf(CLIP_R1_UM)}, ${wf(CLIP_R2_UM)}, (t & 1) == 1) * k;
-      let ang = f32(t) * 0.7853982 + 0.3926991;
+    var nb = 0.0;
+    for (var t = 0; t < 24; t++) {               // 3 rings x 8 taps: a smooth, area-wide measure
+      let ring = t / 8;
+      let rad = select(select(${wf(CLIP_R1_UM)}, ${wf(CLIP_R2_UM)}, ring == 1), ${wf(CLIP_R2_UM * 2)}, ring == 2) * k;
+      let ang = f32(t) * 0.7853982 + 0.3926991 * f32(1 + ring);
       let s = at(pos + vec2<f32>(cos(ang), sin(ang)) * rad);
-      let free = 1.0 - s.a;
-      let br = smoothstep(0.80, 0.93, gam(s.rgb));
-      nb += free * br; nd += free * (1.0 - br);
+      nb += max(s.a, smoothstep(0.80, 0.93, gam(s.rgb)));   // clipped or bright neighbour
     }
-    clipA *= 1.0 - smoothstep(0.25, 0.6, nb / (nb + nd));
+    // One continuous weight from the mean bright fraction: a lamp on dark keeps the boost,
+    // a large near-clipped surface gets none, uniformly (no islands).
+    clipA *= 1.0 - smoothstep(0.15, 0.45, nb / 24.0);
   }
   c *= 1.0 + ${CLIP_GAIN}.0 * clipA;
   var gainOut = p.scale;
