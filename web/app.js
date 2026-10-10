@@ -1,4 +1,4 @@
-import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, clipMask, writeClipAlpha, jpegThumb, THUMB_PX, PACK_LUT } from './lib/common.js';
+import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, jpegThumb, THUMB_PX, PACK_LUT } from './lib/common.js';
 import { sleep, store } from './lib/util.js';
 import { DISPLAY_GAIN_LUT } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
@@ -122,21 +122,11 @@ function updateEngine(json) {
 
 // The frame goes to the GPU a strip at a time: the wasm heap (which never
 // shrinks) only ever holds one strip, not the whole frame.
-// With `mask`, the alpha channel is written (per strip, into a scratch copy)
-// from it: `data` itself stays untouched (it is also the 'before' image).
-function uploadFrame(data, w, h, mask = null) {
+function uploadFrame(data, w, h) {
   sf.alloc_frame(w, h);
-  let scratch = null;
   for (let y = 0, n = stripRows(w); y < h; y += n) {
     const rows = Math.min(h, y + n) - y;
-    let part = data.subarray(y * w * 4, (y + rows) * w * 4);
-    if (mask) {
-      scratch = scratch?.length === part.length ? scratch : new Uint8Array(part.length);
-      scratch.set(part);
-      for (let k = y * w, i = 3, e = part.length; i < e; k++, i += 4) scratch[i] = mask[k];
-      part = scratch;
-    }
-    sf.set_frame_rows(part, y);   // copied into the wasm heap synchronously: the scratch can be reused
+    sf.set_frame_rows(data.subarray(y * w * 4, (y + rows) * w * 4), y);
   }
 }
 
@@ -155,7 +145,6 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
       DISPLAY_GAIN_LUT, w, h, PACK_LUT,
       GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), u.grain * grainFactor(), photo.grainSeed, outP3()), target);
   }
-  // (the CPU path has no clip boost: exposure is a plain scale)
   const rgb = lensActive(lens)
     ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, expo, lensGeometry(frame.w, frame.h, lens), true)
     : extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, expo, true);
@@ -457,8 +446,7 @@ async function loadPhoto(file) {
       $('indoor').checked = false;
       photo = { file, bitmap, preview, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
       if (gpu) {
-        preview.clip = clipMask(bitmap, preview.w, preview.h);   // full-res clipping, see common.js
-        uploadFrame(preview.data, preview.w, preview.h, preview.clip);
+        uploadFrame(preview.data, preview.w, preview.h);
       }
     }
     const { preview } = photo;
@@ -567,12 +555,11 @@ async function exportFull(ig = false) {
       // frame (~50 MB at 12 MP, plus its canvas) is never in memory.
       frame = { data: null, w: bitmap.width, h: bitmap.height, p3: false };
       sf.alloc_frame(frame.w, frame.h);
-      forEachStrip(bitmap, (data, y0, rows, p3) => { writeClipAlpha(data); sf.set_frame_rows(data, y0); frame.p3 = p3; });
+      forEachStrip(bitmap, (data, y0, rows, p3) => { sf.set_frame_rows(data, y0); frame.p3 = p3; });
     } else {
       frame = decodeRGBA(bitmap, longCap);
       // GPU: the pixels live in the frame texture; drop them for the tile loop.
-      // Clip mask from the full-resolution bitmap (as the preview), not the downscaled pixels: thin clipped highlights survive.
-      if (gpu) { uploadFrame(frame.data, frame.w, frame.h, clipMask(bitmap, frame.w, frame.h)); frame.data = null; }
+      if (gpu) { uploadFrame(frame.data, frame.w, frame.h); frame.data = null; }
     }
     const { w, h, p3 } = frame;
     const progressive = w * h > PROGRESSIVE_PIXEL_LIMIT ? 0 : 2;
@@ -639,7 +626,7 @@ async function exportFull(ig = false) {
     try {
       if (gpu) {   // back to the preview frame
         if (photo.preview.raw) uploadRaw(sf, photo.preview.raw);
-        else uploadFrame(photo.preview.data, photo.preview.w, photo.preview.h, photo.preview.clip);
+        else uploadFrame(photo.preview.data, photo.preview.w, photo.preview.h);
       }
     } catch (e) { log('preview re-upload failed: ' + (e?.stack || e)); }
     if (engine) updateEngine(renderParamsJson(ui()));   // back to preview params

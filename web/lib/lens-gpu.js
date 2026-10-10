@@ -7,16 +7,10 @@
 // Output: linear Rec.2020 (p3) or linear sRGB floats, interleaved RGB, for the region.
 import { LENS_CONST, lensGeometry } from './lens.js';
 import { P3_TO_REC2020, LUMA, displayGainWGSL } from './color.js';
-import { CLIP_GAIN } from './common.js';
 import { FRAME_UM, wf } from './util.js';
 
 const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
 
-// Clipped-highlight gate: 8 taps alternating CLIP_R1/R2_UM. A clipped pixel
-// whose UNclipped surround is near-white (gamma luma > ~0.85) is a surface just
-// over the clip (white fabric, overcast sky), not a light source: its boost goes.
-// A lamp / window / sun has a darker surround (or is all clipped) and keeps it.
-const CLIP_R1_UM = 200, CLIP_R2_UM = 450;
 // Slider mapping (Texture, Chiarezza) and the stages they drive, in µm on the 36 mm frame.
 // Colour-noise reduction (always on): ring radii (frame px), luminance range k (per stop²).
 const CHROMA_R1 = 1.5, CHROMA_R2 = 3.0, CHROMA_K = 8.0;
@@ -47,9 +41,6 @@ ${displayGainWGSL('inv')}
 fn at(pos: vec2<f32>) -> vec4<f32> {           // pos in frame pixel coords (pixel centres at integers)
   return textureSampleLevel(tex, smp, (pos + 0.5) / p.frame, 0.0);
 }
-fn gam(c: vec3<f32>) -> f32 {                 // luminance of the frame's primaries, gamma-encoded (where phone ISPs sharpen)
-  return pow(max(dot(c, p.luma.xyz), 0.0) + 0.001, 1.0 / 2.2);
-}
 fn box4(q: vec2<f32>, o: f32) -> vec3<f32> {   // four diagonal bilinear taps at ±o, averaged
   return 0.25 * (at(q + vec2<f32>(o, o)).rgb + at(q + vec2<f32>(-o, o)).rgb
                + at(q + vec2<f32>(o, -o)).rgb + at(q + vec2<f32>(-o, -o)).rgb);
@@ -70,7 +61,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let r = length(d);
   let g = coverage(min(r / p.rMax, 1.0));      // one curve drives both effects
   var c: vec3<f32>;
-  var clipA = at(pos).a;                       // clipped-highlight weight (gated below)
   if (p.dR > 0.0 && r > 0.5) {
     let u = vec2<f32>(d.x / r, d.y / r * ${ANISO_Y});
     let oR = p.dR * g; let oB = p.dB * g; let L = p.blur * g;
@@ -150,27 +140,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   if (p.luma.w > 0.5) { c *= displayGain(max(c.r, max(c.g, c.b))); }
   // Exposure: Esposizione, minus Interno's underexposure, plus the DNG baseline, as scene light before the film.
   c *= p.expo;
-  // Clipped highlights (alpha = clipped fraction of the pixel, common.js / raw.js): that
-  // fraction of the light was really much brighter; it feeds halation/scatter.
-  // alpha and the gate's taps are the SENSOR / file values (the texture), never the exposed
-  // light: Esposizione must not move what counts as clipped.
-  // Gate (CLIP_R*_UM): partly clipped white fabric must not turn into patchy
-  // +5 EV islands. 8 taps, only on clipped pixels; reach 450 µm (100 px at 48 MP).
-  if (clipA > 0.0) {
-    let k = p.fx.w;
-    var nb = 0.0;
-    for (var t = 0; t < 24; t++) {               // 3 rings x 8 taps: a smooth, area-wide measure
-      let ring = t / 8;
-      let rad = select(select(${wf(CLIP_R1_UM)}, ${wf(CLIP_R2_UM)}, ring == 1), ${wf(CLIP_R2_UM * 2)}, ring == 2) * k;
-      let ang = f32(t) * 0.7853982 + 0.3926991 * f32(1 + ring);
-      let s = at(pos + vec2<f32>(cos(ang), sin(ang)) * rad);
-      nb += max(s.a, smoothstep(0.80, 0.93, gam(s.rgb)));   // clipped or bright neighbour
-    }
-    // One continuous weight from the mean bright fraction: a lamp on dark keeps the boost,
-    // a large near-clipped surface gets none, uniformly (no islands).
-    clipA *= 1.0 - smoothstep(0.15, 0.45, nb / 24.0);
-  }
-  c *= 1.0 + ${CLIP_GAIN}.0 * clipA;
   var gainOut = p.scale;
   if (p.depth > 0.0) {
     let lost = p.depth * g;                    // fraction of light the lens loses here

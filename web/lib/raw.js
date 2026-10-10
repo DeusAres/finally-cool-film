@@ -3,8 +3,7 @@
 // A DNG is scene-linear light (Rec.2020, white-balanced, sensor clip = 1), the
 // input a film simulation actually wants: no phone tone curve to invert, no HDR
 // crunch, the whole highlight range. It goes to the GPU as a half-float frame
-// (sf.alloc_frame_f16), alpha = sensor-clipped weight (feeds halation as the
-// 8-bit path's clip mask does): alpha is the SENSOR value, before any exposure gain.
+// (sf.alloc_frame_f16), alpha = 1.
 // Exposure (BaselineExposure + Esposizione) is applied in the input pass; everything
 // after it is shared with the JPEG path.
 // Orientation (EXIF 1–8) is applied by index mapping while converting strips,
@@ -55,9 +54,7 @@ function half(v) {
   return s | ((e << 10) + ((m + 0x1000) >>> 13));   // + : a mantissa carry bumps the exponent
 }
 
-const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-
-/** Upload the oriented raw as the GPU frame, in strips (alpha = sensor-clipped weight). */
+/** Upload the oriented raw as the GPU frame, in strips (alpha = 1). */
 export function uploadRaw(sf, r) {
   sf.alloc_frame_f16(r.w, r.h);
   const rows = Math.max(1, Math.floor((1 << 22) / (r.w * 8)));   // ~4 MB strips
@@ -68,7 +65,7 @@ export function uploadRaw(sf, r) {
       for (let x = 0; x < r.w; x++, k += 4) {
         const i = srcIndex(r, x, y0 + y) * 3, R = src[i], G = src[i + 1], B = src[i + 2];
         buf[k] = half(R); buf[k + 1] = half(G); buf[k + 2] = half(B);
-        buf[k + 3] = half(smooth(0.97, 1.0, Math.max(R, G, B)));
+        buf[k + 3] = 0x3c00;
       }
     }
     sf.set_frame_rows_f16(buf.subarray(0, r.w * n * 4), y0);
