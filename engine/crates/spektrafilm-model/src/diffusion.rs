@@ -2,7 +2,7 @@
 
 use spektrafilm_gpu::ComputeBackend;
 use spektrafilm_math::image::ImageBuf;
-use spektrafilm_math::precision::{Scalar, ZERO, from_f32, from_f64};
+use spektrafilm_math::precision::{Scalar, ZERO, from_f32, from_f64, to_f64};
 
 /// Apply unsharp mask to an image. `backend` provides the Gaussian blur
 /// implementation (CPU rayon or wgpu compute shader).
@@ -66,6 +66,7 @@ pub fn apply_halation_um(
     halation_n_bounces: u32,
     halation_bounce_decay: f64,
     halation_renormalize: bool,
+    halation_threshold_ev: f32,
     _backend: &dyn ComputeBackend,
 ) -> ImageBuf {
     // Per-channel implementation matching Python's `apply_halation_um`.
@@ -83,6 +84,7 @@ pub fn apply_halation_um(
     // i.e. every place Python takes a length-3 array, we treat it as a
     // length-3 array, not as `(sum / 3.0)`.
     use spektrafilm_math::gaussian::{exponential_filter_channel, gaussian_blur_channel};
+    use spektrafilm_math::halation_knee::{halation_source, halation_threshold_bounds};
 
     let w = raw.width;
     let h = raw.height;
@@ -130,6 +132,7 @@ pub fn apply_halation_um(
 
     if halation_n_bounces >= 1 && (a_tot[0] > 0.0 || a_tot[1] > 0.0 || a_tot[2] > 0.0) {
         let n_bounces = halation_n_bounces as usize;
+        let (thr_lo, thr_hi) = halation_threshold_bounds(halation_threshold_ev);
         // Decay computed in f64 to match Python's `rho ** (k - 1)` and
         // subsequent normalize-by-sum at full f64 precision.
         let mut decay = vec![0.0f64; n_bounces];
@@ -150,10 +153,17 @@ pub fn apply_halation_um(
             if sigma_first_px_f64 <= 0.0 {
                 continue;
             }
+            // Only light above the threshold feeds the halation blur.
+            let src: Vec<Scalar> = channels[c]
+                .iter()
+                .map(|&e| {
+                    from_f64(halation_source(to_f64(e) as f32, thr_lo, thr_hi) as f64)
+                })
+                .collect();
             let mut hb = vec![ZERO; n_pix];
             for (k, &wk) in decay.iter().enumerate() {
                 let sigma_k = (sigma_first_px_f64 * ((k as f64) + 1.0).sqrt()).max(1e-6) as f32;
-                let blurred = gaussian_blur_channel(&channels[c], w, h, sigma_k);
+                let blurred = gaussian_blur_channel(&src, w, h, sigma_k);
                 let wk_s = from_f64(wk);
                 for i in 0..n_pix {
                     hb[i] += wk_s * blurred[i];

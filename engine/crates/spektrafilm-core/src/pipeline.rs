@@ -1042,6 +1042,7 @@ impl Pipeline {
                 halation_n_bounces: h.halation_n_bounces,
                 halation_bounce_decay: h.halation_bounce_decay as f32,
                 halation_renormalize: h.halation_renormalize,
+                halation_threshold_ev: h.halation_threshold_ev,
             })
         } else {
             None

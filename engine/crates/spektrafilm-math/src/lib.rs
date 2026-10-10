@@ -1,6 +1,7 @@
 pub mod colorspace;
 pub mod fft_conv;
 pub mod gaussian;
+pub mod halation_knee;
 pub mod image;
 pub mod interp;
 pub mod lut;

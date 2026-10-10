@@ -2764,6 +2764,8 @@ struct HalationState {
     // called from the hot path.
     buf_c: wgpu::Buffer,
     buf_d: wgpu::Buffer,
+    buf_e: wgpu::Buffer, // thresholded halation source
+    halation_threshold: DispatchJob,
     scatter_blurs: Vec<BlurJob>, // [core, tail]
     scatter_mix: DispatchJob,
     halation_blurs: Vec<BlurJob>,          // one per bounce
@@ -3008,7 +3010,60 @@ fn build_halation_state(
         }
     }
 
-    // Each bounce blurs buf_b → buf_c at sigma_k, then accumulates into
+    // Threshold pass: buf_b → buf_e, src = E * smoothstep(lo, hi, E). Only
+    // this light feeds the halation blurs (CPU: `halation_source`).
+    let buf_e = mk_buf("halation_e");
+    let thr_pipe = backend.cached_pipeline(
+        include_str!("../../spektrafilm-shaders/wgsl/halation_threshold.wgsl"),
+        &[
+            wgpu::BufferBindingType::Uniform,
+            wgpu::BufferBindingType::Storage { read_only: true },
+            wgpu::BufferBindingType::Storage { read_only: false },
+        ],
+    );
+    let (thr_lo, thr_hi) =
+        spektrafilm_math::halation_knee::halation_threshold_bounds(hp.halation_threshold_ev);
+    #[repr(C)]
+    #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+    struct ThresholdParams {
+        n_pixels: u32,
+        _pad: [u32; 3],
+        bounds: [f32; 4],
+    }
+    let thr_params = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
+        label: Some("halation_threshold_params"),
+        contents: bytemuck::bytes_of(&ThresholdParams {
+            n_pixels: n_pixels as u32,
+            _pad: [0; 3],
+            bounds: [thr_lo, thr_hi, 0.0, 0.0],
+        }),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    let thr_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("halation_threshold_bg"),
+        layout: &thr_pipe.layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: thr_params.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: buf_b.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: buf_e.as_entire_binding(),
+            },
+        ],
+    });
+    let halation_threshold = DispatchJob {
+        _params_buf: thr_params,
+        pipeline: thr_pipe,
+        bg: thr_bg,
+    };
+
+    // Each bounce blurs buf_e → buf_c at sigma_k, then accumulates into
     // buf_d. First bounce sets `clear_first` so we don't need a separate
     // zero pass.
     let add_scaled_pipe = backend.cached_pipeline(
@@ -3034,7 +3089,7 @@ fn build_halation_state(
         let sigma_k = hp.halation_first_sigma_px * ((k as f32) + 1.0).sqrt();
         halation_blurs.push(make_blur_job(
             sigma_k,
-            buf_b,
+            &buf_e,
             &buf_c,
             &format!("bounce_{k}"),
         ));
@@ -3198,6 +3253,8 @@ fn build_halation_state(
     HalationState {
         buf_c,
         buf_d,
+        buf_e,
+        halation_threshold,
         scatter_blurs,
         scatter_mix: scatter_mix_job,
         halation_blurs,
@@ -3218,7 +3275,7 @@ impl HalationState {
         workgroup_size: u32,
         wg_xy: (u32, u32),
     ) {
-        let _ = (&self.buf_c, &self.buf_d); // owned, just keepalive
+        let _ = (&self.buf_c, &self.buf_d, &self.buf_e); // owned, just keepalive
         let dispatch_blur = |enc: &mut wgpu::CommandEncoder, job: &BlurJob| {
             {
                 let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -3257,7 +3314,10 @@ impl HalationState {
             dispatch_linear(encoder, &self.scatter_mix);
         }
 
-        // Halation bounces
+        // Halation bounces (fed by the thresholded source)
+        if !self.halation_blurs.is_empty() {
+            dispatch_linear(encoder, &self.halation_threshold);
+        }
         for (blur_job, acc_job) in self
             .halation_blurs
             .iter()

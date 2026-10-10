@@ -383,6 +383,7 @@ pub fn expose(
             halation.halation_n_bounces,
             halation.halation_bounce_decay,
             halation.halation_renormalize,
+            halation.halation_threshold_ev,
             backend,
         );
     }
@@ -530,6 +531,44 @@ pub(crate) fn select_illuminant(name: &str) -> &'static [f32] {
 mod tests {
     use super::*;
     use spektrafilm_math::precision::from_f64;
+
+    fn halate(img: &ImageBuf, amount: f64, thr_ev: f32) -> ImageBuf {
+        let backend = spektrafilm_gpu::cpu_backend::CpuBackend;
+        spektrafilm_model::diffusion::apply_halation_um(
+            img, 10.0, 0.0, 1.0, [2.2; 3], [9.3; 3], [0.7; 3], amount, 1.0,
+            [0.05, 0.015, 0.0], [65.0; 3], 3, 0.5, false, thr_ev, &backend,
+        )
+    }
+
+    fn flat(v: f64) -> ImageBuf {
+        let (w, h) = (64u32, 64u32);
+        ImageBuf {
+            width: w,
+            height: h,
+            data: vec![from_f64(v); (w * h * 3) as usize],
+        }
+    }
+
+    #[test]
+    fn halation_threshold_mid_grey_none_and_spot_rings() {
+        // Uniform mid grey: below threshold -> no halation at all.
+        let grey = flat(0.18);
+        let out = halate(&grey, 1.0, 2.5);
+        assert_eq!(out.data, grey.data);
+
+        // +5 EV spot on black: red halo ring appears outside the spot.
+        let mut img = flat(0.0);
+        let spot = 0.18 * 32.0;
+        for y in 30..34 {
+            for x in 30..34 {
+                img.set(x, y, [from_f64(spot); 3]);
+            }
+        }
+        let out = halate(&img, 1.0, 2.5);
+        assert!(out.get(24, 32)[0] > from_f64(1e-6), "no ring");
+        // amount 0 == untouched.
+        assert_eq!(halate(&img, 0.0, 2.5).data, img.data);
+    }
 
     /// Deterministic synthetic image, mirrored bit-for-bit in the Python
     /// reference: a 300×200 gradient where each channel is

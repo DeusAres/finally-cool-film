@@ -467,6 +467,14 @@ pub struct HalationParams {
     pub halation_bounce_decay: f64,
     #[serde(default = "default_true")]
     pub halation_renormalize: bool,
+    /// Halation only reacts to light above this threshold (EV relative to
+    /// mid grey 0.18), with a soft knee one EV wide.
+    #[serde(default = "default_halation_threshold_ev")]
+    pub halation_threshold_ev: f32,
+}
+
+fn default_halation_threshold_ev() -> f32 {
+    2.5
 }
 
 fn default_one_f64() -> f64 {
@@ -510,6 +518,7 @@ impl Default for HalationParams {
             halation_n_bounces: 3,
             halation_bounce_decay: 0.5,
             halation_renormalize: true,
+            halation_threshold_ev: 2.5,
         }
     }
 }

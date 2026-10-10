@@ -404,6 +404,9 @@ pub struct HalationGpuParams {
     pub halation_n_bounces: u32,
     pub halation_bounce_decay: f32,
     pub halation_renormalize: bool,
+    /// Threshold in EV above mid grey; bounds via
+    /// `spektrafilm_math::halation_knee::halation_threshold_bounds`.
+    pub halation_threshold_ev: f32,
 }
 
 pub struct Lut3D {
