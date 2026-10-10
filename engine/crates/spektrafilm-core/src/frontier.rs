@@ -25,7 +25,7 @@
 //! 5. **Gradation.** `x = 0.5 + (D'_c - d_ref) / range_density`, clamped to
 //!    0..1, then a sigmoid `1/(1+exp(-a (x-m)))` rescaled to 0..1 (`a` scaled by
 //!    `1 + contrast`, `m` solved so x = 0.5 gives `mid_grey_out`), a C1 soft
-//!    shoulder above `shoulder_start` (knee shifted and strength scaled by `3^highlight`),
+//!    shoulder above `shoulder_start` (plus the highlights key: a smooth output bump above mid grey),
 //!    black/white points, and `black_lift` (same for R, G, B). The output is
 //!    sRGB-encoded.
 //!    Above mid grey the dimmer channels are pulled towards their mid-slope level so
@@ -42,8 +42,12 @@ use spektrafilm_math::spectral::N_WAVELENGTHS;
 use crate::params::{FrontierAutoParams, FrontierModelParams, FrontierParams};
 use crate::profile::Profile;
 
-/// Shoulder-knee shift (in encoded level) at highlight = +-1.
-const HIGHLIGHT_KNEE_SHIFT: f64 = 0.08;
+/// Highlights key, as functions of the output level above mid grey (u: 0 = mid grey, 1 = white).
+/// Down (h = -1): bump (amplitude, rise width, fall start, fall width) subtracted from the output.
+/// Up (h = +1): (gain, rise width): the remaining distance to white shrinks by `gain * smoothstep`.
+/// Both are linear in the key.
+const HIGHLIGHT_DOWN: (f64, f64, f64, f64) = (0.22, 0.7, 0.7, 0.8);
+const HIGHLIGHT_UP: (f64, f64) = (0.85, 0.6);
 
 const IDENTITY: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 const LUMA: [f64; 3] = [0.2126, 0.7152, 0.0722];
@@ -318,20 +322,15 @@ impl FrontierBase {
             shift[c] = dens_ev * self.d_per_ev - (keys.cmy[c] as f64 + keys.auto[1 + c] as f64 + m.balance_cmy[c]);
         }
         let a = (m.gradation_a * (1.0 + keys.contrast as f64)).max(0.05);
-        // Highlights key (-1..+1, + = brighter, more open): a second shoulder (knee shifted by
-        // -HIGHLIGHT_KNEE_SHIFT * h, sharpness scaled by 3^h) blended in above mid grey, so
-        // mid grey and shadows keep the model curve. Exactly the model curve at 0.
+        // Highlights key (-1..+1, + = brighter, more open): a smooth bump on the
+        // output fading in above mid grey, so mid grey and shadows keep the model curve. Exactly the model curve at 0.
         let h = (keys.highlight as f64).clamp(-1.0, 1.0);
         let sh = m.shoulder_sharpness;
         Stage {
             d_ref: self.d_ref,
             range: m.range_density.max(1e-6),
             shift,
-            curve: Gradation::solve_locked(a, m.gradation_a, sh, m).with_highlight(
-                (m.shoulder_start - HIGHLIGHT_KNEE_SHIFT * h).clamp(0.05, 0.98),
-                m.shoulder_sharpness * 3f64.powf(h),
-                h,
-            ),
+            curve: Gradation::solve_locked(a, m.gradation_a, sh, m).with_highlight(h),
             lift: keys.black_lift.clamp(0.0, 1.0) as f64 * m.black_lift_max,
             mid_slope: {
                 let g = Gradation::solve(m.gradation_a, m.shoulder_sharpness, m);
@@ -377,9 +376,7 @@ pub struct Gradation {
     /// Highlights key: alternative shoulder (knee, sharpness, its white normalization) blended in
     /// above mid grey; `hl_on` is false at 0 (the curve is then untouched).
     hl_on: bool,
-    hl_ys: f64,
-    hl_sh: f64,
-    hl_one: f64,
+    hl: f64,
 }
 
 impl Gradation {
@@ -398,9 +395,7 @@ impl Gradation {
             lock: false,
             ya: 0.0,
             hl_on: false,
-            hl_ys: 0.0,
-            hl_sh: 0.0,
-            hl_one: 1.0,
+            hl: 0.0,
         };
         g.shoulder_one = g.shoulder(1.0);
         g
@@ -468,16 +463,15 @@ impl Gradation {
         ys + (1.0 - ys) * f
     }
 
-    /// Highlights key: blend (smoothstep from mid grey to the lower knee) towards a shoulder with
-    /// knee `ys` and sharpness `sh`. Mid grey, shadows and h = 0 are untouched.
-    fn with_highlight(mut self, ys: f64, sh: f64, h: f64) -> Self {
+    /// Highlights key (`HIGHLIGHT_DOWN` / `HIGHLIGHT_UP`) applied to the shouldered
+    /// output above mid grey; h < 0 pulls the highlights down, h > 0 opens them towards paper white
+    /// without a clip. Mid grey, shadows and h = 0 are untouched.
+    fn with_highlight(mut self, h: f64) -> Self {
         if h == 0.0 {
             return self;
         }
         self.hl_on = true;
-        self.hl_ys = ys;
-        self.hl_sh = sh;
-        self.hl_one = Self::shoulder_with(1.0, ys, sh);
+        self.hl = h;
         self.ya = self.pre(0.5);
         self
     }
@@ -512,9 +506,20 @@ impl Gradation {
         let y = self.pre(x);
         let mut o = self.shoulder(y) / self.shoulder_one;
         if self.hl_on {
-            let o2 = Self::shoulder_with(y, self.hl_ys, self.hl_sh) / self.hl_one;
-            let t = ((y - self.ya) / (self.ys.min(self.hl_ys) - self.ya).max(1e-6)).clamp(0.0, 1.0);
-            o += t * t * (3.0 - 2.0 * t) * (o2 - o);
+            let sm = |t: f64| {
+                let t = t.clamp(0.0, 1.0);
+                t * t * (3.0 - 2.0 * t)
+            };
+            let o0 = self.ya / self.shoulder_one;
+            let u = ((o - o0) / (1.0 - o0)).clamp(0.0, 1.0);
+            if self.hl < 0.0 {
+                let (amp, rise, fall_at, fall_w) = HIGHLIGHT_DOWN;
+                o += self.hl * amp * sm(u / rise) * (1.0 - sm((u - fall_at) / fall_w));
+            } else {
+                // the remaining distance to white shrinks by g: smooth approach, never past white
+                let (gain, rise) = HIGHLIGHT_UP;
+                o = 1.0 - (1.0 - o) * (1.0 - self.hl * gain * sm(u / rise));
+            }
         }
         self.bp + (self.wp - self.bp) * o
     }
@@ -833,11 +838,7 @@ mod tests {
     fn highlight_key_is_monotone_directional_and_identity_at_zero() {
         let p = crate::params::FrontierModelParams::default();
         let mk = |h: f64| {
-            super::Gradation::solve_locked(p.gradation_a, p.gradation_a, p.shoulder_sharpness, &p).with_highlight(
-                (p.shoulder_start - super::HIGHLIGHT_KNEE_SHIFT * h).clamp(0.05, 0.98),
-                p.shoulder_sharpness * 3f64.powf(h),
-                h,
-            )
+            super::Gradation::solve_locked(p.gradation_a, p.gradation_a, p.shoulder_sharpness, &p).with_highlight(h)
         };
         let base = mk(0.0);
         for i in 0..=100 {
@@ -857,6 +858,12 @@ mod tests {
             for x in [0.75, 0.85, 0.95] {
                 let d = g.curve(x) - base.curve(x);
                 assert!(d * h > 0.0, "wrong direction at h={h} x={x} d={d}");
+            }
+            if h.abs() == 1.0 {
+                // strong key: the biggest highlight move is >= 0.15 (down) / 0.10 (up) in encoded level
+                let big = (0..=100).map(|i| (g.curve(i as f64 / 100.0) - base.curve(i as f64 / 100.0)) * h.signum()).fold(0.0f64, f64::max);
+                let need = if h < 0.0 { 0.15 } else { 0.10 };
+                assert!(big >= need, "highlight key too weak at h={h}: {big}");
             }
         }
     }
