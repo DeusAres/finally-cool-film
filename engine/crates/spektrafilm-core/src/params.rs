@@ -465,7 +465,7 @@ pub struct HalationParams {
     pub halation_n_bounces: u32,
     #[serde(default = "default_half_f64")]
     pub halation_bounce_decay: f64,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub halation_renormalize: bool,
     /// Halation only reacts to light above this threshold (EV relative to
     /// mid grey 0.18), with a soft knee one EV wide.
@@ -517,7 +517,7 @@ impl Default for HalationParams {
             halation_first_sigma_um: [65.0, 65.0, 65.0],
             halation_n_bounces: 3,
             halation_bounce_decay: 0.5,
-            halation_renormalize: true,
+            halation_renormalize: false, // halation only ADDS light above the threshold: dividing the whole frame by 1+a_tot darkened and cooled everything
             halation_threshold_ev: 2.5,
         }
     }
