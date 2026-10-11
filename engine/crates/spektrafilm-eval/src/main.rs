@@ -5,9 +5,12 @@
 //!     --exposure-ev: scene exposure error in EV; the lab's AutoSetup (core `frontier`) then runs on the
 //!                    ColorChecker frame as the app does on its thumbnail, and the chart is re-rendered with it.
 //!     --relative 1:  grade shape only (slopes, grey a*/b*, chroma ratios, hue shifts), not absolute L*.
-//!   sf-eval image --params <overrides.json> --in <linear.npy> --out <png> [--data <web/data>]
+//!   sf-eval grain --params <overrides.json> [--out <report.json>] [--size 256] [--ppm 100] [--data <web/data>]
+//!     uniform grey patches at ev -3..+3; size >= 256 px, ppm = px per mm on the 35 mm frame (pixel pitch 1000/ppm um).
+//!   sf-eval grain --params <overrides.json> [--out <report.json>] [--size 256] [--ppm 100] [--data <dir>]\n  sf-eval image --params <overrides.json> --in <linear.npy> --out <png> [--data <web/data>]
 mod chart;
 mod color;
+mod grain;
 mod render;
 mod report;
 
@@ -125,6 +128,27 @@ fn chart_cmd(args: &Args) -> Result<(), String> {
     Ok(())
 }
 
+fn grain_cmd(args: &Args) -> Result<(), String> {
+    let overrides: serde_json::Value = match args.opt("params") {
+        Some(p) => read_json(&p)?,
+        None => serde_json::json!({}),
+    };
+    let size: u32 = args.0.get("size").map_or(Ok(256), |v| v.parse().map_err(|_| format!("bad --size {v}")))?;
+    let ppm: f64 = args.0.get("ppm").map_or(Ok(100.0), |v| v.parse().map_err(|_| format!("bad --ppm {v}")))?;
+    if size < 256 || ppm <= 0.0 {
+        return Err("--size must be >= 256 and --ppm > 0".into());
+    }
+    let stats = grain::run(overrides, &args.opt("data").unwrap_or_else(render::default_data_dir), size, ppm)?;
+    let json = serde_json::to_string_pretty(&serde_json::json!({ "patch_px": size, "px_per_mm": ppm, "pixel_um": 1000.0 / ppm, "patches": stats }))
+        .map_err(|e| e.to_string())?;
+    match args.opt("out") {
+        Some(p) => fs::write(&p, &json).map_err(|e| format!("{}: {e}", p.display()))?,
+        None => println!("{json}"),
+    }
+    eprintln!("patch {size} px at {ppm} px/mm ({} um/px)\n{}", 1000.0 / ppm, grain::table(&stats));
+    Ok(())
+}
+
 fn load_npy(path: &Path) -> Result<ImageBuf, String> {
     let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let (shape, data) = npy::load_npy_f32(BufReader::new(file)).map_err(|e| format!("{}: {e:?}", path.display()))?;
@@ -235,7 +259,7 @@ fn image_cmd(args: &Args) -> Result<(), String> {
 fn main() {
     let mut argv = std::env::args().skip(1);
     let result = match argv.next().as_deref() {
-        Some(cmd @ ("chart" | "image")) => Args::parse(argv).and_then(|a| if cmd == "chart" { chart_cmd(&a) } else { image_cmd(&a) }),
+        Some(cmd @ ("chart" | "image" | "grain")) => Args::parse(argv).and_then(|a| match cmd { "chart" => chart_cmd(&a), "grain" => grain_cmd(&a), _ => image_cmd(&a) }),
         _ => Err(USAGE.to_string()),
     };
     if let Err(e) = result {
