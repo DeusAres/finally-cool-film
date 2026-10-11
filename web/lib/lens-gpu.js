@@ -6,7 +6,8 @@
 // every bilinear tap is interpolated in linear light, as in the CPU path.
 // Output: linear Rec.2020 (p3) or linear sRGB floats, interleaved RGB, for the region.
 import { LENS_CONST, lensGeometry } from './lens.js';
-import { P3_TO_REC2020, LUMA, displayGainWGSL } from './color.js';
+import { P3_TO_REC2020, LUMA, displayGainWGSL, DISPLAY_GAIN_LUT } from './color.js';
+import { dodgeWGSL } from './dodge.js';
 import { FRAME_UM, wf } from './util.js';
 
 const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
@@ -152,6 +153,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   c *= p.wb.xyz;
   outBuf[i] = c.r * gainOut; outBuf[i + 1u] = c.g * gainOut; outBuf[i + 2u] = c.b * gainOut;
 }`;
+
+// Debug v3 (debugv3.html): the same pass with the automatic highlight dodging (dodge.js) before the
+// exposure gain; its base map rides after DISPLAY_GAIN_LUT in the same storage array.
+export const INPUT_WGSL_V3 = INPUT_WGSL
+  .replace('fn at(pos', `${dodgeWGSL('inv', DISPLAY_GAIN_LUT.length)}\nfn at(pos`)
+  .replace('\n  c *= p.expo;\n', '\n  c = dodge(c, pos);\n  c *= p.expo;\n');
 
 const IDENTITY = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
 const UNIFORM_FLOATS = 40;

@@ -7,7 +7,9 @@ import { isRaw, loadRaw, uploadRaw, rawThumb, rawPreviewRGBA } from './lib/raw.j
 import { internoParams } from './lib/interno.js';
 import { iccSegment } from './lib/icc.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
-import { INPUT_WGSL, inputUniform } from './lib/lens-gpu.js';
+import { INPUT_WGSL, INPUT_WGSL_V3, inputUniform } from './lib/lens-gpu.js';
+import { dodgeBase, dodgeParams, dodgeArray } from './lib/dodge.js';
+import { LUMA } from './lib/color.js';
 import { dustField, drawDust, compositeDust } from './lib/dust.js';
 import { GRAIN_WGSL, packParams, toP3CPU } from './lib/grain.js';
 
@@ -32,6 +34,9 @@ const ctx = view.getContext('2d', { colorSpace: 'display-p3' });
 let gpu = false;
 let engine = null;          // sf.Engine for the current photo (its input colour space is fixed at construction)
 let engineParams = '';      // JSON last given to `engine.update` (re-sending it is a no-op)
+// Debug v3 (debugv3.html → index.html?v3): only Esposizione + Contrasto in Luce, automatic highlight
+// dodging (lib/dodge.js) and the free contrast curve. Without ?v3 nothing below changes the app.
+const V3 = new URLSearchParams(location.search).has('v3');
 let photo = null;           // { file, bitmap, preview, after, auto: scanner AutoSetup [d, c, m, y], ... }
 let rendering = false, dirty = false, exporting = false, renderCount = 0;
 
@@ -86,7 +91,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
       model: 'frontier', black_correction: false, white_correction: false, unsharp_mask: [0, 0],
       frontier: {
         cmy: frontierCmy(u), contrast: u.contrast, highlight: u.highlight, whites: u.whites, black_lift: u.black,
-        auto: photo.auto,
+        auto: photo.auto, ...(V3 ? { debug_contrast_mode: 2 } : {}),
       },
     },
     film_render: {
@@ -145,8 +150,8 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
   const lens = lensOf(u), expo = sceneGain(u), wb = sceneWb();
   if (gpu) {
     const space = frame.raw ? 'rec2020' : frame.p3 ? 'p3' : 'srgb';
-    return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb),
-      DISPLAY_GAIN_LUT, w, h, PACK_LUT,
+    return engine.process_frame(V3 ? INPUT_WGSL_V3 : INPUT_WGSL, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb),
+      V3 ? v3Gain(u, space) : DISPLAY_GAIN_LUT, w, h, PACK_LUT,
       GRAIN_WGSL, packParams(outP3()), target);
   }
   const rgb = lensActive(lens)
@@ -159,6 +164,16 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
     if (p3) toP3CPU(px);   // Rec.2020 → P3, as the GPU output pass
     d32[p] = (q8(px[0]) | (q8(px[1]) << 8) | (q8(px[2]) << 16) | 0xff000000) >>> 0;
   }
+}
+/** v3: DISPLAY_GAIN_LUT + the dodging header and base map (base: once per photo, from the AutoSetup thumbnail). */
+function v3Gain(u, space) {
+  const on = $('v3dodge')?.checked !== false;
+  if (on && !photo.dodge) {
+    const raw = photo.preview.raw, { rgb, w, h } = raw ? rawThumb(raw, THUMB_PX) : jpegThumb(photo.preview);
+    photo.dodge = dodgeBase(rgb, w, h, LUMA[space]);
+    log(`v3 dodge base ${w}x${h} median ${photo.dodge.M.toFixed(2)} p99 ${photo.dodge.P.toFixed(2)}`);
+  }
+  return dodgeArray(DISPLAY_GAIN_LUT, on ? photo.dodge : null, on ? dodgeParams(photo.dodge, u.contrast) : null);
 }
 const q8 = (v) => Math.round(255 * Math.min(1, Math.max(0, v)));
 
@@ -739,7 +754,14 @@ syncOutputs();
 // Build stamp: replaced at deploy (scripts/stamp-version.sh) with the version and
 // its time; it lives in app.js itself, so a stale cached app.js shows a stale stamp.
 const BUILD = '__BUILD__';
-$('ver').textContent = BUILD.startsWith('__') ? 'dev' : BUILD;
+$('ver').textContent = (BUILD.startsWith('__') ? 'dev' : BUILD) + (V3 ? ' · v3 debug' : '');
+if (V3) {
+  // only Esposizione + Contrasto in Luce (+ Interno); a switch to compare with/without the dodging
+  for (const id of ['highlight', 'whites', 'black']) $(id).closest('.row').hidden = true;
+  $('indoor').closest('.row').insertAdjacentHTML('beforebegin',
+    '<div class="row toggle"><label for="v3dodge">Luci auto (v3)</label><input type="checkbox" id="v3dodge" role="switch" checked></div>');
+  $('v3dodge').addEventListener('change', () => render());
+}
 
 const crashed = takeCrashMarker();
 if (crashed) openLog(`La sessione precedente si è interrotta durante: ${crashed}. Copia il log e mandamelo.`);
