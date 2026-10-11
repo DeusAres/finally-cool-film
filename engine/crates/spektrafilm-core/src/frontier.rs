@@ -23,8 +23,9 @@
 //!    density key is an exposure compensation. A positive C/M/Y key adds that
 //!    colour, i.e. lowers the density of its complementary channel (R/G/B).
 //! 5. **Gradation.** `x = 0.5 + (D'_c - d_ref) / range_density`, clamped to
-//!    0..1, then a sigmoid `1/(1+exp(-a (x-m)))` rescaled to 0..1 (`a` scaled by
-//!    `1 + contrast`, `m` solved so x = 0.5 gives `mid_grey_out`), a C1 soft
+//!    0..1, then a sigmoid `1/(1+exp(-a (x-m)))` rescaled to 0..1 (`m` solved so x = 0.5 gives
+//!    `mid_grey_out`; the contrast key remaps x on the pixel's mean density, highlights locked,
+//!    the channel gaps scaled with it, see `Tone`), a C1 soft
 //!    shoulder above `shoulder_start` (plus the highlights key: a smooth output bump above mid grey),
 //!    black/white points, and `black_lift` (same for R, G, B). The output is
 //!    sRGB-encoded.
@@ -59,6 +60,14 @@ const MID_BULGE_DOWN: f64 = 0.8;
 const SHADOW_BULGE: f64 = 0.7;
 const TOE_LIFT: f64 = 1.2;
 const TOE_SLOPE: f64 = 0.85;
+/// Contrast is applied to the pixel's mean density (`Tone`), the channel gaps are scaled by the tone
+/// slope there, but never below `1 + GAP_FLOOR (k - 1)` when the contrast is up (a harder print is
+/// more saturated also where the highlight lock compresses the tones).
+const GAP_FLOOR: f64 = 0.15;
+/// Max |d ln gap / dx|: below 3 every output channel stays non-decreasing in its own density
+/// (d x'_c / d x_c >= T'/3 + gap (2/3 - 2 L/9), with |x_c - mean| <= 2/3).
+const GAP_LIPSCHITZ: f64 = 2.5;
+const TONE_N: usize = 256;
 
 const IDENTITY: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 const LUMA: [f64; 3] = [0.2126, 0.7152, 0.0722];
@@ -343,7 +352,8 @@ impl FrontierBase {
             d_ref: self.d_ref,
             range: m.range_density.max(1e-6),
             shift,
-            curve: Gradation::solve_locked(a, m.gradation_a, sh, m).with_highlight(h),
+            curve: Gradation::solve(m.gradation_a, sh, m).with_highlight(h),
+            tone: Tone::new(a / m.gradation_a, m),
             lift: keys.black_lift.clamp(0.0, 1.0) as f64 * m.black_lift_max,
             mid_slope: {
                 let g = Gradation::solve(m.gradation_a, m.shoulder_sharpness, m);
@@ -562,6 +572,71 @@ pub struct Stage {
     mid_slope: f64,
     /// Linear sRGB (the model's working primaries) -> linear output primaries.
     out: [[f64; 3]; 3],
+    /// Contrast key (None at 0).
+    tone: Option<Tone>,
+}
+
+/// Contrast key as a remap of the normalized density, `T = curve0^-1 . curve_locked`: the locked
+/// contrast curve expressed on the contrast-free one. It is applied to the pixel's mean density and
+/// the channels keep their gaps (scaled by `gap`), so the hue of light colours survives the highlight
+/// lock (per channel, a blue sky's dim R moved while its G/B were locked: the sky went pale).
+#[derive(Clone, Copy, Debug)]
+struct Tone {
+    t: [f64; TONE_N + 1],
+    /// ln of the channel gap gain at the nodes (Lipschitz-limited, see `GAP_LIPSCHITZ`)
+    lg: [f64; TONE_N + 1],
+}
+
+impl Tone {
+    fn new(k: f64, m: &FrontierModelParams) -> Option<Self> {
+        let sh = m.shoulder_sharpness;
+        let g0 = Gradation::solve(m.gradation_a, sh, m);
+        let gk = Gradation::solve_locked(m.gradation_a * k, m.gradation_a, sh, m);
+        if !gk.lock {
+            return None;
+        }
+        let mut t = [0.0; TONE_N + 1];
+        for (i, v) in t.iter_mut().enumerate() {
+            let y = gk.curve(i as f64 / TONE_N as f64);
+            let (mut lo, mut hi) = (0.0f64, 1.0f64);
+            for _ in 0..40 {
+                let mid = 0.5 * (lo + hi);
+                if g0.curve(mid) < y { lo = mid } else { hi = mid }
+            }
+            *v = 0.5 * (lo + hi);
+        }
+        // gap = the tone slope (floored when the contrast is up), its log made L-Lipschitz (forward
+        // and backward passes): contrast up takes the lower envelope (the narrow mid-grey peak comes
+        // down), contrast down the upper one capped at 1 (the mid-grey dip comes up, the highlights keep their colour)
+        let floor = if gk.k > 1.0 { 1.0 + GAP_FLOOR * (gk.k - 1.0) } else { 0.05 };
+        let mut lg = [0.0; TONE_N + 1];
+        for i in 0..=TONE_N {
+            let (a, b) = (i.saturating_sub(1), (i + 1).min(TONE_N));
+            let d = (t[b] - t[a]) * TONE_N as f64 / (b - a) as f64;
+            lg[i] = d.max(floor).min(3.0).ln();
+        }
+        let step = GAP_LIPSCHITZ / TONE_N as f64;
+        let s = if gk.k > 1.0 { 1.0 } else { -1.0 };
+        for i in 1..=TONE_N {
+            lg[i] = s * (s * lg[i]).min(s * lg[i - 1] + step);
+        }
+        for i in (0..TONE_N).rev() {
+            lg[i] = s * (s * lg[i]).min(s * lg[i + 1] + step);
+        }
+        if gk.k < 1.0 {
+            // a softer print is never more saturated than the standard one
+            lg.iter_mut().for_each(|v| *v = v.min(0.0));
+        }
+        Some(Self { t, lg })
+    }
+
+    /// Remapped mean density and the channel gap gain there.
+    fn at(&self, x: f64) -> (f64, f64) {
+        let f = x.clamp(0.0, 1.0) * TONE_N as f64;
+        let i = (f as usize).min(TONE_N - 1);
+        let w = f - i as f64;
+        (self.t[i] + (self.t[i + 1] - self.t[i]) * w, (self.lg[i] + (self.lg[i + 1] - self.lg[i]) * w).exp())
+    }
 }
 
 impl Stage {
@@ -577,6 +652,13 @@ impl Stage {
         let mut y = [0.0f64; 3];
         for c in 0..3 {
             x[c] = (0.5 + (d[c] + self.shift[c] - self.d_ref) / self.range).clamp(0.0, 1.0);
+        }
+        if let Some(tone) = &self.tone {
+            let xm = (x[0] + x[1] + x[2]) / 3.0;
+            let (xt, gap) = tone.at(xm);
+            x = x.map(|v| (xt + gap * (v - xm)).clamp(0.0, 1.0));
+        }
+        for c in 0..3 {
             y[c] = self.lift + (1.0 - self.lift) * self.curve.curve(x[c]);
         }
         // Chroma-preserving highlights. The sigmoid and its shoulder flatten the density
@@ -918,6 +1000,33 @@ mod tests {
             }
             let slope = |g: &super::Gradation| (g.curve(0.52) - g.curve(0.48)) / 0.04;
             assert!((slope(&g) - slope(&base)).abs() > 0.1 * slope(&base), "mid slope unchanged at c={c}");
+        }
+    }
+
+    #[test]
+    fn contrast_tone_keeps_each_channel_monotone() {
+        let p = crate::params::FrontierModelParams::default();
+        for c in [-1.0f64, -0.5, 0.3, 0.5, 1.0] {
+            let k = if c > 0.0 { 1.0 + super::SLOPE_UP * c } else { 1.0 + super::SLOPE_DOWN * c };
+            let tone = super::Tone::new(k, &p).expect("contrast on");
+            let map = |x: [f64; 3]| {
+                let xm = (x[0] + x[1] + x[2]) / 3.0;
+                let (xt, gap) = tone.at(xm);
+                x.map(|v| xt + gap * (v - xm))
+            };
+            // grey axis = the locked contrast curve's tone, in the contrast-free curve's terms
+            assert!((map([0.5; 3])[0] - 0.5).abs() < 1e-6, "c={c}: mid grey moved");
+            for i in 0..=20 {
+                for j in 0..=20 {
+                    let (a, b) = (i as f64 / 20.0, j as f64 / 20.0);
+                    let mut prev = f64::NEG_INFINITY;
+                    for n in 0..=400 {
+                        let v = map([n as f64 / 400.0, a, b])[0];
+                        assert!(v >= prev - 1e-12, "c={c}: channel fell at x=[{}, {a}, {b}]", n as f64 / 400.0);
+                        prev = v;
+                    }
+                }
+            }
         }
     }
 
