@@ -5738,7 +5738,7 @@ fn build_grain_state(
         include_str!("../../spektrafilm-shaders/wgsl/gaussian_blur_v.wgsl"),
         blur_layout,
     );
-    let blur = if gp.grain_blur > 0.4 {
+    let blur = if gp.grain_blur > 0.1 {
         let sigma = gp.grain_blur.max(0.01);
         let radius = fir_blur_radius(sigma);
         let kernel_size = (2 * radius + 1) as usize;

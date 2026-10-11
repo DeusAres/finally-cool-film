@@ -614,7 +614,7 @@ async function exportFull(ig = false) {
         status(`Esporto ${w}×${h}: tile ${s * cols + c + 1}/${strips * cols}…`);
         const x0 = Math.max(0, tx - EXPORT_PAD), y0 = Math.max(0, ty - EXPORT_PAD);
         const tw = Math.min(w, tx + EXPORT_TILE + EXPORT_PAD) - x0, th = Math.min(h, ty + EXPORT_TILE + EXPORT_PAD) - y0;
-        updateEngine(renderParamsJson(u, false, FILM_FORMAT_MM * Math.max(tw, th) / longSide, { x0, y0, fw: w, fh: h }));
+        updateEngine(renderParamsJson(u, false, FILM_FORMAT_MM * Math.max(tw, th) / longSide, { x0, y0, fw: tw, fh: th }));   // frame_px = the tile's dims: film_format_mm is already scaled to the tile, the engine's grain pitch is film_format_mm / max(frame_px)
         const tile = (tileBuf = tileBuf?.length >= tw * th * 4 ? tileBuf : new Uint8Array(tw * th * 4)).subarray(0, tw * th * 4);
         await renderRegion(frame, x0, y0, tw, th, tile, u);
         const cw = Math.min(EXPORT_TILE, w - tx);

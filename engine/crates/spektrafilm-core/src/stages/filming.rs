@@ -24,6 +24,9 @@ fn print_stage_timing(enabled: bool, stage: &str, start: Instant) {
 }
 
 /// Compute pixel size in micrometers from film format and image dimensions.
+/// Reference pixel pitch of the calibrated grain look: 36 mm / 2000 px.
+pub const GRAIN_REF_PIXEL_UM: f64 = 18.0;
+
 pub fn pixel_size_um(film_format_mm: f32, width: u32, height: u32) -> f32 {
     film_format_mm * 1000.0 / width.max(height) as f32
 }
@@ -469,7 +472,7 @@ pub fn develop(
         let t = Instant::now();
         let (hg, blur_px) = hash_grain_setup(params, film, density_cmy.width, density_cmy.height);
         density_cmy = spektrafilm_model::grain_hash::apply_grain_hash(&density_cmy, &hg);
-        if blur_px > 0.4 {
+        if blur_px > 0.1 {
             density_cmy = backend.gaussian_blur(&density_cmy, blur_px);
         }
         print_stage_timing(stage_timings, "filming_develop.grain_hash", t);
@@ -538,8 +541,23 @@ pub fn hash_grain_setup(
         hg.density_max[c] = (dmax_curves[c] + g.density_min[c]) as f32;
         hg.uniformity[c] = g.uniformity[c] as f32;
     }
-    let cloud_px = g.blur_dye_clouds_um as f64 / pix_um;
-    let blur_px = ((g.blur as f64).powi(2) + cloud_px * cloud_px).sqrt() as f32;
+    // `blur` is calibrated in px of the reference preview (2000 px across a
+    // 36 mm frame = 18 um/px); convert it to um on the film so the blur (and
+    // hence the grain look at a given display size) does not depend on the
+    // render resolution.
+    let blur_um = g.blur as f64 * GRAIN_REF_PIXEL_UM;
+    let blur_um = (blur_um * blur_um + (g.blur_dye_clouds_um as f64).powi(2)).sqrt();
+    let mut blur_px = blur_um / pix_um;
+    // Pixels coarser than the 2000 px reference integrate the film over their
+    // own area (the discrete blur of independent per-pixel counts smooths
+    // less than blur-then-box), so the blur falls off as s^0.47 there instead
+    // of linearly (fitted so a native 1000 px render matches a box-downscaled
+    // 2000 px one). Identity at and above the reference resolution.
+    let s_ref = g.blur as f64;
+    if s_ref > 0.0 && blur_px < s_ref {
+        blur_px = s_ref * (blur_px / s_ref).powf(0.47);
+    }
+    let blur_px = blur_px as f32;
     (hg, blur_px)
 }
 

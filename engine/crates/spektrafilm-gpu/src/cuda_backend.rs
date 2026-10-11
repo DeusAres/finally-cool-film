@@ -1581,7 +1581,7 @@ impl CudaBackend {
                 .arg(&mut *density);
             unsafe { launch.launch(LaunchConfig::for_num_elems(n_pixels)) }?;
         }
-        if gp.grain_blur > 0.4 {
+        if gp.grain_blur > 0.1 {
             let mut out = self.alloc_f32(n_pixels as usize * 3)?;
             self.blur_device(density, scratch, &mut out, width, height, gp.grain_blur)?;
             std::mem::swap(density, &mut out);
