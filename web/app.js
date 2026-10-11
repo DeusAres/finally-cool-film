@@ -47,7 +47,7 @@ const ui = () => ({
   mshift: +$('mshift').value, yshift: +$('yshift').value, black: +$('black').value,
   grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value,
   ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value,
-  ...(V3 ? { hlc: +$('hlc').value, v3dodge: $('v3dodge').checked } : {}),   // v3: snapshotted with the rest (export tiles)
+  ...(V3 ? { hlc: +$('hlc').value, shadows: +$('shadows').value, v3dodge: $('v3dodge').checked } : {}),   // v3: snapshotted with the rest (export tiles)
 });
 // CA slider is quadratic: realistic (subtle) amounts get most of the travel.
 const lensOf = (u) => ({ ca: u.ca * u.ca, vignette: u.vignette, falloff: u.falloff });
@@ -174,7 +174,7 @@ function v3Gain(u, space) {
     photo.dodge = dodgeBase(rgb, w, h, LUMA[space === 'p3' ? 'rec2020' : space]);   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
     log(`v3 dodge base ${w}x${h} median ${photo.dodge.M.toFixed(2)} p99 ${photo.dodge.P.toFixed(2)}`);
   }
-  return dodgeArray(DISPLAY_GAIN_LUT, photo.dodge, { ...dodgeParams(photo.dodge, u.contrast), dodge: u.v3dodge }, u.hlc);
+  return dodgeArray(DISPLAY_GAIN_LUT, photo.dodge, { ...dodgeParams(photo.dodge, u.contrast), dodge: u.v3dodge }, u.hlc, u.shadows);
 }
 const q8 = (v) => Math.round(255 * Math.min(1, Math.max(0, v)));
 
@@ -763,10 +763,14 @@ if (V3) {
   $('v3dodge').addEventListener('change', () => render());
   $('contrast').closest('.row').insertAdjacentHTML('afterend',
     '<div class="row"><label for="hlc">Contrasto luci</label><input type="range" id="hlc" min="-1" max="1" step="0.01" value="0"><output for="hlc"></output></div>');
-  const hlcOut = () => { $('hlc').nextElementSibling.textContent = signPct(+$('hlc').value); };
-  $('hlc').addEventListener('input', () => { hlcOut(); render(); });
-  $('hlc').previousElementSibling.addEventListener('dblclick', () => { $('hlc').value = 0; hlcOut(); render(); });
-  hlcOut();
+  $('hlc').closest('.row').insertAdjacentHTML('afterend',
+    '<div class="row"><label for="shadows">Ombre</label><input type="range" id="shadows" min="0" max="1" step="0.01" value="0"><output for="shadows"></output></div>');
+  for (const [id, fmt] of [['hlc', signPct], ['shadows', pctOff]]) {
+    const out = () => { $(id).nextElementSibling.textContent = fmt(+$(id).value); };
+    $(id).addEventListener('input', () => { out(); render(); });
+    $(id).previousElementSibling.addEventListener('dblclick', () => { $(id).value = 0; out(); render(); });
+    out();
+  }
 }
 
 const crashed = takeCrashMarker();

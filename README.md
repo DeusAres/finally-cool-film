@@ -21,7 +21,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   restituisce il positivo (`io.scan_film` + `scanner.model="frontier"`). Modello inferito: nessun dato misurato sullo
   SP-3000, vedi `eval/FRONTIER.md`.
 - Luci automatiche (v3, `web/lib/dodge.js`, `eval/V3.md`): dodging digitale stile Frontier Hyper Tone, dosato sulla foto e sul
-  contrasto; slider Contrasto luci = contrasto locale dentro le luci. `index.html?v2` = app precedente.
+  contrasto; slider Contrasto luci = contrasto locale dentro le luci; Ombre = schiarisce le zone scure grandi senza toccare il cielo. `index.html?v2` = app precedente.
 - Slider: esposizione (guadagno di scena 2^EV prima della pellicola), contrasto (`frontier.contrast`), alte luci
   (`frontier.highlight`), bianchi (`frontier.whites`), filtri colore dello scanner magenta↔verde e giallo↔blu (`frontier.cmy`), nero (`frontier.black_lift`,
   neutro), texture, chiarezza, grana, halation, aberrazione, vignettatura, falloff, polvere (quantità). Auto = esposizione
