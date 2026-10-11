@@ -71,12 +71,21 @@ export function dodgeParams(d, contrast) {
   return { knee, A: hi, rho };
 }
 
-/** Header + base appended to the input pass's gain array (read by DODGE_WGSL from `at0`). */
-export function dodgeArray(gainLut, d, prm) {
+// Contrasto luci (local contrast inside the highlights): the tones of a bright area that sit below its own
+// base (a cloud's shaded side, grey edges) move by k (L - B), L - B clamped to [-2, 0] EV; the brightest
+// tones (L >= B) never move, so nothing is pushed into the shoulder. Weighted by smoothstep(knee, pv) of
+// both the pixel and its base: mids, shadows and dark objects next to a bright sky are untouched.
+// Hue-safe (one gain on RGB). pv = halfway from the knee to the bright base P.
+const HLC_UP = 0.9, HLC_DOWN = 0.6;
+export const hlcGain = (v) => (v > 0 ? HLC_UP * v : HLC_DOWN * v);
+
+/** Header + base appended to the input pass's gain array (read by dodgeWGSL from `at0`):
+ * [dodge on, base w, base h, knee, A, rho, highlight-contrast k, pivot]. */
+export function dodgeArray(gainLut, d, prm, hlc = 0) {
   const at0 = gainLut.length, out = new Float32Array(at0 + 8 + (d ? d.w * d.h : 0));
   out.set(gainLut);
-  if (d && prm.A > 0) {
-    out.set([1, d.w, d.h, prm.knee, prm.A, prm.rho, 0, 0], at0);
+  if (d) {
+    out.set([prm.dodge && prm.A > 0 ? 1 : 0, d.w, d.h, prm.knee, prm.A, prm.rho, hlcGain(hlc), 0.5 * (prm.knee + d.P)], at0);
     out.set(d.base, at0 + 8);
   }
   return out;
@@ -93,9 +102,17 @@ fn dodgeBaseAt(pos: vec2<f32>) -> f32 {
   let b = mix(${arr}[o + i1.y * W + i0.x], ${arr}[o + i1.y * W + i1.x], f.x);
   return mix(a, b, f.y);
 }
-fn dodge(c: vec3<f32>, pos: vec2<f32>) -> vec3<f32> {
-  if (${arr}[${at0}u] < 0.5) { return c; }
+fn dodge(c0: vec3<f32>, pos: vec2<f32>) -> vec3<f32> {
+  var c = c0;
   let knee = ${arr}[${at0}u + 3u]; let A = ${arr}[${at0}u + 4u]; let rho = ${arr}[${at0}u + 5u];
+  let hk = ${arr}[${at0}u + 6u];
+  if (hk != 0.0) {   // Contrasto luci
+    let pv = max(${arr}[${at0}u + 7u], knee + 0.25);
+    let L = log2(max(dot(c, p.luma.xyz), 1e-6)); let B = dodgeBaseAt(pos);
+    let w = smoothstep(knee, pv, L) * smoothstep(knee, pv, B);
+    c *= exp2(hk * clamp(L - B, -2.0, 0.0) * w);
+  }
+  if (${arr}[${at0}u] < 0.5) { return c; }
   let b = max(dodgeBaseAt(pos), log2(max(dot(c, p.luma.xyz), 1e-6)));
   let e = max(b - knee, 0.0);
   return c * exp2(-A * (1.0 - exp(-rho * e / A)));

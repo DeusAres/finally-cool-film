@@ -168,12 +168,12 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
 /** v3: DISPLAY_GAIN_LUT + the dodging header and base map (base: once per photo, from the AutoSetup thumbnail). */
 function v3Gain(u, space) {
   const on = $('v3dodge')?.checked !== false;
-  if (on && !photo.dodge) {
+  if (!photo.dodge) {
     const raw = photo.preview.raw, { rgb, w, h } = raw ? rawThumb(raw, THUMB_PX) : jpegThumb(photo.preview);
     photo.dodge = dodgeBase(rgb, w, h, LUMA[space]);
     log(`v3 dodge base ${w}x${h} median ${photo.dodge.M.toFixed(2)} p99 ${photo.dodge.P.toFixed(2)}`);
   }
-  return dodgeArray(DISPLAY_GAIN_LUT, on ? photo.dodge : null, on ? dodgeParams(photo.dodge, u.contrast) : null);
+  return dodgeArray(DISPLAY_GAIN_LUT, photo.dodge, { ...dodgeParams(photo.dodge, u.contrast), dodge: on }, +$('hlc').value);
 }
 const q8 = (v) => Math.round(255 * Math.min(1, Math.max(0, v)));
 
@@ -761,6 +761,12 @@ if (V3) {
   $('indoor').closest('.row').insertAdjacentHTML('beforebegin',
     '<div class="row toggle"><label for="v3dodge">Luci auto (v3)</label><input type="checkbox" id="v3dodge" role="switch" checked></div>');
   $('v3dodge').addEventListener('change', () => render());
+  $('contrast').closest('.row').insertAdjacentHTML('afterend',
+    '<div class="row"><label for="hlc">Contrasto luci</label><input type="range" id="hlc" min="-1" max="1" step="0.01" value="0"><output for="hlc"></output></div>');
+  const hlcOut = () => { $('hlc').nextElementSibling.textContent = signPct(+$('hlc').value); };
+  $('hlc').addEventListener('input', () => { hlcOut(); render(); });
+  $('hlc').previousElementSibling.addEventListener('dblclick', () => { $('hlc').value = 0; hlcOut(); render(); });
+  hlcOut();
 }
 
 const crashed = takeCrashMarker();
