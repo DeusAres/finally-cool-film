@@ -757,8 +757,7 @@ syncOutputs();
 const BUILD = '__BUILD__';
 $('ver').textContent = (BUILD.startsWith('__') ? 'dev' : BUILD) + (V3 ? '' : ' · modalità v2');
 if (V3) {
-  // only Esposizione + Contrasto in Luce (+ Interno); a switch to compare with/without the dodging
-  for (const id of ['highlight', 'whites', 'black']) $(id).closest('.row').hidden = true;
+  // a switch to compare with/without the dodging (Alte luci / Bianchi / Nero stay)
   $('indoor').closest('.row').insertAdjacentHTML('beforebegin',
     '<div class="row toggle"><label for="v3dodge">Luci auto (v3)</label><input type="checkbox" id="v3dodge" role="switch" checked></div>');
   $('v3dodge').addEventListener('change', () => render());

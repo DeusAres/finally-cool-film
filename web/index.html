@@ -15,10 +15,12 @@
   :root { --bg: #0e0d0c; --fg: #efe9e1; --muted: #8f877d; --accent: #e8a33d; --line: #2a2622; --card: #171513; }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   [hidden] { display: none !important; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+  html { background: var(--card); }   /* whatever iOS shows past the body (home-indicator area) matches the bottom bar */
+  html, body { margin: 0; height: 100%; color: var(--fg);
          font: 15px/1.35 -apple-system, system-ui, sans-serif; overscroll-behavior: none; }
   /* dynamic viewport height (iOS: 100% did not follow the real screen); the bottom safe area is filled by #status */
-  body { display: flex; flex-direction: column; height: 100dvh; padding: env(safe-area-inset-top) 0 0; }
+  body { position: fixed; inset: 0; height: auto; display: flex; flex-direction: column; background: var(--bg);
+         padding: env(safe-area-inset-top) 0 0; }
   header { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 30px; padding: 0 12px; flex: none;
          font-family: "Silkscreen", "Press Start 2P", ui-monospace, Menlo, monospace; }
   header h1 { font: 400 13px/1 "Silkscreen", ui-monospace, Menlo, monospace; margin: 0; letter-spacing: .04em; white-space: nowrap;
