@@ -209,6 +209,10 @@ pub struct FrontierParams {
     pub saturation: f32,
     /// Highlight shoulder, 0 = standard (`shoulder *= 1 + highlight`).
     pub highlight: f32,
+    /// Whites key, -1..1, 0 = standard: shifts only the top of the density range (above the
+    /// shoulder knee) on the pixel's mean density; - pulls the brightest tones out of the shoulder
+    /// (more detail, lower white), + opens them towards white (white point untouched, no clip).
+    pub whites: f32,
     /// 0..1, raises black equally in R, G, B (scanner space, hue-neutral).
     pub black_lift: f32,
     /// AutoSetup result `[density_ev, c, m, y]` (set by the app from
@@ -226,6 +230,7 @@ impl Default for FrontierParams {
             contrast: 0.0,
             saturation: 1.0,
             highlight: 0.0,
+            whites: 0.0,
             black_lift: 0.0,
             auto: [0.0; 4],
             model: FrontierModelParams::default(),

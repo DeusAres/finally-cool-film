@@ -22,7 +22,7 @@ Principle: colour and tone come from physics (film model + Frontier scanner). No
 - Kept: lens (CA/vignette/falloff), chroma NR, Texture, Chiarezza, grain (engine film_render.grain, rng 'hash', not post-scan), dust, export tiling/jpegli, IG, A/B, log.
 - Removed: castGains, readTransfer/measured inverse, SCAN_PTS, scanLevels, greyBalance, scan.js inversion,
   GOLD toning, PRINT look + Stampa slider, skyHue, vibrance, TOE tint, FADE_TINT.
-- Slider mapping: Contrasto→frontier.contrast, Alte luci→frontier.highlight, Magenta/Giallo filtri→frontier.cmy,
+- Slider mapping: Contrasto→frontier.contrast, Alte luci→frontier.highlight, Bianchi→frontier.whites, Magenta/Giallo filtri→frontier.cmy,
   Nero→frontier.black_lift, Auto→engine auto exposure + frontier_auto_setup.
 - Colour constants (matrices, luma weights per primaries, transfer functions) live once in `lib/color.js`;
   WGSL gets them by string interpolation from there.

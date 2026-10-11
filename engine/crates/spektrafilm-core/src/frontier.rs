@@ -68,6 +68,10 @@ const GAP_FLOOR: f64 = 0.15;
 /// (d x'_c / d x_c >= T'/3 + gap (2/3 - 2 L/9), with |x_c - mean| <= 2/3).
 const GAP_LIPSCHITZ: f64 = 2.5;
 const TONE_N: usize = 256;
+/// Whites key: max shift of the normalized density (`WHITES_SHIFT`), acting from `WHITES_REACH`
+/// below the shoulder knee up to the top of the range.
+const WHITES_SHIFT: f64 = 0.12;
+const WHITES_REACH: f64 = 0.1;
 
 const IDENTITY: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 const LUMA: [f64; 3] = [0.2126, 0.7152, 0.0722];
@@ -360,6 +364,8 @@ impl FrontierBase {
                 (g.curve(0.52) - g.curve(0.48)) / 0.04
             },
             sat: (m.saturation * keys.saturation as f64).max(0.0),
+            whites: (keys.whites as f64).clamp(-1.0, 1.0),
+            whites_x0: Gradation::solve(m.gradation_a, sh, m).knee_x() - WHITES_REACH,
             out: IDENTITY,
         }
     }
@@ -574,6 +580,17 @@ pub struct Stage {
     out: [[f64; 3]; 3],
     /// Contrast key (None at 0).
     tone: Option<Tone>,
+    /// Whites key and the normalized density where it starts.
+    whites: f64,
+    whites_x0: f64,
+}
+
+/// Whites key: normalized density shift for a pixel of mean density `xm`, 0 below `x0`.
+/// - : the whole top comes down (white too); + : a bump that is 0 at the top (no new clip).
+fn whites_shift(w: f64, x0: f64, xm: f64) -> f64 {
+    let t = ((xm - x0) / (1.0 - x0)).clamp(0.0, 1.0);
+    let s = t * t * (3.0 - 2.0 * t);
+    w * WHITES_SHIFT * if w < 0.0 { s } else { 4.0 * s * (1.0 - t) }
 }
 
 /// Contrast key as a remap of the normalized density, `T = curve0^-1 . curve_locked`: the locked
@@ -657,6 +674,12 @@ impl Stage {
             let xm = (x[0] + x[1] + x[2]) / 3.0;
             let (xt, gap) = tone.at(xm);
             x = x.map(|v| (xt + gap * (v - xm)).clamp(0.0, 1.0));
+        }
+        if self.whites != 0.0 {
+            // one shift for the three channels (hue kept), from the pixel's mean density; its slope
+            // stays far below 3, so every channel stays non-decreasing in its own density
+            let d = whites_shift(self.whites, self.whites_x0, (x[0] + x[1] + x[2]) / 3.0);
+            x = x.map(|v| (v + d).clamp(0.0, 1.0));
         }
         for c in 0..3 {
             y[c] = self.lift + (1.0 - self.lift) * self.curve.curve(x[c]);
@@ -1026,6 +1049,28 @@ mod tests {
                         prev = v;
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn whites_key_moves_only_the_top_and_keeps_channels_monotone() {
+        let p = crate::params::FrontierModelParams::default();
+        let x0 = super::Gradation::solve(p.gradation_a, p.shoulder_sharpness, &p).knee_x() - super::WHITES_REACH;
+        assert!(x0 > 0.55 && x0 < 0.9, "knee x0={x0}");
+        for w in [-1.0f64, -0.5, 0.5, 1.0] {
+            assert_eq!(super::whites_shift(w, x0, 0.5), 0.0, "mid grey moved");
+            assert_eq!(super::whites_shift(w, x0, x0), 0.0);
+            let top = super::whites_shift(w, x0, 1.0);
+            if w > 0.0 { assert!(top.abs() < 1e-12, "white moved at w={w}") } else { assert!(top < 0.0) }
+            assert!(super::whites_shift(w, x0, 0.5 * (x0 + 1.0)) * w > 0.0, "wrong direction at w={w}");
+            // channel c: x_c + shift(mean); the mean moves by 1/3 of x_c
+            let mut prev = f64::NEG_INFINITY;
+            for n in 0..=1000 {
+                let xc = n as f64 / 1000.0;
+                let v = xc + super::whites_shift(w, x0, (xc + 2.0 * 0.9) / 3.0);
+                assert!(v >= prev, "channel fell at w={w} xc={xc}");
+                prev = v;
             }
         }
     }

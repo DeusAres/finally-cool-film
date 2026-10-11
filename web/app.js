@@ -38,7 +38,7 @@ let rendering = false, dirty = false, exporting = false, renderCount = 0;
 // ---------- params ----------
 
 const ui = () => ({
-  ev: +$('ev').value, contrast: +$('contrast').value, highlight: +$('highlight').value,
+  ev: +$('ev').value, contrast: +$('contrast').value, highlight: +$('highlight').value, whites: +$('whites').value,
   mshift: +$('mshift').value, yshift: +$('yshift').value, black: +$('black').value,
   grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value,
   ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value,
@@ -85,7 +85,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     scanner: {
       model: 'frontier', black_correction: false, white_correction: false, unsharp_mask: [0, 0],
       frontier: {
-        cmy: frontierCmy(u), contrast: u.contrast, highlight: u.highlight, black_lift: u.black,
+        cmy: frontierCmy(u), contrast: u.contrast, highlight: u.highlight, whites: u.whites, black_lift: u.black,
         auto: photo.auto,
       },
     },
@@ -690,7 +690,7 @@ const pctOff = (v) => (v === 0 ? 'off' : pct(v));
 const signPct = (v) => `${sign(v)}${pct(v)}`;
 const FORMAT = {
   ev: (v) => `${sign(v)}${v.toFixed(1)}`,
-  contrast: signPct, highlight: signPct,
+  contrast: signPct, highlight: signPct, whites: signPct,
   mshift: (v) => `${sign(v)}${v}`, yshift: (v) => `${sign(v)}${v}`,
   grain: mult2, halation: mult,
   ca: pctOff, vignette: pctOff,
@@ -698,7 +698,7 @@ const FORMAT = {
   texture: signPct, clarity: pctOff, dust: pctOff, black: pctOff,
 };
 // v2-calib: contrast / highlight / black defaults are the lab's standard (0); the old look defaults (Contrasto .35, Alte luci .6, Nero .15) are gone with their stages.
-const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, mshift: 0, yshift: 0, black: 0, grain: 1, halation: 1, texture: 0.2, clarity: 0.1, ca: 1, vignette: 0.65, falloff: 0.4, dust: 0.27 };
+const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, whites: 0, mshift: 0, yshift: 0, black: 0, grain: 1, halation: 1, texture: 0.2, clarity: 0.1, ca: 1, vignette: 0.65, falloff: 0.4, dust: 0.27 };
 const GRAIN_UNIT = 0.625;   // slider 1× -> engine amount (= old slider 0.25 / old default 0.4)
 const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }
