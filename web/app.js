@@ -753,8 +753,8 @@ syncOutputs();
 
 // Build stamp: replaced at deploy (scripts/stamp-version.sh) with the version and
 // its time; it lives in app.js itself, so a stale cached app.js shows a stale stamp.
-const BUILD = '__BUILD__';
-$('ver').textContent = (BUILD.startsWith('__') ? 'dev' : BUILD) + (V3 ? ' · v3 debug' : '');
+const BUILD = '__BUILD__', BUILD_V3 = '__BUILD_V3__';
+$('ver').textContent = V3 ? (BUILD_V3.startsWith('__') ? 'dev · v3 debug' : BUILD_V3) : (BUILD.startsWith('__') ? 'dev' : BUILD);
 if (V3) {
   // only Esposizione + Contrasto in Luce (+ Interno); a switch to compare with/without the dodging
   for (const id of ['highlight', 'whites', 'black']) $(id).closest('.row').hidden = true;

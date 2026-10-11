@@ -61,7 +61,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## Versione
 
-Il numero mostrato nell'app (`v2.0 · dd/mm hh:mm`, es. `v2.0 · 09/10 14:30`) viene dal file `VERSION`: si alza la seconda cifra a ogni rilascio
+Il numero mostrato nell'app (`v2.0 · dd/mm hh:mm`, es. `v2.0 · 09/10 14:30`) viene dal file `VERSION` (la pagina `debugv3.html` mostra `VERSION_V3`, es. `v3.1 debug · …`): si alza la seconda cifra a ogni rilascio
 (v1.1, v1.2…) e la prima per i cambi grossi. L'id del commit resta solo nei parametri anti-cache dei file.
 
 ## Build locale
