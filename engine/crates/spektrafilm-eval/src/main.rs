@@ -243,7 +243,9 @@ fn image_cmd(args: &Args) -> Result<(), String> {
         let ev = ((metered.clamp(-2.0, 2.5)) * 10.0).round() / 10.0;   // clamp then round: as the app's slider
         let auto = renderer.apply_autosetup(gained(&scaled(&thumb_b, (ev - under).exp2()), gains)).ok_or("AutoSetup needs a negative film")?;
         eprintln!("exposure: baseline {} EV, auto ev {ev}, Interno -{under}, autosetup [density_ev, c, m, y] = {auto:?}", num("baseline"));
-        scene = gained(&scaled(&scene, (ev - under + num("baseline")).exp2()), gains);
+        // --ev-offset: the app's Esposizione moved after Auto (AutoSetup stays at the auto exposure)
+        let off: f64 = args.0.get("ev-offset").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        scene = gained(&scaled(&scene, (ev + off - under + num("baseline")).exp2()), gains);
     } else if let Some((under, gains)) = interno {
         // no meta: the .npy as is, thinned by U and lit by the gains; AutoSetup on that thin negative
         scene = gained(&scaled(&scene, (-under).exp2()), gains);
