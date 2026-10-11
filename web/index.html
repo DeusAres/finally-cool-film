@@ -57,7 +57,16 @@
   .row { display: grid; grid-template-columns: 92px 1fr 44px; align-items: center; gap: 8px; min-height: 34px; }
   .row.check { grid-template-columns: 1fr; }
   .row.check label { display: flex; align-items: center; gap: 8px; color: var(--fg); }
-  .row.check input { accent-color: var(--accent); width: 18px; height: 18px; }
+  .row.toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .row.toggle label { color: var(--fg); }
+  .row.toggle input { appearance: none; -webkit-appearance: none; flex: none; width: 46px; height: 28px; margin: 0;
+    border-radius: 999px; background: var(--line); position: relative; cursor: pointer; transition: background .15s; }
+  .row.toggle input::after { content: ''; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px;
+    border-radius: 50%; background: #fff; transition: transform .15s; }
+  .row.toggle input:checked { background: var(--accent); }
+  .row.toggle input:checked::after { transform: translateX(18px); }
+  .row.act { display: flex; justify-content: flex-end; }
+  .row.act .btn { min-width: 96px; }
   .section { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
          padding: 8px 0 2px; }
   .row label { font-size: 14px; color: var(--muted); }
@@ -116,18 +125,18 @@
   <div class="filebtns">
     <button class="btn wide" id="newPhoto">Carica foto</button>
     <div class="wide row2">
-      <button class="btn ghost" id="auto" disabled>Auto</button>
       <button class="btn" id="export" disabled>Esporta</button>
       <button class="btn ghost" id="exportIG" disabled hidden>IG</button>
     </div>
   </div>
   </div>
   <div class="pane" data-pane="light" role="tabpanel" hidden>
+  <div class="row act"><button class="btn ghost" id="auto" disabled>Auto</button></div>
   <div class="row"><label for="ev">Esposizione</label><input type="range" id="ev" min="-2" max="2.5" step="0.1" value="0"><output for="ev"></output></div>
   <div class="row"><label for="contrast">Contrasto</label><input type="range" id="contrast" min="-1" max="1" step="0.01" value="0"><output for="contrast"></output></div>
   <div class="row"><label for="highlight">Alte luci</label><input type="range" id="highlight" min="-1" max="1" step="0.01" value="0"><output for="highlight"></output></div>
   <div class="row"><label for="black">Nero</label><input type="range" id="black" min="0" max="1" step="0.01" value="0"><output for="black"></output></div>
-  <div class="row check"><label><input type="checkbox" id="indoor"> Interno / luce scarsa (negativo sottile)</label></div>
+  <div class="row toggle"><label for="indoor">Interno / luce scarsa</label><input type="checkbox" id="indoor" role="switch"></div>
   </div>
   <div class="pane" data-pane="color" role="tabpanel" hidden>
   <div class="row"><label for="mshift">Magenta ↔ Verde</label><input type="range" id="mshift" min="-30" max="30" step="1" value="0"><output for="mshift"></output></div>
@@ -147,7 +156,7 @@
   <div class="pane" data-pane="dust" role="tabpanel" hidden>
   <div class="row"><label for="dust">Quantità</label><input type="range" id="dust" min="0" max="1" step="0.01" value="0.27"><output for="dust"></output></div>
   <div class="row check"><label><span class="chip" id="reseed">Rimescola</span></label></div>
-  <div class="row check"><label><input type="checkbox" id="border" checked> Bordo bianco (1% del lato lungo)</label></div>
+  <div class="row toggle"><label for="border">Bordo bianco (1% del lato lungo)</label><input type="checkbox" id="border" role="switch" checked></div>
   </div>
 </div>
 <nav id="tabs" role="tablist">
