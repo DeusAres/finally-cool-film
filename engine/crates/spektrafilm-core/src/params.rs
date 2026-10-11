@@ -393,6 +393,40 @@ pub struct GrainParams {
     /// (upstream n_channels==1 has a single emulsion); not user-facing.
     #[serde(default)]
     pub monochrome: bool,
+    /// Sampler: `"hash"` (default; counter-based per-pixel RNG keyed by
+    /// seed/layer/sub-layer/global px, runs on the GPU and is tile-seamless)
+    /// or `"numpy"` (sequential MT19937, Python parity, CPU only).
+    #[serde(default = "default_grain_rng")]
+    pub rng: String,
+    /// Grain strength multiplier (hash sampler): scales the deviation of the
+    /// grainy density from the clean density. 0 = no grain.
+    #[serde(default = "default_one_f64")]
+    pub amount: f64,
+    /// Position of this region's top-left pixel in the full frame.
+    #[serde(default)]
+    pub origin_px: [f64; 2],
+    /// Full-frame size in pixels; `[0, 0]` = this image is the whole frame.
+    /// Sets the physical pixel pitch (µm on the film format).
+    #[serde(default)]
+    pub frame_px: [f64; 2],
+    /// Per-photo seed.
+    #[serde(default)]
+    pub seed: u64,
+}
+
+fn default_grain_rng() -> String {
+    "hash".into()
+}
+
+impl GrainParams {
+    /// True when the counter-based sampler is selected.
+    pub fn is_hash(&self) -> bool {
+        self.rng != "numpy"
+    }
+    /// Grain is applied at all (`active` and, for the hash sampler, amount > 0).
+    pub fn applies(&self) -> bool {
+        self.active && (!self.is_hash() || self.amount > 0.0)
+    }
 }
 
 fn default_02_f64() -> f64 {
@@ -426,6 +460,11 @@ impl Default for GrainParams {
             micro_structure: [0.2, 30.0],
             n_sub_layers: 1,
             monochrome: false,
+            rng: default_grain_rng(),
+            amount: 1.0,
+            origin_px: [0.0, 0.0],
+            frame_px: [0.0, 0.0],
+            seed: 0,
         }
     }
 }

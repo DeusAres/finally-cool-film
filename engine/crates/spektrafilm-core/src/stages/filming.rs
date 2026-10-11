@@ -466,7 +466,15 @@ pub fn develop(
 
     // Grain
     let grain = &params.film_render.grain;
-    if grain.active {
+    if grain.applies() && grain.is_hash() {
+        let t = Instant::now();
+        let (hg, blur_px) = hash_grain_setup(params, film, density_cmy.width, density_cmy.height);
+        density_cmy = spektrafilm_model::grain_hash::apply_grain_hash(&density_cmy, &hg);
+        if blur_px > 0.4 {
+            density_cmy = backend.gaussian_blur(&density_cmy, blur_px);
+        }
+        print_stage_timing(stage_timings, "filming_develop.grain_hash", t);
+    } else if grain.active && !grain.is_hash() {
         let t = Instant::now();
         // Use f64 throughout — Python reads these from JSON as f64; the
         // f32 storage in `GrainParams` would otherwise truncate to ~7
@@ -493,6 +501,50 @@ pub fn develop(
     }
 
     density_cmy
+}
+
+/// Inputs of the counter-based grain for an `image_w x image_h` region, plus
+/// the dye-cloud blur sigma in px of that region. The pixel pitch comes from
+/// `frame_px` (the whole frame) when given, so tiles/previews/exports share it.
+/// Shared by the CPU stage and the GPU-resident chain.
+pub fn hash_grain_setup(
+    params: &RuntimeParams,
+    film: &Profile,
+    image_w: u32,
+    image_h: u32,
+) -> (spektrafilm_model::grain_hash::HashGrain, f32) {
+    let g = &params.film_render.grain;
+    let (fw, fh) = if g.frame_px[0] >= 1.0 && g.frame_px[1] >= 1.0 {
+        (g.frame_px[0] as u32, g.frame_px[1] as u32)
+    } else {
+        (image_w, image_h)
+    };
+    let pix_um = pixel_size_um(params.camera.film_format_mm, fw, fh) as f64;
+    let n_sub = g.n_sub_layers.max(1);
+    let norm = spektrafilm_model::density_curves::normalize_density_curves_f64(&film.density_curves_f64());
+    let dmax_curves = spektrafilm_model::density_curves::max_density_f64(&norm);
+    let mut hg = spektrafilm_model::grain_hash::HashGrain {
+        seed: g.seed,
+        origin: [g.origin_px[0].max(0.0).round() as u32, g.origin_px[1].max(0.0).round() as u32],
+        n_sub_layers: n_sub,
+        monochrome: g.monochrome,
+        density_min: [0.0; 3],
+        density_max: [0.0; 3],
+        n_particles: [0.0; 3],
+        uniformity: [0.0; 3],
+        micro_sigma: g.micro_structure[0].max(0.0),
+        amount: g.amount as f32,
+    };
+    for c in 0..3 {
+        let area = g.agx_particle_area_um2 * g.agx_particle_scale[c];
+        hg.n_particles[c] = ((pix_um * pix_um / area) / n_sub as f64) as f32;
+        hg.density_min[c] = g.density_min[c] as f32;
+        hg.density_max[c] = (dmax_curves[c] + g.density_min[c]) as f32;
+        hg.uniformity[c] = g.uniformity[c] as f32;
+    }
+    let cloud_px = g.blur_dye_clouds_um as f64 / pix_um;
+    let blur_px = ((g.blur as f64).powi(2) + cloud_px * cloud_px).sqrt() as f32;
+    (hg, blur_px)
 }
 
 /// Full filming stage: expose + develop.

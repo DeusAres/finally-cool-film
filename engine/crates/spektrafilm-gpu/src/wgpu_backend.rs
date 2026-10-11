@@ -5608,68 +5608,129 @@ fn build_grain_state(
 ) -> GrainState {
     let n_pixels = (width as usize) * (height as usize);
 
-    let grain_pipe = backend.cached_pipeline(
-        include_str!("../../spektrafilm-shaders/wgsl/grain.wgsl"),
-        &[
-            wgpu::BufferBindingType::Uniform,
-            wgpu::BufferBindingType::Storage { read_only: false },
-        ],
-    );
-    #[repr(C)]
-    #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-    struct GrainParams {
-        n_pixels: u32,
-        base_seed: u32,
-        n_sub_layers: u32,
-        monochrome: u32,
-        density_min: [f32; 4],
-        density_max: [f32; 4],
-        n_particles_per_pixel: [f32; 4],
-        grain_uniformity: [f32; 4],
-    }
-    let params = GrainParams {
-        n_pixels: n_pixels as u32,
-        base_seed: gp.base_seed,
-        n_sub_layers: gp.n_sub_layers.max(1),
-        monochrome: gp.monochrome as u32,
-        density_min: [gp.density_min[0], gp.density_min[1], gp.density_min[2], 0.0],
-        density_max: [gp.density_max[0], gp.density_max[1], gp.density_max[2], 0.0],
-        n_particles_per_pixel: [
-            gp.n_particles_per_pixel[0],
-            gp.n_particles_per_pixel[1],
-            gp.n_particles_per_pixel[2],
-            0.0,
-        ],
-        grain_uniformity: [
-            gp.grain_uniformity[0],
-            gp.grain_uniformity[1],
-            gp.grain_uniformity[2],
-            0.0,
-        ],
-    };
-    let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
-        label: Some("grain_params"),
-        contents: bytemuck::bytes_of(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
-    let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("grain_bg"),
-        layout: &grain_pipe.layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: params_buf.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: buf_a.as_entire_binding(),
-            },
-        ],
-    });
-    let grain_dispatch = DispatchJob {
-        _params_buf: params_buf,
-        pipeline: grain_pipe,
-        bg,
+    let grain_dispatch = if let Some(h) = gp.hash.as_ref() {
+        let grain_pipe = backend.cached_pipeline(
+            include_str!("../../spektrafilm-shaders/wgsl/grain_hash.wgsl"),
+            &[
+                wgpu::BufferBindingType::Uniform,
+                wgpu::BufferBindingType::Storage { read_only: false },
+            ],
+        );
+        #[repr(C)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+        struct HashParams {
+            width: u32,
+            height: u32,
+            n_sub_layers: u32,
+            monochrome: u32,
+            seed_lo: u32,
+            seed_hi: u32,
+            origin_x: u32,
+            origin_y: u32,
+            density_min: [f32; 4],
+            density_max: [f32; 4],
+            n_particles: [f32; 4],
+            uniformity: [f32; 4],
+            micro_sigma: f32,
+            amount: f32,
+            _pad: [f32; 2],
+        }
+        let v4 = |a: [f32; 3]| [a[0], a[1], a[2], 0.0];
+        let params = HashParams {
+            width,
+            height,
+            n_sub_layers: gp.n_sub_layers.max(1),
+            monochrome: gp.monochrome as u32,
+            seed_lo: h.seed as u32,
+            seed_hi: (h.seed >> 32) as u32,
+            origin_x: h.origin[0],
+            origin_y: h.origin[1],
+            density_min: v4(gp.density_min),
+            density_max: v4(gp.density_max),
+            n_particles: v4(gp.n_particles_per_pixel),
+            uniformity: v4(gp.grain_uniformity),
+            micro_sigma: h.micro_sigma,
+            amount: h.amount,
+            _pad: [0.0; 2],
+        };
+        let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
+            label: Some("grain_hash_params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("grain_hash_bg"),
+            layout: &grain_pipe.layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: buf_a.as_entire_binding() },
+            ],
+        });
+        DispatchJob { _params_buf: params_buf, pipeline: grain_pipe, bg }
+    } else {
+        let grain_pipe = backend.cached_pipeline(
+            include_str!("../../spektrafilm-shaders/wgsl/grain.wgsl"),
+            &[
+                wgpu::BufferBindingType::Uniform,
+                wgpu::BufferBindingType::Storage { read_only: false },
+            ],
+        );
+        #[repr(C)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+        struct GrainParams {
+            n_pixels: u32,
+            base_seed: u32,
+            n_sub_layers: u32,
+            monochrome: u32,
+            density_min: [f32; 4],
+            density_max: [f32; 4],
+            n_particles_per_pixel: [f32; 4],
+            grain_uniformity: [f32; 4],
+        }
+        let params = GrainParams {
+            n_pixels: n_pixels as u32,
+            base_seed: gp.base_seed,
+            n_sub_layers: gp.n_sub_layers.max(1),
+            monochrome: gp.monochrome as u32,
+            density_min: [gp.density_min[0], gp.density_min[1], gp.density_min[2], 0.0],
+            density_max: [gp.density_max[0], gp.density_max[1], gp.density_max[2], 0.0],
+            n_particles_per_pixel: [
+                gp.n_particles_per_pixel[0],
+                gp.n_particles_per_pixel[1],
+                gp.n_particles_per_pixel[2],
+                0.0,
+            ],
+            grain_uniformity: [
+                gp.grain_uniformity[0],
+                gp.grain_uniformity[1],
+                gp.grain_uniformity[2],
+                0.0,
+            ],
+        };
+        let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
+            label: Some("grain_params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("grain_bg"),
+            layout: &grain_pipe.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buf_a.as_entire_binding(),
+                },
+            ],
+        });
+        DispatchJob {
+            _params_buf: params_buf,
+            pipeline: grain_pipe,
+            bg,
+        }
     };
 
     // Optional post-blur: blur buf_a → buf_a in place (H writes mid=buf_b,
@@ -5855,6 +5916,21 @@ mod scan_lut_shader_tests {
     #[test]
     fn scan_lut_wgsl_validates() {
         let src = include_str!("../../spektrafilm-shaders/wgsl/scan_lut.wgsl");
+        let module = wgpu::naga::front::wgsl::parse_str(src).expect("wgsl parse");
+        wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("wgsl validate");
+    }
+}
+
+#[cfg(test)]
+mod grain_hash_shader_tests {
+    #[test]
+    fn grain_hash_wgsl_validates() {
+        let src = include_str!("../../spektrafilm-shaders/wgsl/grain_hash.wgsl");
         let module = wgpu::naga::front::wgsl::parse_str(src).expect("wgsl parse");
         wgpu::naga::valid::Validator::new(
             wgpu::naga::valid::ValidationFlags::all(),

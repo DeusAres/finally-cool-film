@@ -1147,7 +1147,7 @@ impl Pipeline {
         // `apply_grain_to_density`. The GPU uses normal-approximation
         // sampling; CPU does the same whenever λ > 30 / var > 9, which is
         // the typical regime for ≥ 1 MP images.
-        let grain = if self.params.film_render.grain.active {
+        let grain = if self.params.film_render.grain.applies() {
             let pix_um = stages::filming::pixel_size_um(
                 self.params.camera.film_format_mm,
                 image.width,
@@ -1170,6 +1170,34 @@ impl Pipeline {
             for c in 0..3 {
                 density_max[c] = dmax_curves[c] + g.density_min[c] as f32;
             }
+            let hash_setup = if g.is_hash() {
+                Some(stages::filming::hash_grain_setup(
+                    &self.params,
+                    &self.film,
+                    image.width,
+                    image.height,
+                ))
+            } else {
+                None
+            };
+            if let Some((hg, blur_px)) = hash_setup {
+                Some(spektrafilm_gpu::GrainGpuParams {
+                    density_min: hg.density_min,
+                    density_max: hg.density_max,
+                    n_particles_per_pixel: hg.n_particles,
+                    grain_uniformity: hg.uniformity,
+                    n_sub_layers: hg.n_sub_layers,
+                    base_seed: 0,
+                    grain_blur: blur_px,
+                    monochrome: hg.monochrome,
+                    hash: Some(spektrafilm_gpu::GrainHashGpu {
+                        seed: hg.seed,
+                        origin: hg.origin,
+                        micro_sigma: hg.micro_sigma,
+                        amount: hg.amount,
+                    }),
+                })
+            } else {
             Some(spektrafilm_gpu::GrainGpuParams {
                 density_min: [
                     g.density_min[0] as f32,
@@ -1187,7 +1215,9 @@ impl Pipeline {
                 base_seed: 0,
                 grain_blur: g.blur,
                 monochrome: g.monochrome,
+                hash: None,
             })
+            }
         } else {
             None
         };

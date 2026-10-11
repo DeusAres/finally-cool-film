@@ -331,6 +331,22 @@ pub struct GrainGpuParams {
     /// One shared noise field across all channels (B&W single emulsion)
     /// instead of independent per-channel RNG streams.
     pub monochrome: bool,
+    /// `rng: "hash"` counter-based sampler (`grain_hash.wgsl`). When set the
+    /// WGSL backend runs it instead of the legacy normal-approx kernel
+    /// (`base_seed`, `monochrome`, `density_*`, `n_particles_per_pixel` and
+    /// `grain_uniformity` are shared; `grain_blur` is the dye-cloud sigma in
+    /// px). The CUDA backend ignores this and runs the legacy kernel.
+    pub hash: Option<GrainHashGpu>,
+}
+
+/// Extra inputs of the counter-based grain (see `spektrafilm_model::grain_hash`).
+#[derive(Debug, Clone, Copy)]
+pub struct GrainHashGpu {
+    pub seed: u64,
+    /// Region origin in the full frame (global px = origin + local).
+    pub origin: [u32; 2],
+    pub micro_sigma: f32,
+    pub amount: f32,
 }
 
 /// Output gamut compression parameters for the GPU-resident per-pixel pass.
