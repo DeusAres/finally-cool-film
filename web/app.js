@@ -91,8 +91,9 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     },
     film_render: {
       // Grain is the engine's (rng 'hash': a pure function of seed + frame position, see eval/GRAIN.md).
+      // amount 1 = the calibrated Gold 200 grain, reached at the default slider (DEFAULTS.grain).
       grain: {
-        active: !noGrain && u.grain > 0, rng: 'hash', amount: u.grain * grainFactor(), seed: photo.grainSeed,
+        active: !noGrain && u.grain > 0, rng: 'hash', amount: u.grain / DEFAULTS.grain * grainFactor(), seed: photo.grainSeed,
         origin_px: region ? [region.x0, region.y0] : [0, 0], frame_px: region ? [region.fw, region.fh] : [photo.preview.w, photo.preview.h],
       },
       // v2-calib: strength comes from the profile's antihalation; halation_amount is a multiplier on it (Halation slider).
