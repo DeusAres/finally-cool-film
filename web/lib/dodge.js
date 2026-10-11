@@ -11,6 +11,9 @@
 // median + head(contrast): the higher the contrast, the earlier the scanner shoulder, the more dodging.
 
 const DODGE_R = 0.08, DODGE_EPS = 1.0, DODGE_KNEE = 0.5, DODGE_RHO = 0.8, DODGE_PCT = 0.99;
+/** Statistics only over lit pixels (black letterbox / night: the median must not sit on the floor);
+ * below DODGE_MIN_LIT of lit pixels nothing is dodged; the shift never exceeds DODGE_MAX_EV. */
+const DODGE_LIT_EV = -12, DODGE_MIN_LIT = 0.1, DODGE_MAX_EV = 3;
 /** EV above the median the bright base may sit at, by contrast (tuned on the samples, eval/V3.md). */
 const head = (c) => (c >= 0 ? 2.6 - 1.2 * c : 2.6 - 1.5 * c);
 
@@ -54,15 +57,16 @@ export function dodgeBase(rgb, w, h, luma) {
   const L = new Float32Array(w * h);
   for (let i = 0, j = 0; i < w * h; i++, j += 3) L[i] = Math.log2(Math.max(1e-6, luma[0] * rgb[j] + luma[1] * rgb[j + 1] + luma[2] * rgb[j + 2]));
   const base = guided(L, w, h, Math.max(1, Math.round(DODGE_R * Math.max(w, h))), DODGE_EPS);
-  const s = Float32Array.from(base).sort();
+  const s = Float32Array.from(base.filter((_, i) => L[i] > DODGE_LIT_EV)).sort();
+  if (s.length < DODGE_MIN_LIT * w * h) return { w, h, base, M: 0, P: 0, none: true };
   return { w, h, base, M: s[Math.floor(0.5 * (s.length - 1))], P: s[Math.floor(DODGE_PCT * (s.length - 1))] };
 }
 
 /** { knee, A, rho } for a base and the Contrasto key (A = 0: nothing to dodge). */
 export function dodgeParams(d, contrast) {
   const knee = d.M + DODGE_KNEE, rho = DODGE_RHO, e = Math.max(d.P - knee, 1e-6);
-  const target = Math.min(d.P - (d.M + head(contrast)), 0.97 * rho * e);
-  if (!(target > 0)) return { knee, A: 0, rho };
+  const target = Math.min(d.P - (d.M + head(contrast)), 0.97 * rho * e, DODGE_MAX_EV);
+  if (d.none || !(target > 0)) return { knee, A: 0, rho };
   let lo = target, hi = 50 * target;   // A (1 - exp(-rho e / A)) = target, increasing in A
   for (let i = 0; i < 60; i++) {
     const mid = 0.5 * (lo + hi);

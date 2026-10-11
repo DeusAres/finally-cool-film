@@ -47,6 +47,7 @@ const ui = () => ({
   mshift: +$('mshift').value, yshift: +$('yshift').value, black: +$('black').value,
   grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value,
   ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value,
+  ...(V3 ? { hlc: +$('hlc').value, v3dodge: $('v3dodge').checked } : {}),   // v3: snapshotted with the rest (export tiles)
 });
 // CA slider is quadratic: realistic (subtle) amounts get most of the travel.
 const lensOf = (u) => ({ ca: u.ca * u.ca, vignette: u.vignette, falloff: u.falloff });
@@ -167,13 +168,12 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
 }
 /** v3: DISPLAY_GAIN_LUT + the dodging header and base map (base: once per photo, from the AutoSetup thumbnail). */
 function v3Gain(u, space) {
-  const on = $('v3dodge')?.checked !== false;
   if (!photo.dodge) {
     const raw = photo.preview.raw, { rgb, w, h } = raw ? rawThumb(raw, THUMB_PX) : jpegThumb(photo.preview);
-    photo.dodge = dodgeBase(rgb, w, h, LUMA[space]);
+    photo.dodge = dodgeBase(rgb, w, h, LUMA[space === 'p3' ? 'rec2020' : space]);   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
     log(`v3 dodge base ${w}x${h} median ${photo.dodge.M.toFixed(2)} p99 ${photo.dodge.P.toFixed(2)}`);
   }
-  return dodgeArray(DISPLAY_GAIN_LUT, photo.dodge, { ...dodgeParams(photo.dodge, u.contrast), dodge: on }, +$('hlc').value);
+  return dodgeArray(DISPLAY_GAIN_LUT, photo.dodge, { ...dodgeParams(photo.dodge, u.contrast), dodge: u.v3dodge }, u.hlc);
 }
 const q8 = (v) => Math.round(255 * Math.min(1, Math.max(0, v)));
 
