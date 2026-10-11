@@ -479,11 +479,23 @@ function areaResize(src, sw, sh, dw, dh) {
   return out;
 }
 
+// Highlight roll-off on camera RGB in CFA units (channel c hits sensor white at sat[c] = wb[c]/wbMax*65535): pixels
+// near saturation in any channel blend smoothly to a neutral at their brightest channel, so blown
+// areas don't go magenta (R/B keep headroom up to wb[c] while G clips at 1).
+function satBlend(r, g, b, sat) {
+  let t = 0;
+  for (let c = 0; c < 3; c++) {
+    const v = c === 0 ? r : c === 1 ? g : b, hi = sat[c], lo = 0.92 * hi;
+    if (v > lo) { const u = v >= hi ? 1 : (v - lo) / (hi - lo), k = u * u * (3 - 2 * u); if (k > t) t = k; }
+  }
+  return t;
+}
+
 // ---------------------------------------------------------------- Malvar-He-Cutler
 // One CFA phase of one row: every other pixel starting at x0, CFA index i, output row offset ob.
 // Fused with per-column gains (gR/gG/gB) and the 3x3 colour matrix M; clamps >= 0.
 
-function mhcGreen(a, w, rgb, i, ob, x0, n, swap, gR, gG, gB, M) {
+function mhcGreen(a, w, rgb, i, ob, x0, n, swap, gR, gG, gB, M, sat) {
   const w2 = 2 * w;
   const m0 = M[0], m1 = M[1], m2 = M[2], m3 = M[3], m4 = M[4], m5 = M[5], m6 = M[6], m7 = M[7], m8 = M[8];
   for (let x = x0; x < n; x += 2, i += 2) {
@@ -494,14 +506,16 @@ function mhcGreen(a, w, rgb, i, ob, x0, n, swap, gR, gG, gB, M) {
     const vv = (c5 + 4 * (a[i - w] + a[i + w]) - (N2 + S2) - dg + 0.5 * (W2 + E2)) * 0.125;
     let r = swap ? vv : hv, b = swap ? hv : vv;
     r = (r > 0 ? r : 0) * gR[x]; b = (b > 0 ? b : 0) * gB[x];
-    const g = C0 * gG[x];
+    let g = C0 * gG[x];
+    const tt = satBlend(r, g, b, sat);
+    if (tt > 0) { const mx = Math.max(r, g, b); r += (mx - r) * tt; g += (mx - g) * tt; b += (mx - b) * tt; }
     const R = m0 * r + m1 * g + m2 * b, G = m3 * r + m4 * g + m5 * b, B = m6 * r + m7 * g + m8 * b;
     const o = ob + x * 3;
     rgb[o] = R > 0 ? R : 0; rgb[o + 1] = G > 0 ? G : 0; rgb[o + 2] = B > 0 ? B : 0;
   }
 }
 
-function mhcRB(a, w, rgb, i, ob, x0, n, swap, gR, gG, gB, M) {
+function mhcRB(a, w, rgb, i, ob, x0, n, swap, gR, gG, gB, M, sat) {
   const w2 = 2 * w;
   const m0 = M[0], m1 = M[1], m2 = M[2], m3 = M[3], m4 = M[4], m5 = M[5], m6 = M[6], m7 = M[7], m8 = M[8];
   for (let x = x0; x < n; x += 2, i += 2) {
@@ -511,7 +525,9 @@ function mhcRB(a, w, rgb, i, ob, x0, n, swap, gR, gG, gB, M) {
     let oo = (6 * C0 + 2 * (a[i - w - 1] + a[i - w + 1] + a[i + w - 1] + a[i + w + 1]) - 1.5 * ax2) * 0.125;
     g = (g > 0 ? g : 0) * gG[x];
     oo = oo > 0 ? oo : 0;
-    const r = (swap ? oo : C0) * gR[x], b = (swap ? C0 : oo) * gB[x];
+    let r = (swap ? oo : C0) * gR[x], b = (swap ? C0 : oo) * gB[x];
+    const tt = satBlend(r, g, b, sat);
+    if (tt > 0) { const mx = Math.max(r, g, b); r += (mx - r) * tt; g += (mx - g) * tt; b += (mx - b) * tt; }
     const R = m0 * r + m1 * g + m2 * b, G = m3 * r + m4 * g + m5 * b, B = m6 * r + m7 * g + m8 * b;
     const o = ob + x * 3;
     rgb[o] = R > 0 ? R : 0; rgb[o + 1] = G > 0 ? G : 0; rgb[o + 2] = B > 0 ? B : 0;
@@ -563,14 +579,18 @@ export async function decodeDNG(arrayBuffer, { maxLongSide, _stage } = {}) {
   const wb = neutral.map(n => maxN / n); // >= 1, min = 1
   const baseline = P.one(ifd0, 50730, 0);
 
-  // ---- decode + linearize into padded Uint16 CFA (WB'd, clip -> 65535)
+  // ---- decode + linearize into padded Uint16 CFA (WB'd / wbMax, clip -> 65535)
   const PW = aW + 2 * PAD, PH = aH + 2 * PAD;
   const cfa = _stage === 'raw' ? null : new Uint16Array(PW * PH);
   const rawOut = _stage === 'raw' ? new Uint16Array(W * H) : null;
   const u8 = new Uint8Array(buf);
   const lin = linTable ? Uint16Array.from(linTable) : null;
   // per-phase black & scale (black repeat dims dividing 2 are exact; DeltaH/V added per pixel)
-  const scaleC = [0, 1, 2].map(c => wb[c] * 65535 / (white - blackAt(0, 0)));
+  // Headroom: gains are divided by wbMax so 65535 = sensor-white of the strongest-gain channel and R/B
+  // don't clip before the sensor does (cost: <= log2(wbMax) ~1.2 bits of green precision). wbMax is
+  // multiplied back in at the float conversion (s below).
+  const wbMax = Math.max(...wb);
+  const scaleC = [0, 1, 2].map(c => (wb[c] / wbMax) * 65535 / (white - blackAt(0, 0)));
   const put = (tile, tw, th, x0, y0) => {
     const xe = Math.min(x0 + tw, W), ye = Math.min(y0 + th, H);
     if (rawOut) {
@@ -656,7 +676,8 @@ export async function decodeDNG(arrayBuffer, { maxLongSide, _stage } = {}) {
   // ---- colour
   const camera = _stage === 'camera';
   const col = buildColour(P, ifd0, neutral);
-  const s = 1 / 65535;
+  const s = wbMax / 65535;
+  const sat = wb.map(w => w / wbMax * 65535); // per-channel sensor-white in CFA units
   const M = camera ? diag([s, s, s]) : col.M.map(v => v * s);
   meta.cct = col.cct; meta.whiteXY = col.whiteXY; meta.cameraToRec2020 = col.M;
   const maps = camera ? [] : parseGainMaps(P.bytes(raw, 51022) || P.bytes(ifd0, 51022));
@@ -682,7 +703,9 @@ export async function decodeDNG(arrayBuffer, { maxLongSide, _stage } = {}) {
       const [gR, gG, gB] = gain(y);
       let i = (cy + 2 * y + PAD) * PW + cx + PAD, o = y * outW * 3;
       for (let x = 0; x < outW; x++, i += 2, o += 3) {
-        const r = cfa[i + oR] * gR[x], g = (cfa[i + oG1] + cfa[i + oG2]) * 0.5 * gG[x], b = cfa[i + oB] * gB[x];
+        let r = cfa[i + oR] * gR[x], g = (cfa[i + oG1] + cfa[i + oG2]) * 0.5 * gG[x], b = cfa[i + oB] * gB[x];
+        const tt = satBlend(r, g, b, sat);
+        if (tt > 0) { const mx = Math.max(r, g, b); r += (mx - r) * tt; g += (mx - g) * tt; b += (mx - b) * tt; }
         const R = m0 * r + m1 * g + m2 * b, G = m3 * r + m4 * g + m5 * b, B = m6 * r + m7 * g + m8 * b;
         rgb[o] = R > 0 ? R : 0; rgb[o + 1] = G > 0 ? G : 0; rgb[o + 2] = B > 0 ? B : 0;
       }
@@ -702,7 +725,7 @@ export async function decodeDNG(arrayBuffer, { maxLongSide, _stage } = {}) {
         const c = colorAt(Y, X0);
         // green sites: swap=1 when R is vertical; R/B sites: swap=1 at blue
         const swap = c === 1 ? (colorAt(Y, X0 + 1) === 0 ? 0 : 1) : (c === 2 ? 1 : 0);
-        (c === 1 ? mhcGreen : mhcRB)(a, w, rgb, rowBase + X0, y * outW * 3, ph, outW, swap, gR, gG, gB, M);
+        (c === 1 ? mhcGreen : mhcRB)(a, w, rgb, rowBase + X0, y * outW * 3, ph, outW, swap, gR, gG, gB, M, sat);
       }
     }
   }
