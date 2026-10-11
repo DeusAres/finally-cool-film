@@ -91,9 +91,9 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     },
     film_render: {
       // Grain is the engine's (rng 'hash': a pure function of seed + frame position, see eval/GRAIN.md).
-      // amount 1 = the calibrated Gold 200 grain, reached at the default slider (DEFAULTS.grain).
+      // Grana 1× = the old 0.25× (user-preferred); amount 1 = the calibrated Gold 200 grain (GRAIN_UNIT scales between them).
       grain: {
-        active: !noGrain && u.grain > 0, rng: 'hash', amount: u.grain / DEFAULTS.grain * grainFactor(), seed: photo.grainSeed,
+        active: !noGrain && u.grain > 0, rng: 'hash', amount: u.grain * GRAIN_UNIT * grainFactor(), seed: photo.grainSeed,
         origin_px: region ? [region.x0, region.y0] : [0, 0], frame_px: region ? [region.fw, region.fh] : [photo.preview.w, photo.preview.h],
       },
       // v2-calib: strength comes from the profile's antihalation; halation_amount is a multiplier on it (Halation slider).
@@ -685,19 +685,21 @@ function status(msg) { $('status').textContent = msg; }
 const sign = (v) => (v > 0 ? '+' : '');
 const pct = (v) => `${Math.round(v * 100)}`;
 const mult = (v) => (v === 0 ? 'off' : `${v.toFixed(1)}×`);
+const mult2 = (v) => (v === 0 ? 'off' : `${v.toFixed(2)}×`);
 const pctOff = (v) => (v === 0 ? 'off' : pct(v));
 const signPct = (v) => `${sign(v)}${pct(v)}`;
 const FORMAT = {
   ev: (v) => `${sign(v)}${v.toFixed(1)}`,
   contrast: signPct, highlight: signPct,
   mshift: (v) => `${sign(v)}${v}`, yshift: (v) => `${sign(v)}${v}`,
-  grain: mult, halation: mult,
+  grain: mult2, halation: mult,
   ca: pctOff, vignette: pctOff,
   falloff: pct,
   texture: signPct, clarity: pctOff, dust: pctOff, black: pctOff,
 };
 // v2-calib: contrast / highlight / black defaults are the lab's standard (0); the old look defaults (Contrasto .35, Alte luci .6, Nero .15) are gone with their stages.
-const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, mshift: 0, yshift: 0, black: 0, grain: 0.4, halation: 1, texture: 0.2, clarity: 0.1, ca: 1, vignette: 0.65, falloff: 0.4, dust: 0.27 };
+const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, mshift: 0, yshift: 0, black: 0, grain: 1, halation: 1, texture: 0.2, clarity: 0.1, ca: 1, vignette: 0.65, falloff: 0.4, dust: 0.27 };
+const GRAIN_UNIT = 0.625;   // slider 1× -> engine amount (= old slider 0.25 / old default 0.4)
 const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }
 
