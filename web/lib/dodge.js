@@ -10,7 +10,7 @@
 // knee = median(B) + DODGE_KNEE; A is solved so that the bright base (P = 99th pct) lands at
 // median + head(contrast): the higher the contrast, the earlier the scanner shoulder, the more dodging.
 
-const DODGE_R = 0.08, DODGE_EPS = 1.0, DODGE_KNEE = 0.5, DODGE_RHO = 0.8, DODGE_PCT = 0.99;
+const DODGE_R = 0.08, DODGE_EPS = 1.0, DODGE_KNEE = 1.0, DODGE_RHO = 0.8, DODGE_PCT = 0.99;
 /** Statistics only over lit pixels (black letterbox / night: the median must not sit on the floor);
  * below DODGE_MIN_LIT of lit pixels nothing is dodged; the shift never exceeds DODGE_MAX_EV. */
 const DODGE_LIT_EV = -12, DODGE_MIN_LIT = 0.1, DODGE_MAX_EV = 3;
