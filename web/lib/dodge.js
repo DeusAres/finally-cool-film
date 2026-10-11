@@ -121,3 +121,27 @@ fn dodge(c0: vec3<f32>, pos: vec2<f32>) -> vec3<f32> {
   let e = max(b - knee, 0.0);
   return c * exp2(-A * (1.0 - exp(-rho * e / A)));
 }`;
+
+/** CPU fallback (no WebGPU): dodgeWGSL on a linear RGB region `rgb` (w×h×3, already × `expo`) at
+ * (x0, y0) of an fw×fh frame, with the array from dodgeArray (header at `at0`). In place. */
+export function dodgeCPU(rgb, w, h, x0, y0, fw, fh, expo, arr, at0, luma) {
+  const on = arr[at0], bw = arr[at0 + 1], bh = arr[at0 + 2];
+  if (!bw) return;
+  const knee = arr[at0 + 3], A = arr[at0 + 4], rho = arr[at0 + 5], hk = arr[at0 + 6];
+  const pv = Math.max(arr[at0 + 7], knee + 0.25), o = at0 + 8, le = Math.log2(expo);
+  if (on < 0.5 && hk === 0) return;
+  const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  for (let y = 0, j = 0; y < h; y++) {
+    const qy = Math.min(bh - 1, Math.max(0, (y0 + y + 0.5) / fh * bh - 0.5)), iy = Math.floor(qy), iy1 = Math.min(iy + 1, bh - 1), fy = qy - iy;
+    for (let x = 0; x < w; x++, j += 3) {
+      const qx = Math.min(bw - 1, Math.max(0, (x0 + x + 0.5) / fw * bw - 0.5)), ix = Math.floor(qx), ix1 = Math.min(ix + 1, bw - 1), fx = qx - ix;
+      const a = arr[o + iy * bw + ix] + (arr[o + iy * bw + ix1] - arr[o + iy * bw + ix]) * fx;
+      const b = arr[o + iy1 * bw + ix] + (arr[o + iy1 * bw + ix1] - arr[o + iy1 * bw + ix]) * fx;
+      const B = a + (b - a) * fy;
+      let L = Math.log2(Math.max(1e-6, luma[0] * rgb[j] + luma[1] * rgb[j + 1] + luma[2] * rgb[j + 2])) - le, g = 0;
+      if (hk !== 0) { g += hk * Math.min(0, Math.max(-2, L - B)) * sstep(knee, pv, L) * sstep(knee, pv, B); L += g; }
+      if (on >= 0.5) { const e = Math.max(Math.max(B, L) - knee, 0); g -= A * (1 - Math.exp(-rho * e / A)); }
+      if (g !== 0) { const k = 2 ** g; rgb[j] *= k; rgb[j + 1] *= k; rgb[j + 2] *= k; }
+    }
+  }
+}

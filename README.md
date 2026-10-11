@@ -20,6 +20,8 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   per canale, bilanciamento per tipo di film, AutoSetup con guardia sulle alte luci, gradazione, saturazione. Il motore
   restituisce il positivo (`io.scan_film` + `scanner.model="frontier"`). Modello inferito: nessun dato misurato sullo
   SP-3000, vedi `eval/FRONTIER.md`.
+- Luci automatiche (v3, `web/lib/dodge.js`, `eval/V3.md`): dodging digitale stile Frontier Hyper Tone, dosato sulla foto e sul
+  contrasto; slider Contrasto luci = contrasto locale dentro le luci. `index.html?v2` = app precedente.
 - Slider: esposizione (guadagno di scena 2^EV prima della pellicola), contrasto (`frontier.contrast`), alte luci
   (`frontier.highlight`), bianchi (`frontier.whites`), filtri colore dello scanner magenta↔verde e giallo↔blu (`frontier.cmy`), nero (`frontier.black_lift`,
   neutro), texture, chiarezza, grana, halation, aberrazione, vignettatura, falloff, polvere (quantità). Auto = esposizione
@@ -61,7 +63,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## Versione
 
-Il numero mostrato nell'app (`v2.0 · dd/mm hh:mm`, es. `v2.0 · 09/10 14:30`) viene dal file `VERSION` (la pagina `debugv3.html` mostra `VERSION_V3`, es. `v3.1 debug · …`): si alza la seconda cifra a ogni rilascio
+Il numero mostrato nell'app (`v2.0 · dd/mm hh:mm`, es. `v2.0 · 09/10 14:30`) viene dal file `VERSION` (`index.html?v2` riapre l'app precedente, con Alte luci / Bianchi / Nero): si alza la seconda cifra a ogni rilascio
 (v1.1, v1.2…) e la prima per i cambi grossi. L'id del commit resta solo nei parametri anti-cache dei file.
 
 ## Build locale

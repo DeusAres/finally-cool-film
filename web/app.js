@@ -8,7 +8,7 @@ import { internoParams } from './lib/interno.js';
 import { iccSegment } from './lib/icc.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, INPUT_WGSL_V3, inputUniform } from './lib/lens-gpu.js';
-import { dodgeBase, dodgeParams, dodgeArray } from './lib/dodge.js';
+import { dodgeBase, dodgeParams, dodgeArray, dodgeCPU } from './lib/dodge.js';
 import { LUMA } from './lib/color.js';
 import { dustField, drawDust, compositeDust } from './lib/dust.js';
 import { GRAIN_WGSL, packParams, toP3CPU } from './lib/grain.js';
@@ -34,9 +34,9 @@ const ctx = view.getContext('2d', { colorSpace: 'display-p3' });
 let gpu = false;
 let engine = null;          // sf.Engine for the current photo (its input colour space is fixed at construction)
 let engineParams = '';      // JSON last given to `engine.update` (re-sending it is a no-op)
-// Debug v3 (debugv3.html → index.html?v3): only Esposizione + Contrasto in Luce, automatic highlight
-// dodging (lib/dodge.js) and the free contrast curve. Without ?v3 nothing below changes the app.
-const V3 = new URLSearchParams(location.search).has('v3');
+// v3 (default; index.html?v2 = the previous app): Luce has Esposizione, Contrasto, Contrasto luci,
+// automatic highlight dodging (lib/dodge.js, eval/V3.md) and the free contrast curve.
+const V3 = !new URLSearchParams(location.search).has('v2');
 let photo = null;           // { file, bitmap, preview, after, auto: scanner AutoSetup [d, c, m, y], ... }
 let rendering = false, dirty = false, exporting = false, renderCount = 0;
 
@@ -158,6 +158,7 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
   const rgb = lensActive(lens)
     ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, expo, lensGeometry(frame.w, frame.h, lens), true)
     : extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, expo, true);
+  if (V3) dodgeCPU(rgb, w, h, x0, y0, frame.w, frame.h, expo, v3Gain(u, frame.p3 ? 'p3' : 'srgb'), DISPLAY_GAIN_LUT.length, LUMA[frame.p3 ? 'rec2020' : 'srgb']);
   const out = engine.process(rgb, w, h), d32 = new Uint32Array(target.buffer, target.byteOffset, w * h);
   const px = new Float32Array(3), p3 = outP3();
   for (let p = 0, j = 0; p < w * h; p++, j += 3) {
@@ -753,8 +754,8 @@ syncOutputs();
 
 // Build stamp: replaced at deploy (scripts/stamp-version.sh) with the version and
 // its time; it lives in app.js itself, so a stale cached app.js shows a stale stamp.
-const BUILD = '__BUILD__', BUILD_V3 = '__BUILD_V3__';
-$('ver').textContent = V3 ? (BUILD_V3.startsWith('__') ? 'dev · v3 debug' : BUILD_V3) : (BUILD.startsWith('__') ? 'dev' : BUILD);
+const BUILD = '__BUILD__';
+$('ver').textContent = (BUILD.startsWith('__') ? 'dev' : BUILD) + (V3 ? '' : ' · modalità v2');
 if (V3) {
   // only Esposizione + Contrasto in Luce (+ Interno); a switch to compare with/without the dodging
   for (const id of ['highlight', 'whites', 'black']) $(id).closest('.row').hidden = true;

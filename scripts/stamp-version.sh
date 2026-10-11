@@ -16,9 +16,7 @@ sed -i -E "s#src=\"(app|bench)\.js\"#src=\"\1.js?v=$v\"#" "$dir"/*.html
 when=$(TZ=Europe/Rome date -d "@$(git log -1 --format=%ct 2>/dev/null || date +%s)" '+%d/%m %H:%M')
 label="v$(cat "$(dirname "$0")/../VERSION" 2>/dev/null)" || { echo "stamp-version: VERSION file missing or unreadable" >&2; exit 1; }
 case "$v" in dbg-*) label="$label debug" ;; esac
-label3="v$(cat "$(dirname "$0")/../VERSION_V3" 2>/dev/null)" || { echo "stamp-version: VERSION_V3 file missing or unreadable" >&2; exit 1; }
 sed -i "s#'__BUILD__'#'$label · $when'#" "$dir/app.js"
-sed -i "s#'__BUILD_V3__'#'$label3 debug · $when'#" "$dir/app.js"
 sed -i "s#new Worker('export-worker.js')#new Worker('export-worker.js?v=$v')#" "$dir/app.js"
 sed -i "s#importScripts('vendor/jpegli_wasm2.js')#importScripts('vendor/jpegli_wasm2.js?v=$v')#" "$dir/export-worker.js"
 sed -i "s#new URL('spektrafilm_wasm_bg.wasm', import.meta.url)#new URL('spektrafilm_wasm_bg.wasm?v=$v', import.meta.url)#" "$dir/pkg/spektrafilm_wasm.js"
@@ -26,5 +24,5 @@ sed -i "s#new URL('spektrafilm_wasm_bg.wasm', import.meta.url)#new URL('spektraf
 for f in "$dir/app.js" "$dir/export-worker.js" "$dir/pkg/spektrafilm_wasm.js" "$dir/index.html"; do
   grep -q "?v=$v" "$f" || { echo "stamp-version: nothing stamped in $f" >&2; exit 1; }
 done
-grep -q "__BUILD__\|__BUILD_V3__" "$dir/app.js" && { echo "stamp-version: build label not stamped" >&2; exit 1; }
+grep -q "__BUILD__" "$dir/app.js" && { echo "stamp-version: build label not stamped" >&2; exit 1; }
 echo "stamped $v ($when)"
