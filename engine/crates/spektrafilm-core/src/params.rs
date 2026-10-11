@@ -433,7 +433,7 @@ fn default_02_f64() -> f64 {
     0.2
 }
 fn default_particle_scale_f64() -> [f64; 3] {
-    [1.6, 1.6, 3.2]
+    [0.12, 0.12, 0.12]
 }
 fn default_particle_scale_layers_f64() -> [f64; 3] {
     [2.0, 1.0, 0.5]
@@ -451,14 +451,14 @@ impl Default for GrainParams {
             active: true,
             sublayers_active: true,
             agx_particle_area_um2: 0.2,
-            agx_particle_scale: [1.6, 1.6, 3.2],
+            agx_particle_scale: [0.12, 0.12, 0.12],
             agx_particle_scale_layers: [2.0, 1.0, 0.5],
             density_min: [0.03, 0.03, 0.03],
             uniformity: [0.97, 0.99, 0.97],
             blur: 0.65,
             blur_dye_clouds_um: 1.0,
             micro_structure: [0.2, 30.0],
-            n_sub_layers: 1,
+            n_sub_layers: 2,
             monochrome: false,
             rng: default_grain_rng(),
             amount: 1.0,

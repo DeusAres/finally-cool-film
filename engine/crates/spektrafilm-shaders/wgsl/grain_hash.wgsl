@@ -116,8 +116,14 @@ fn binomial(n: f32, p: f32, q: f32, st: ptr<function, u32>) -> f32 {
     return clamp(floor(np + sqrt(np * q) * z + 0.5), 0.0, n);
 }
 
+const FAST_OD_SHARE: f32 = 0.3;
+const FAST_K: f32 = 3.3;
+const FAST_COUNT_FRAC: f32 = 0.002;
+const LAYER_COUPLING: f32 = 0.45;
+
 fn grain_density(d: vec3<f32>, gx: u32, gy: u32) -> vec3<f32> {
     var out = d;
+    var devs = vec3<f32>(0.0);
     for (var ch = 0u; ch < 3u; ch++) {
         var layer = ch;
         if params.monochrome != 0u { layer = 0u; }
@@ -131,20 +137,45 @@ fn grain_density(d: vec3<f32>, gx: u32, gy: u32) -> vec3<f32> {
         let sat = 1.0 - p * params.uniformity[ch] * (1.0 - 1e-6);
         let lambda = npp / sat;
         var sum = 0.0;
-        for (var sl = 0u; sl < params.n_sub_layers; sl++) {
-            var st = pixel_state(stream_key(layer + sl * 10u), gx, gy);
-            let seeds = poisson(lambda, &st);
-            let developed = binomial(seeds, p, q, &st);
-            sum += developed * od_particle * sat;
+        if params.n_sub_layers >= 2u {
+            let npp_tot = npp * f32(params.n_sub_layers);
+            let qk = pow(q, FAST_K);
+            let p_fast = clamp(1.0 - qk, 1e-6, 1.0 - 1e-6);
+            let q_fast = clamp(qk, 1e-6, 1.0 - 1e-6);
+            let w_slow = 1.0 - FAST_OD_SHARE;
+            let p_slow = clamp((p - FAST_OD_SHARE * p_fast) / w_slow, 1e-6, 1.0 - 1e-6);
+            let q_slow = clamp((q - FAST_OD_SHARE * qk) / w_slow, 1e-6, 1.0 - 1e-6);
+            for (var sl = 0u; sl < 2u; sl++) {
+                var ps = p_fast; var qs = q_fast; var w = FAST_OD_SHARE; var cf = FAST_COUNT_FRAC;
+                if sl == 1u { ps = p_slow; qs = q_slow; w = w_slow; cf = 1.0 - FAST_COUNT_FRAC; }
+                let npp_s = npp_tot * cf;
+                let sat_s = 1.0 - ps * params.uniformity[ch] * (1.0 - 1e-6);
+                var st = pixel_state(stream_key(layer + sl * 10u), gx, gy);
+                let seeds = poisson(npp_s / sat_s, &st);
+                let developed = binomial(seeds, ps, qs, &st);
+                sum += developed * (dmax * w / npp_s) * sat_s;
+            }
+        } else {
+            for (var sl = 0u; sl < params.n_sub_layers; sl++) {
+                var st = pixel_state(stream_key(layer + sl * 10u), gx, gy);
+                let seeds = poisson(lambda, &st);
+                let developed = binomial(seeds, p, q, &st);
+                sum += developed * od_particle * sat;
+            }
+            sum = sum / f32(params.n_sub_layers);
         }
-        let grain = sum / f32(params.n_sub_layers) - dmin;
+        let grain = sum - dmin;
         var dev = grain - d[ch];
         if params.micro_sigma > 0.0 {
             var st = pixel_state(stream_key(1000u + layer), gx, gy);
             let z = std_normal(&st);
             dev *= exp(params.micro_sigma * z - 0.5 * params.micro_sigma * params.micro_sigma);
         }
-        out[ch] = d[ch] + params.amount * dev;
+        devs[ch] = dev;
+    }
+    let mean = (devs.x + devs.y + devs.z) * (1.0 / 3.0);
+    for (var ch = 0u; ch < 3u; ch++) {
+        out[ch] = d[ch] + params.amount * (devs[ch] + LAYER_COUPLING * (mean - devs[ch]));
     }
     return out;
 }

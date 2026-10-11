@@ -24,6 +24,20 @@ use rayon::prelude::*;
 pub const EXACT_MAX_MEAN: f32 = 30.0;
 /// Hard cap on inversion steps (mean < 30 is exhausted well before this).
 pub const MAX_INVERSION_STEPS: u32 = 120;
+/// Inter-layer light scatter / DIR coupling: fraction of each layer's grain
+/// deviation replaced by the mean deviation of all three layers (correlated
+/// density noise shared across the dye layers).
+/// Two-population emulsion (used when `n_sub_layers >= 2`): sub-layer 0 is
+/// the coarse FAST crystals (few, big; developed fraction saturates quickly,
+/// p_fast = 1 - (1-p)^FAST_K), sub-layer 1 the fine SLOW crystals (many,
+/// small; developed fraction is whatever keeps the mean density exact).
+/// `FAST_OD_SHARE` (<= 1/FAST_K) is the share of the layer's max density
+/// carried by the fast population, `FAST_COUNT_FRAC` the share of crystals
+/// that are fast.
+pub const FAST_OD_SHARE: f32 = 0.3;
+pub const FAST_K: f32 = 3.3;
+pub const FAST_COUNT_FRAC: f32 = 0.002;
+pub const LAYER_COUPLING: f32 = 0.45;
 
 #[derive(Debug, Clone, Copy)]
 pub struct HashGrain {
@@ -148,6 +162,7 @@ pub fn binomial(n: f32, p: f32, q: f32, st: &mut u32) -> f32 {
 /// `(gx, gy)`. The reference formula; the WGSL `grain_density` mirrors it.
 pub fn grain_density_pixel(g: &HashGrain, d: [f32; 3], gx: u32, gy: u32) -> [f32; 3] {
     let mut out = d;
+    let mut devs = [0.0f32; 3];
     for ch in 0..3usize {
         let layer = if g.monochrome { 0 } else { ch as u32 };
         let dmin = g.density_min[ch];
@@ -160,20 +175,46 @@ pub fn grain_density_pixel(g: &HashGrain, d: [f32; 3], gx: u32, gy: u32) -> [f32
         let sat = 1.0 - p * g.uniformity[ch] * (1.0 - 1e-6);
         let lambda = npp / sat;
         let mut sum = 0.0f32;
-        for sl in 0..g.n_sub_layers {
-            let mut st = pixel_state(stream_key(g.seed, layer + sl * 10), gx, gy);
-            let seeds = poisson(lambda, &mut st);
-            let developed = binomial(seeds, p, q, &mut st);
-            sum += developed * od_particle * sat;
+        if g.n_sub_layers >= 2 {
+            let npp_tot = npp * g.n_sub_layers as f32;
+            let qk = q.powf(FAST_K);
+            let (p_fast, q_fast) = ((1.0 - qk).clamp(1e-6, 1.0 - 1e-6), qk.clamp(1e-6, 1.0 - 1e-6));
+            let w_slow = 1.0 - FAST_OD_SHARE;
+            let p_slow = ((p - FAST_OD_SHARE * p_fast) / w_slow).clamp(1e-6, 1.0 - 1e-6);
+            let q_slow = ((q - FAST_OD_SHARE * qk) / w_slow).clamp(1e-6, 1.0 - 1e-6);
+            for sl in 0..2u32 {
+                let (ps, qs, w, cf) = if sl == 0 {
+                    (p_fast, q_fast, FAST_OD_SHARE, FAST_COUNT_FRAC)
+                } else {
+                    (p_slow, q_slow, w_slow, 1.0 - FAST_COUNT_FRAC)
+                };
+                let npp_s = npp_tot * cf;
+                let sat_s = 1.0 - ps * g.uniformity[ch] * (1.0 - 1e-6);
+                let mut st = pixel_state(stream_key(g.seed, layer + sl * 10), gx, gy);
+                let seeds = poisson(npp_s / sat_s, &mut st);
+                let developed = binomial(seeds, ps, qs, &mut st);
+                sum += developed * (dmax * w / npp_s) * sat_s;
+            }
+        } else {
+            for sl in 0..g.n_sub_layers {
+                let mut st = pixel_state(stream_key(g.seed, layer + sl * 10), gx, gy);
+                let seeds = poisson(lambda, &mut st);
+                let developed = binomial(seeds, p, q, &mut st);
+                sum += developed * od_particle * sat;
+            }
         }
-        let grain = sum / g.n_sub_layers as f32 - dmin;
+        let grain = if g.n_sub_layers >= 2 { sum } else { sum / g.n_sub_layers as f32 } - dmin;
         let mut dev = grain - d[ch];
         if g.micro_sigma > 0.0 {
             let mut st = pixel_state(stream_key(g.seed, 1000 + layer), gx, gy);
             let z = std_normal(&mut st);
             dev *= (g.micro_sigma * z - 0.5 * g.micro_sigma * g.micro_sigma).exp();
         }
-        out[ch] = d[ch] + g.amount * dev;
+        devs[ch] = dev;
+    }
+    let mean = (devs[0] + devs[1] + devs[2]) * (1.0 / 3.0);
+    for ch in 0..3usize {
+        out[ch] = d[ch] + g.amount * (devs[ch] + LAYER_COUPLING * (mean - devs[ch]));
     }
     out
 }
@@ -302,8 +343,12 @@ mod tests {
             let z = std_normal(st);
             ((np + (np * q).sqrt() * z + 0.5).floor()).clamp(0.0, n)
         }
+        fn od_s(dmax: f32, w: f32, npp_s: f32) -> f32 {
+            dmax * w / npp_s
+        }
         fn grain_density(p: &Params, d: [f32; 3], gx: u32, gy: u32) -> [f32; 3] {
             let mut out = d;
+            let mut devs = [0.0f32; 3];
             for ch in 0..3usize {
                 let layer = if p.monochrome != 0 { 0 } else { ch as u32 };
                 let dmin = p.density_min[ch];
@@ -316,20 +361,47 @@ mod tests {
                 let sat = 1.0 - pp * p.uniformity[ch] * (1.0 - 1e-6);
                 let lambda = npp / sat;
                 let mut sum = 0.0f32;
-                for sl in 0..p.n_sub_layers {
-                    let mut st = pixel_state(stream_key(p, layer + sl * 10), gx, gy);
-                    let seeds = poisson(lambda, &mut st);
-                    let dev = binomial(seeds, pp, q, &mut st);
-                    sum += dev * od * sat;
+                if p.n_sub_layers >= 2 {
+                    let npp_tot = npp * p.n_sub_layers as f32;
+                    let qk = q.powf(super::FAST_K);
+                    let (p_fast, q_fast) = ((1.0 - qk).clamp(1e-6, 1.0 - 1e-6), qk.clamp(1e-6, 1.0 - 1e-6));
+                    let w_slow = 1.0 - super::FAST_OD_SHARE;
+                    let p_slow = ((pp - super::FAST_OD_SHARE * p_fast) / w_slow).clamp(1e-6, 1.0 - 1e-6);
+                    let q_slow = ((q - super::FAST_OD_SHARE * qk) / w_slow).clamp(1e-6, 1.0 - 1e-6);
+                    for sl in 0..2u32 {
+                        let (ps, qs, w, cf) = if sl == 0 {
+                            (p_fast, q_fast, super::FAST_OD_SHARE, super::FAST_COUNT_FRAC)
+                        } else {
+                            (p_slow, q_slow, w_slow, 1.0 - super::FAST_COUNT_FRAC)
+                        };
+                        let npp_s = npp_tot * cf;
+                        let sat_s = 1.0 - ps * p.uniformity[ch] * (1.0 - 1e-6);
+                        let mut st = pixel_state(stream_key(p, layer + sl * 10), gx, gy);
+                        let seeds = poisson(npp_s / sat_s, &mut st);
+                        let developed = binomial(seeds, ps, qs, &mut st);
+                        sum += developed * (od_s(dmax, w, npp_s)) * sat_s;
+                    }
+                } else {
+                    for sl in 0..p.n_sub_layers {
+                        let mut st = pixel_state(stream_key(p, layer + sl * 10), gx, gy);
+                        let seeds = poisson(lambda, &mut st);
+                        let dev = binomial(seeds, pp, q, &mut st);
+                        sum += dev * od * sat;
+                    }
+                    sum /= p.n_sub_layers as f32;
                 }
-                let grain = sum / p.n_sub_layers as f32 - dmin;
+                let grain = sum - dmin;
                 let mut dev = grain - d[ch];
                 if p.micro_sigma > 0.0 {
                     let mut st = pixel_state(stream_key(p, 1000 + layer), gx, gy);
                     let z = std_normal(&mut st);
                     dev *= (p.micro_sigma * z - 0.5 * p.micro_sigma * p.micro_sigma).exp();
                 }
-                out[ch] = d[ch] + p.amount * dev;
+                devs[ch] = dev;
+            }
+            let mean = (devs[0] + devs[1] + devs[2]) * (1.0 / 3.0);
+            for ch in 0..3usize {
+                out[ch] = d[ch] + p.amount * (devs[ch] + super::LAYER_COUPLING * (mean - devs[ch]));
             }
             out
         }
@@ -402,7 +474,7 @@ mod tests {
         for k in [
             "747796405u", "2891336453u", "277803737u", "0x68e31da4u", "0x9e3779b9u", "0x7f4a7c15u",
             "0x9e3779b1u", "0x85ebca6bu", "0x27d4eb2fu", "6.2831855", "EXACT_MAX_MEAN: f32 = 30.0",
-            "MAX_STEPS: u32 = 120u", "1000u + layer", "layer + sl * 10u",
+            "MAX_STEPS: u32 = 120u", "LAYER_COUPLING: f32 = 0.45", "FAST_OD_SHARE: f32 = 0.3", "FAST_K: f32 = 3.3", "FAST_COUNT_FRAC: f32 = 0.002", "1000u + layer", "layer + sl * 10u",
         ] {
             assert!(src.contains(k), "WGSL missing {k}");
         }
