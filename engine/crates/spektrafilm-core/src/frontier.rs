@@ -357,7 +357,7 @@ impl FrontierBase {
             range: m.range_density.max(1e-6),
             shift,
             curve: Gradation::solve(m.gradation_a, sh, m).with_highlight(h),
-            tone: Tone::new(a / m.gradation_a, m),
+            tone: Tone::new(a / m.gradation_a, m, keys.debug_contrast_mode),
             lift: keys.black_lift.clamp(0.0, 1.0) as f64 * m.black_lift_max,
             mid_slope: {
                 let g = Gradation::solve(m.gradation_a, m.shoulder_sharpness, m);
@@ -605,16 +605,25 @@ struct Tone {
 }
 
 impl Tone {
-    fn new(k: f64, m: &FrontierModelParams) -> Option<Self> {
+    /// `mode` (debug v3): 0 = highlight-locked curve (v2), 1 = free steeper sigmoid,
+    /// 2 = rational density remap about mid grey `u -> k u / (1 + (k^1.5 - 1) |u|^1.5)^(1/1.5)` (ends fixed).
+    fn new(k: f64, m: &FrontierModelParams, mode: u32) -> Option<Self> {
         let sh = m.shoulder_sharpness;
         let g0 = Gradation::solve(m.gradation_a, sh, m);
         let gk = Gradation::solve_locked(m.gradation_a * k, m.gradation_a, sh, m);
         if !gk.lock {
             return None;
         }
+        let gf = Gradation::solve(m.gradation_a * gk.k, sh, m);
         let mut t = [0.0; TONE_N + 1];
         for (i, v) in t.iter_mut().enumerate() {
-            let y = gk.curve(i as f64 / TONE_N as f64);
+            let x = i as f64 / TONE_N as f64;
+            if mode == 2 {
+                let (u, p) = (2.0 * (x - 0.5), 1.5);
+                *v = 0.5 + 0.5 * gk.k * u / (1.0 + (gk.k.powf(p) - 1.0) * u.abs().powf(p)).powf(1.0 / p);
+                continue;
+            }
+            let y = if mode == 1 { gf.curve(x) } else { gk.curve(x) };
             let (mut lo, mut hi) = (0.0f64, 1.0f64);
             for _ in 0..40 {
                 let mid = 0.5 * (lo + hi);
@@ -1031,7 +1040,7 @@ mod tests {
         let p = crate::params::FrontierModelParams::default();
         for c in [-1.0f64, -0.5, 0.3, 0.5, 1.0] {
             let k = if c > 0.0 { 1.0 + super::SLOPE_UP * c } else { 1.0 + super::SLOPE_DOWN * c };
-            let tone = super::Tone::new(k, &p).expect("contrast on");
+            let tone = super::Tone::new(k, &p, 0).expect("contrast on");
             let map = |x: [f64; 3]| {
                 let xm = (x[0] + x[1] + x[2]) / 3.0;
                 let (xt, gap) = tone.at(xm);
