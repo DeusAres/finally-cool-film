@@ -479,16 +479,96 @@ function areaResize(src, sw, sh, dw, dh) {
   return out;
 }
 
-// Highlight roll-off on camera RGB in CFA units (channel c hits sensor white at sat[c] = wb[c]/wbMax*65535): pixels
-// near saturation in any channel blend smoothly to a neutral at their brightest channel, so blown
-// areas don't go magenta (R/B keep headroom up to wb[c] while G clips at 1).
-function satBlend(r, g, b, sat) {
-  let t = 0;
-  for (let c = 0; c < 3; c++) {
-    const v = c === 0 ? r : c === 1 ? g : b, hi = sat[c], lo = 0.92 * hi;
-    if (v > lo) { const u = v >= hi ? 1 : (v - lo) / (hi - lo), k = u * u * (3 - 2 * u); if (k > t) t = k; }
+// Highlight recovery on camera RGB in CFA units (channel c hits sensor white at sat[c] = wb[c]/wbMax*65535).
+// Local "colour propagation": satStats grids the frame (16 px cells) with, per cell, the mean ratio
+// q_c = v_c / mean(other two) of bright but unclipped pixels (no channel above 0.92 sat, brightest above 0.5),
+// weighted by brightness. Empty cells are filled by push-pull (sums pooled 2x2 up a pyramid, holes inherit the
+// coarser level), so clipped areas take the colour of their nearest unclipped bright neighbours. A clipped
+// channel is re-estimated as est = mean(others) * q_c (bilinear from the grid) and pulled toward it:
+// v' = v + t * max(0, est - v), t = smoothstep(0.92*sat, sat, v), ORIGINAL values of the others. Continuous,
+// unsaturated pixels untouched. No grid at all -> raise to min(others) (only when both exceed it).
+// Memory: the grid only (3 floats per 16x16 cell).
+function satLift(v, o1, o2, hi, q) {
+  const lo = 0.92 * hi;
+  if (v <= lo) return v;
+  const e = q == null ? (o1 < o2 ? o1 : o2) : (o1 + o2) * 0.5 * q;
+  if (e <= v) return v;
+  const u = v >= hi ? 1 : (v - lo) / (hi - lo);
+  return v + u * u * (3 - 2 * u) * (e - v);
+}
+
+const SAT_CELL = 16;
+const qClamp = q => (q < 0.1 ? 0.1 : q > 10 ? 10 : q);
+
+// Fills sat.grid ({gw, gh, q}) from a strided 2x2-superpixel pass over the CFA; sat.grid = null if no reference.
+function satStats(cfa, PW, PAD, cx, cy, cw, ch, colorAt, sat) {
+  sat.grid = null; sat.q = new Float32Array(3); sat.y = 0;
+  sat.lo0 = 0.92 * sat[0]; sat.lo1 = 0.92 * sat[1]; sat.lo2 = 0.92 * sat[2];
+  const pos = [[0, 0], [0, 1], [1, 0], [1, 1]].map(([dy, dx]) => ({ c: colorAt(cy + dy, cx + dx), o: dy * PW + dx }));
+  const oR = pos.find(q => q.c === 0).o, oB = pos.find(q => q.c === 2).o;
+  const gs = pos.filter(q => q.c === 1).map(q => q.o);
+  const g0 = gs[0], g1 = gs[1];
+  const gw = Math.ceil(cw / SAT_CELL), gh = Math.ceil(ch / SAT_CELL);
+  const hw = cw >> 1, hh = ch >> 1, st = Math.max(1, Math.round(Math.sqrt(hw * hh / 1e6)));
+  const iR = 1 / sat[0], iG = 1 / sat[1], iB = 1 / sat[2];
+  // pyramid levels: sums of w*q (3 per cell) and w
+  const lv = [{ w: gw, h: gh, S: new Float32Array(gw * gh * 3), W: new Float32Array(gw * gh) }];
+  const L0 = lv[0];
+  for (let y = 0; y < hh; y += st) {
+    let i = (cy + 2 * y + PAD) * PW + cx + PAD;
+    const rowCell = ((2 * y) >> 4) * gw;
+    for (let x = 0; x < hw; x += st, i += 2 * st) {
+      const r = cfa[i + oR], g = (cfa[i + g0] + cfa[i + g1]) * 0.5, b = cfa[i + oB];
+      const fr = r * iR, fg = g * iG, fb = b * iB;
+      const fm = fr > fg ? (fr > fb ? fr : fb) : (fg > fb ? fg : fb);
+      if (fm > 0.92 || fm < 0.5) continue;
+      const mr = (g + b) * 0.5, mg = (r + b) * 0.5, mb = (r + g) * 0.5;
+      if (mr < 1 || mg < 1 || mb < 1) continue;
+      const w = fm * fm, c = rowCell + ((2 * x) >> 4);
+      // ratios clamped: a saturated-colour edge (e.g. pure red, g≈b≈0) must not propagate a huge estimate
+      L0.S[3 * c] += w * qClamp(r / mr); L0.S[3 * c + 1] += w * qClamp(g / mg); L0.S[3 * c + 2] += w * qClamp(b / mb); L0.W[c] += w;
+    }
   }
-  return t;
+  // pull: pool 2x2 up to 1x1
+  while (lv[lv.length - 1].w > 1 || lv[lv.length - 1].h > 1) {
+    const p = lv[lv.length - 1], nw = (p.w + 1) >> 1, nh = (p.h + 1) >> 1;
+    const n = { w: nw, h: nh, S: new Float32Array(nw * nh * 3), W: new Float32Array(nw * nh) };
+    for (let y = 0; y < p.h; y++) for (let x = 0; x < p.w; x++) {
+      const a = y * p.w + x, c = (y >> 1) * nw + (x >> 1);
+      n.S[3 * c] += p.S[3 * a]; n.S[3 * c + 1] += p.S[3 * a + 1]; n.S[3 * c + 2] += p.S[3 * a + 2]; n.W[c] += p.W[a];
+    }
+    lv.push(n);
+  }
+  const top = lv[lv.length - 1];
+  if (top.W[0] <= 0) return;
+  // push: holes (weight < WMIN) inherit the filled coarser level
+  const WMIN = 2;
+  let par = new Float32Array(3);
+  par[0] = top.S[0] / top.W[0]; par[1] = top.S[1] / top.W[0]; par[2] = top.S[2] / top.W[0];
+  let pw = 1;
+  for (let l = lv.length - 2; l >= 0; l--) {
+    const c = lv[l], f = new Float32Array(c.w * c.h * 3);
+    for (let y = 0; y < c.h; y++) for (let x = 0; x < c.w; x++) {
+      const a = y * c.w + x, pa = ((y >> 1) * pw + (x >> 1)) * 3;
+      if (c.W[a] >= WMIN) { f[3 * a] = c.S[3 * a] / c.W[a]; f[3 * a + 1] = c.S[3 * a + 1] / c.W[a]; f[3 * a + 2] = c.S[3 * a + 2] / c.W[a]; }
+      else { f[3 * a] = par[pa]; f[3 * a + 1] = par[pa + 1]; f[3 * a + 2] = par[pa + 2]; }
+    }
+    par = f; pw = c.w;
+  }
+  sat.grid = { gw, gh, q: par };
+}
+
+// Bilinear sample of the filled grid at crop-relative sensor position (x, y) into sat.q; false if no grid.
+function satQ(sat, x, y) {
+  const G = sat.grid;
+  if (!G) return false;
+  let fx = (x + 0.5) / SAT_CELL - 0.5, fy = (y + 0.5) / SAT_CELL - 0.5;
+  fx = fx < 0 ? 0 : fx > G.gw - 1 ? G.gw - 1 : fx; fy = fy < 0 ? 0 : fy > G.gh - 1 ? G.gh - 1 : fy;
+  const x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = x0 + 1 < G.gw ? x0 + 1 : x0, y1 = y0 + 1 < G.gh ? y0 + 1 : y0;
+  const tx = fx - x0, ty = fy - y0, q = G.q, o = sat.q;
+  const a = (y0 * G.gw + x0) * 3, b = (y0 * G.gw + x1) * 3, c = (y1 * G.gw + x0) * 3, d = (y1 * G.gw + x1) * 3;
+  for (let k = 0; k < 3; k++) o[k] = (q[a + k] * (1 - tx) + q[b + k] * tx) * (1 - ty) + (q[c + k] * (1 - tx) + q[d + k] * tx) * ty;
+  return true;
 }
 
 // ---------------------------------------------------------------- Malvar-He-Cutler
@@ -507,8 +587,11 @@ function mhcGreen(a, w, rgb, i, ob, x0, n, swap, gR, gG, gB, M, sat) {
     let r = swap ? vv : hv, b = swap ? hv : vv;
     r = (r > 0 ? r : 0) * gR[x]; b = (b > 0 ? b : 0) * gB[x];
     let g = C0 * gG[x];
-    const tt = satBlend(r, g, b, sat);
-    if (tt > 0) { const mx = Math.max(r, g, b); r += (mx - r) * tt; g += (mx - g) * tt; b += (mx - b) * tt; }
+    const r0 = r, g0 = g;
+    if (r > sat.lo0 || g > sat.lo1 || b > sat.lo2) {
+      const qq = satQ(sat, x, sat.y) ? sat.q : null;
+      r = satLift(r, g, b, sat[0], qq && qq[0]); g = satLift(g, r0, b, sat[1], qq && qq[1]); b = satLift(b, r0, g0, sat[2], qq && qq[2]);
+    }
     const R = m0 * r + m1 * g + m2 * b, G = m3 * r + m4 * g + m5 * b, B = m6 * r + m7 * g + m8 * b;
     const o = ob + x * 3;
     rgb[o] = R > 0 ? R : 0; rgb[o + 1] = G > 0 ? G : 0; rgb[o + 2] = B > 0 ? B : 0;
@@ -526,8 +609,11 @@ function mhcRB(a, w, rgb, i, ob, x0, n, swap, gR, gG, gB, M, sat) {
     g = (g > 0 ? g : 0) * gG[x];
     oo = oo > 0 ? oo : 0;
     let r = (swap ? oo : C0) * gR[x], b = (swap ? C0 : oo) * gB[x];
-    const tt = satBlend(r, g, b, sat);
-    if (tt > 0) { const mx = Math.max(r, g, b); r += (mx - r) * tt; g += (mx - g) * tt; b += (mx - b) * tt; }
+    const r0 = r, g0 = g;
+    if (r > sat.lo0 || g > sat.lo1 || b > sat.lo2) {
+      const qq = satQ(sat, x, sat.y) ? sat.q : null;
+      r = satLift(r, g, b, sat[0], qq && qq[0]); g = satLift(g, r0, b, sat[1], qq && qq[1]); b = satLift(b, r0, g0, sat[2], qq && qq[2]);
+    }
     const R = m0 * r + m1 * g + m2 * b, G = m3 * r + m4 * g + m5 * b, B = m6 * r + m7 * g + m8 * b;
     const o = ob + x * 3;
     rgb[o] = R > 0 ? R : 0; rgb[o + 1] = G > 0 ? G : 0; rgb[o + 2] = B > 0 ? B : 0;
@@ -678,6 +764,7 @@ export async function decodeDNG(arrayBuffer, { maxLongSide, _stage } = {}) {
   const col = buildColour(P, ifd0, neutral);
   const s = wbMax / 65535;
   const sat = wb.map(w => w / wbMax * 65535); // per-channel sensor-white in CFA units
+  satStats(cfa, PW, PAD, cx, cy, cw, ch, colorAt, sat);
   const M = camera ? diag([s, s, s]) : col.M.map(v => v * s);
   meta.cct = col.cct; meta.whiteXY = col.whiteXY; meta.cameraToRec2020 = col.M;
   const maps = camera ? [] : parseGainMaps(P.bytes(raw, 51022) || P.bytes(ifd0, 51022));
@@ -704,8 +791,11 @@ export async function decodeDNG(arrayBuffer, { maxLongSide, _stage } = {}) {
       let i = (cy + 2 * y + PAD) * PW + cx + PAD, o = y * outW * 3;
       for (let x = 0; x < outW; x++, i += 2, o += 3) {
         let r = cfa[i + oR] * gR[x], g = (cfa[i + oG1] + cfa[i + oG2]) * 0.5 * gG[x], b = cfa[i + oB] * gB[x];
-        const tt = satBlend(r, g, b, sat);
-        if (tt > 0) { const mx = Math.max(r, g, b); r += (mx - r) * tt; g += (mx - g) * tt; b += (mx - b) * tt; }
+        const r0 = r, g0 = g;
+        if (r > sat.lo0 || g > sat.lo1 || b > sat.lo2) {
+          const qq = satQ(sat, 2 * x, 2 * y) ? sat.q : null;
+          r = satLift(r, g, b, sat[0], qq && qq[0]); g = satLift(g, r0, b, sat[1], qq && qq[1]); b = satLift(b, r0, g0, sat[2], qq && qq[2]);
+        }
         const R = m0 * r + m1 * g + m2 * b, G = m3 * r + m4 * g + m5 * b, B = m6 * r + m7 * g + m8 * b;
         rgb[o] = R > 0 ? R : 0; rgb[o + 1] = G > 0 ? G : 0; rgb[o + 2] = B > 0 ? B : 0;
       }
@@ -719,6 +809,7 @@ export async function decodeDNG(arrayBuffer, { maxLongSide, _stage } = {}) {
     for (let y = 0; y < outH; y++) {
       const [gR, gG, gB] = gain(y);
       const Y = cy + y;
+      sat.y = y;
       const rowBase = (Y + PAD) * PW + PAD;
       for (let ph = 0; ph < 2; ph++) {
         const X0 = cx + ph;
