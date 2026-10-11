@@ -33,7 +33,8 @@
 //! 6. **Colour.** Saturation about the Rec.709 luminance in linear light, re-encoded.
 //!
 //! The result is baked per pixel into a 17^3 (`settings.lut_resolution`) PCHIP
-//! LUT over the film density, like the legacy scanner LUT.
+//! LUT over the film density, like the legacy scanner LUT; a 3*(steps-1)+1
+//! node table (49^3 at the default) is also baked for the GPU trilinear lookup.
 
 use rayon::prelude::*;
 use spektrafilm_math::pchip3d::{PreparedPchip3d, pchip_interp, prepare_pchip_3d};
@@ -51,7 +52,8 @@ const HIGHLIGHT_UP: (f64, f64) = (0.85, 0.6);
 /// Contrast key: mid-grey slope factor `1 + SLOPE_UP c` (c > 0) / `1 + SLOPE_DOWN c` (c < 0).
 const SLOPE_UP: f64 = 1.9;
 const SLOPE_DOWN: f64 = 0.85;
-/// Contrast key: toe slope (d out / d base-out at black) the shadows keep.
+/// Contrast key shape constants (mid/shadow bulge, toe lift); `TOE_SLOPE` below is
+/// the toe slope (d out / d base-out at black) the shadows keep.
 const MID_BULGE_UP: f64 = 0.45;
 const MID_BULGE_DOWN: f64 = 0.8;
 const SHADOW_BULGE: f64 = 0.7;
@@ -77,7 +79,7 @@ fn srgb_encode(v: f64) -> f64 {
     if v <= 0.0031308 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
 }
 
-/// Grey-ramp exposures of the film-type fit: (ev, scene grey) pairs, the middle
+/// Grey-ramp exposures of the film-type fit: EVs (scene grey = 0.18 * 2^ev), the middle
 /// one is 18 % grey at ev 0.
 pub fn ramp_evs(m: &FrontierModelParams) -> Vec<f64> {
     let n = (m.setup_fit_steps.max(3) | 1) as usize;
@@ -1051,6 +1053,21 @@ mod tests {
         params.film_render.dir_couplers.amount = 0.5;
         let r = q.with_params(params);
         assert!(!std::sync::Arc::ptr_eq(&base, &r.frontier().unwrap().base));
+    }
+
+    #[test]
+    fn frontier_update_matches_fresh_engine_with_halation() {
+        let Some(p) = pipeline() else { return };
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../web/data");
+        let mut params = p.params.clone();
+        params.film_render.halation.active = true;
+        params.film_render.halation.boost_ev = 1.0;
+        let updated = p.clone().with_params(params.clone());
+        let fresh = Pipeline::new_with_spectral(p.film.clone(), p.print.clone(), params, &dir).unwrap();
+        let evs: Vec<f64> = (-8..=8).map(|i| i as f64 / 2.0).collect();
+        let a = updated.process(grey_row(&evs), &CpuBackend).data;
+        let b = fresh.process(grey_row(&evs), &CpuBackend).data;
+        assert!(a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-6), "update() != fresh Engine");
     }
 
     #[test]

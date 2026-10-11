@@ -1345,7 +1345,6 @@ dependencies = [
  "half",
  "libm",
  "rand",
- "rand_distr",
  "rand_mt",
  "rayon",
  "rustfft",

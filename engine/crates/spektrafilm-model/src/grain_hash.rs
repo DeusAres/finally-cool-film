@@ -24,9 +24,6 @@ use rayon::prelude::*;
 pub const EXACT_MAX_MEAN: f32 = 30.0;
 /// Hard cap on inversion steps (mean < 30 is exhausted well before this).
 pub const MAX_INVERSION_STEPS: u32 = 120;
-/// Inter-layer light scatter / DIR coupling: fraction of each layer's grain
-/// deviation replaced by the mean deviation of all three layers (correlated
-/// density noise shared across the dye layers).
 /// Two-population emulsion (used when `n_sub_layers >= 2`): sub-layer 0 is
 /// the coarse FAST crystals (few, big; developed fraction saturates quickly,
 /// p_fast = 1 - (1-p)^FAST_K), sub-layer 1 the fine SLOW crystals (many,
@@ -37,6 +34,9 @@ pub const MAX_INVERSION_STEPS: u32 = 120;
 pub const FAST_OD_SHARE: f32 = 0.3;
 pub const FAST_K: f32 = 3.3;
 pub const FAST_COUNT_FRAC: f32 = 0.002;
+/// Inter-layer light scatter / DIR coupling: fraction of each layer's grain
+/// deviation replaced by the mean deviation of all three layers (correlated
+/// density noise shared across the dye layers).
 pub const LAYER_COUPLING: f32 = 0.45;
 
 #[derive(Debug, Clone, Copy)]
@@ -119,7 +119,11 @@ pub fn poisson(lambda: f32, st: &mut u32) -> f32 {
             }
             k += 1.0;
             f *= lambda / k;
-            c += f;
+            let c2 = c + f;
+            if c2 == c {
+                break; // cumulative sum stalled below u (u ~ 1): stop
+            }
+            c = c2;
         }
         k
     } else {
@@ -149,7 +153,11 @@ pub fn binomial(n: f32, p: f32, q: f32, st: &mut u32) -> f32 {
             }
             f *= (n - k) / (k + 1.0) * ratio;
             k += 1.0;
-            c += f;
+            let c2 = c + f;
+            if c2 == c {
+                break; // cumulative sum stalled below u (u ~ 1): stop
+            }
+            c = c2;
         }
         if flip { n - k } else { k }
     } else {
@@ -302,7 +310,11 @@ mod tests {
                     }
                     k += 1.0;
                     f *= lambda / k;
-                    c += f;
+                    let c2 = c + f;
+                    if c2 == c {
+                        break;
+                    }
+                    c = c2;
                     i += 1;
                 }
                 return k;
@@ -335,7 +347,11 @@ mod tests {
                     }
                     f *= (n - k) / (k + 1.0) * ratio;
                     k += 1.0;
-                    c += f;
+                    let c2 = c + f;
+                    if c2 == c {
+                        break;
+                    }
+                    c = c2;
                     i += 1;
                 }
                 return if flip { n - k } else { k };

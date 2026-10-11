@@ -30,58 +30,6 @@ pub fn rk_double(rng: &mut Mt) -> f64 {
     (a as f64 * 67108864.0 + b as f64) / 9007199254740992.0
 }
 
-/// Stateful sampler for numpy's `rk_gauss` — wraps an `Mt` with the
-/// one-sample cache that the polar Box-Muller transform requires.
-/// Two normal variates are generated per rejection-sampling pass; one
-/// is returned now, the other is cached for the next call. Matches
-/// `numpy.random.RandomState.standard_normal` bit-exactly when seeded
-/// identically.
-pub struct GaussRng {
-    pub rng: Mt,
-    has_gauss: bool,
-    gauss: f64,
-}
-
-impl GaussRng {
-    pub fn new(seed: u32) -> Self {
-        Self {
-            rng: Mt::new(seed),
-            has_gauss: false,
-            gauss: 0.0,
-        }
-    }
-
-    pub fn from_mt(rng: Mt) -> Self {
-        Self {
-            rng,
-            has_gauss: false,
-            gauss: 0.0,
-        }
-    }
-
-    /// Numpy's `rk_gauss`: polar Box-Muller with rejection sampling.
-    /// Returns a single N(0,1) sample; caches the other for the next call.
-    pub fn gauss(&mut self) -> f64 {
-        if self.has_gauss {
-            let v = self.gauss;
-            self.has_gauss = false;
-            self.gauss = 0.0;
-            return v;
-        }
-        loop {
-            let x1 = 2.0 * rk_double(&mut self.rng) - 1.0;
-            let x2 = 2.0 * rk_double(&mut self.rng) - 1.0;
-            let r2 = x1 * x1 + x2 * x2;
-            if r2 < 1.0 && r2 != 0.0 {
-                let f = (-2.0 * r2.ln() / r2).sqrt();
-                self.gauss = f * x1;
-                self.has_gauss = true;
-                return f * x2;
-            }
-        }
-    }
-}
-
 /// Numpy's Poisson sampler. Dispatches between two algorithms depending
 /// on the rate. Matches `numpy.random.RandomState.poisson` bit-exactly.
 #[inline]

@@ -552,13 +552,29 @@ fn diffusion_filter_psf(
     pixel_size_um: f64,
     halo_warmth: f64,
 ) -> [Vec<f64>; 3] {
-    let center = (k / 2) as f64;
-    let mut r = vec![0.0f64; k * k];
+    let kc = k / 2;
+    let center = kc as f64;
+    // The kernel is radially symmetric and `dx² + dy²` is an exact integer,
+    // so evaluate the radial components once per distinct r² (≈ k²/6 values)
+    // and gather per pixel. r = sqrt(r²) is the same f64 as before, so the
+    // result is bit-identical to evaluating every grid point.
+    let r2_of = |x: usize, y: usize| -> usize {
+        let dx = x.abs_diff(kc);
+        let dy = y.abs_diff(kc);
+        dx * dx + dy * dy
+    };
+    let max_r2 = 2 * kc * kc; // |dx|, |dy| <= kc for every grid point
+    let mut slot = vec![u32::MAX; max_r2 + 1];
+    let mut r = Vec::new();
     for y in 0..k {
         for x in 0..k {
-            let dx = x as f64 - center;
-            let dy = y as f64 - center;
-            r[y * k + x] = (dx * dx + dy * dy).sqrt();
+            let r2 = r2_of(x, y);
+            if slot[r2] == u32::MAX {
+                slot[r2] = r.len() as u32;
+                let dx = x as f64 - center;
+                let dy = y as f64 - center;
+                r.push((dx * dx + dy * dy).sqrt());
+            }
         }
     }
     let effective_warmth = cfg.halo_warmth_base + halo_warmth;
@@ -566,9 +582,13 @@ fn diffusion_filter_psf(
         radial_components(&r, cfg, spatial_scale, pixel_size_um, effective_warmth);
 
     std::array::from_fn(|c| {
-        let mut psf: Vec<f64> = (0..k * k)
-            .map(|p| core[p] + halo[c][p] + bloom[p])
-            .collect();
+        let mut psf: Vec<f64> = Vec::with_capacity(k * k);
+        for y in 0..k {
+            for x in 0..k {
+                let t = slot[r2_of(x, y)] as usize;
+                psf.push(core[t] + halo[c][t] + bloom[t]);
+            }
+        }
         let s: f64 = psf.iter().sum();
         if s > 0.0 {
             for v in &mut psf {
@@ -647,8 +667,10 @@ pub fn boost_highlights(
         .iter()
         .map(|&v| v as f64)
         .fold(f64::NEG_INFINITY, f64::max);
-    if max_raw == 0.0 {
-        return ImageBuf::new(image.width, image.height);
+    // All-zero / all-negative / empty / NaN frame: nothing to boost (also keeps
+    // `clamp(0.0, max_raw)` below from panicking on min > max).
+    if !(max_raw > 0.0) {
+        return image.clone();
     }
     let raw_x0 = (MIDGRAY * 2f64.powf(protect_ev)).clamp(0.0, max_raw);
     if raw_x0 == max_raw {
@@ -912,4 +934,71 @@ pub fn apply_diffusion_filter_blur(
             *o = from_f64((1.0 - p_s) * (orig as f64) + p_s * s);
         });
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Original evaluation over every grid point (reference for the tabulated version).
+    fn psf_naive(
+        k: usize,
+        cfg: &FamilyShape,
+        spatial_scale: f64,
+        pixel_size_um: f64,
+        halo_warmth: f64,
+    ) -> [Vec<f64>; 3] {
+        let center = (k / 2) as f64;
+        let mut r = vec![0.0f64; k * k];
+        for y in 0..k {
+            for x in 0..k {
+                let dx = x as f64 - center;
+                let dy = y as f64 - center;
+                r[y * k + x] = (dx * dx + dy * dy).sqrt();
+            }
+        }
+        let effective_warmth = cfg.halo_warmth_base + halo_warmth;
+        let (core, halo, bloom) =
+            radial_components(&r, cfg, spatial_scale, pixel_size_um, effective_warmth);
+        std::array::from_fn(|c| {
+            let mut psf: Vec<f64> = (0..k * k).map(|p| core[p] + halo[c][p] + bloom[p]).collect();
+            let s: f64 = psf.iter().sum();
+            if s > 0.0 {
+                for v in &mut psf {
+                    *v /= s;
+                }
+            }
+            psf
+        })
+    }
+
+    #[test]
+    fn tabulated_psf_is_bit_identical_to_naive() {
+        for fam in ["glimmerglass", "black_pro_mist", "pro_mist", "cinebloom"] {
+            let Some(cfg) = family_shape(fam) else { continue };
+            for &k in &[1usize, 3, 5, 11, 12, 41, 64, 101] {
+                for &(scale, px, warm) in &[(1.0, 5.0, 0.0), (2.5, 3.0, 0.7), (0.4, 8.0, -0.5)] {
+                    let a = diffusion_filter_psf(k, &cfg, scale, px, warm);
+                    let b = psf_naive(k, &cfg, scale, px, warm);
+                    for c in 0..3 {
+                        assert_eq!(a[c].len(), b[c].len());
+                        for (x, y) in a[c].iter().zip(&b[c]) {
+                            assert_eq!(x.to_bits(), y.to_bits(), "k={k}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn boost_highlights_degenerate_frames_do_not_panic() {
+        let mut neg = ImageBuf::new(2, 2);
+        for v in neg.data.iter_mut() {
+            *v = from_f64(-0.1);
+        }
+        assert_eq!(boost_highlights(&neg, 1.0, 0.5, 0.0).data, neg.data);
+        let empty = ImageBuf::new(0, 0);
+        assert_eq!(boost_highlights(&empty, 1.0, 0.5, 0.0).data.len(), 0);
+    }
 }

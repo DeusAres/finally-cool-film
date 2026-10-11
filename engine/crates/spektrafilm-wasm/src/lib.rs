@@ -112,7 +112,10 @@ impl Engine {
 
     /// Merge render-time overrides (print exposure, contrast morph, grain,
     /// halation, scanner…) without re-running calibration. Calibration inputs
-    /// (enlarger filters/illuminant, camera EV) need a new `Engine`.
+    /// (enlarger filters/illuminant, camera EV, `rgb_to_raw_method`, `input_gamut_compress`,
+    /// `development_time`, `normalize_print_exposure`, print exposure compensation,
+    /// preflash, neutral-filter database lookup) need a new `Engine`; `update`
+    /// ignores them silently.
     pub fn update(&mut self, overrides_json: &str) -> Result<(), JsError> {
         let overrides: serde_json::Value = serde_json::from_str(overrides_json)?;
         let mut next = self.params.clone();

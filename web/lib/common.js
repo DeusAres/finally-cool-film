@@ -15,7 +15,7 @@ const DATA_FILES = [
 // LUT mode for enlarger + scanner: ~3x faster, max 1/255 off the full spectral path.
 export const BASE_PARAMS = { settings: { use_enlarger_lut: true, use_scanner_lut: true } };
 export const SRGB_INPUT = { io: { input_color_space: 'sRGB', input_cctf_decoding: true } };
-export const REC2020_LINEAR_INPUT = { io: { input_color_space: 'ITU-R BT.2020', input_cctf_decoding: false } };
+const REC2020_LINEAR_INPUT = { io: { input_color_space: 'ITU-R BT.2020', input_cctf_decoding: false } };
 
 /** Load wasm + data files. Resolves to true when the WebGPU backend is up. */
 export async function bootEngine() {

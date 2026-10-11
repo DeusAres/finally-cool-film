@@ -1130,6 +1130,7 @@ impl WgpuBackend {
             .iter()
             .enumerate()
             .map(|(i, &sigma)| {
+                let sigma = sigma.max(0.01);
                 let radius = fir_blur_radius(sigma);
                 let kernel_size = (2 * radius + 1) as usize;
                 let sigma_f64 = sigma as f64;
@@ -4909,8 +4910,8 @@ fn build_unsharp_state(
     let n_pixels = (width as usize) * (height as usize);
     let img_bytes = (n_pixels * 3 * 4) as u64;
 
-    // Output buffer for the combine pass. Cleared each render — fine,
-    // it's only used between the combine dispatch and the copy_buffer.
+    // Output buffer for the combine pass; only used between the combine
+    // dispatch and the copy_buffer.
     let out_buf = device.create_buffer_t(&wgpu::BufferDescriptor {
         label: Some("unsharp_out"),
         size: img_bytes,
@@ -5092,25 +5093,13 @@ fn build_unsharp_state(
         bg: combine_bg,
     };
 
-    // Drop blur_dst's strong ref into UnsharpState via an owned vec.
-    // We need to keep it alive for the encoder lifetime; tucking it
-    // into the BlurJob is awkward, so use a separate field.
-    let mut state = UnsharpState {
+    let state = UnsharpState {
         blur,
         combine,
         blur_pipe_h,
         blur_pipe_v,
         out_buf,
     };
-    // Leak the blur output into the combine's owned buffers list by
-    // creating it inside the state; here we tuck it into a global
-    // owner. Simpler: keep it alive via a sidecar field.
-    // (Reusing _params_buf would be confusing; just attach as another
-    // implicit slot.)
-    let _ = blur_dst; // moved into bind groups, lives via wgpu's Arc
-    // wgpu::Buffer is Arc-backed under the hood — the bind groups keep
-    // it alive. Nothing to leak here.
-    let _ = &mut state;
     state
 }
 

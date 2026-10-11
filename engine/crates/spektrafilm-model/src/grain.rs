@@ -2,7 +2,6 @@
 // Poisson-binomial particle model with dye cloud blur and lognormal micro-structure.
 
 use spektrafilm_gpu::ComputeBackend;
-use spektrafilm_math::gaussian;
 use spektrafilm_math::image::ImageBuf;
 use spektrafilm_math::precision::{Scalar, ZERO, from_f64};
 use rayon::prelude::*;
@@ -24,13 +23,10 @@ fn print_stage_timing(enabled: bool, stage: &str, start: Instant) {
 /// (full f64 precision in `precision-f64` mode); RNG sampling uses f64 directly.
 pub fn layer_particle_model(
     density: &[Scalar],
-    width: u32,
-    height: u32,
     density_max: f64,
     n_particles_per_pixel: f64,
     grain_uniformity: f64,
     seed: u64,
-    blur_particle: f32,
 ) -> Vec<Scalar> {
     // Inputs are f64 to match Python's `layer_particle_model` —
     // density_max/uniformity/agx-area come from JSON profiles at full
@@ -76,21 +72,6 @@ pub fn layer_particle_model(
     for (i, slot) in grain.iter_mut().enumerate() {
         let developed = spektrafilm_math::numpy_rng::rk_binomial(&mut rng, seeds[i], p_arr[i]);
         *slot = from_f64((developed as f64) * od_particle * sat_arr[i]);
-    }
-
-    if blur_particle > 0.4 {
-        // Match Python: `sigma = blur_particle * np.sqrt(od_particle)`
-        // — keep the multiplication in f64 and narrow at the end.
-        let sigma = (blur_particle as f64 * od_particle.sqrt()) as f32;
-        if sigma > 0.1 {
-            let mut img = ImageBuf::from_data(
-                width,
-                height,
-                grain.iter().flat_map(|&v| [v, v, v]).collect(),
-            );
-            img = gaussian::gaussian_blur(&img, sigma);
-            grain = img.extract_channel(0);
-        }
     }
 
     grain
@@ -151,13 +132,10 @@ pub fn apply_grain_to_density(
                 let seed = seed_ch + (sl as u64) * 10;
                 let g = layer_particle_model(
                     &density_ch,
-                    w,
-                    h,
                     density_max[ch],
                     n_particles,
                     grain_uniformity[ch],
                     seed,
-                    0.0,
                 );
                 print_stage_timing(stage_timings, "grain.layer_particle_model", t);
                 for (s, &v) in grain_sum.iter_mut().zip(g.iter()) {

@@ -60,7 +60,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 }`;
 
 /** Number of f32 slots GRAIN_WGSL reads after the engine's own 4 (P[4]). */
-export const PACK_PARAMS_LEN = 1;
+const PACK_PARAMS_LEN = 1;
 
 /** Params for GRAIN_WGSL (P[4]): `rec2020ToP3`: the engine output is Rec.2020 and the photo is Display P3. */
 export function packParams(rec2020ToP3 = false) {

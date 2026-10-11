@@ -194,7 +194,6 @@ pub fn scan_frontier(
         .collect();
     let base_density: Vec<f64> = profile.data.base_density.clone();
 
-    let illuminant_f32 = select_illuminant(&profile.info.viewing_illuminant);
     // Use the full-precision f64 illuminant — the f32 → f64 promotion of
     // the f32 constants drops ~7 digits per sample and accumulates ~5e-6
     // of drift in the scan stage after the 81-wavelength reduction.
@@ -223,15 +222,11 @@ pub fn scan_frontier(
     // slightly off 1.0, which xy_to_xyY then corrects — replaying that
     // chain is bit-exact.
     let mut illu_xyz_runtime = [0.0f64; 3];
-    let illu_y_sum: f64 = (0..n_wl)
-        .map(|i| illuminant[i] * spectral::CMF_Y_F64[i])
-        .sum();
     for i in 0..n_wl {
         illu_xyz_runtime[0] += illuminant[i] * spectral::CMF_X_F64[i];
         illu_xyz_runtime[1] += illuminant[i] * spectral::CMF_Y_F64[i];
         illu_xyz_runtime[2] += illuminant[i] * spectral::CMF_Z_F64[i];
     }
-    let _ = illu_y_sum;
     for c in 0..3 {
         illu_xyz_runtime[c] /= normalization;
     }
@@ -446,25 +441,6 @@ fn rgb_to_rgb_identity_matrix(name: &str) -> [[f64; 3]; 3] {
     m
 }
 
-pub fn process(
-    density_cmy: &ImageBuf,
-    profile: &Profile,
-    params: &RuntimeParams,
-    backend: &dyn ComputeBackend,
-    color_ref: &crate::color_reference::ColorReference,
-    gamut: &crate::gamut_compression::OutputGamutCompress,
-) -> ImageBuf {
-    scan(density_cmy, profile, params, backend, color_ref, gamut)
-}
-
-fn select_illuminant(name: &str) -> &'static [f32] {
-    match name {
-        "D50" => &spectral::ILLUMINANT_D50,
-        "D55" => &spectral::ILLUMINANT_D55,
-        "D65" => &spectral::ILLUMINANT_D65,
-        _ => &spectral::ILLUMINANT_D50,
-    }
-}
 
 pub fn select_illuminant_f64(name: &str) -> &'static [f64] {
     match name {

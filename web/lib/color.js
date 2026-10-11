@@ -64,10 +64,10 @@ export const REC2020_TO_P3 = convert('rec2020', 'p3');
 // pipeline, no per-photo fit.
 // v2-calib: KNEE / SHOULDER are generic; tune against the acceptance set only if the engine's highlights need it.
 const DISPLAY_KNEE = 0.5, DISPLAY_SHOULDER = 0.5;
-export const displayToScene = (x) => (x <= DISPLAY_KNEE ? x : DISPLAY_KNEE + (x - DISPLAY_KNEE) / (1 - DISPLAY_SHOULDER * (x - DISPLAY_KNEE) / (1 - DISPLAY_KNEE)));
+const displayToScene = (x) => (x <= DISPLAY_KNEE ? x : DISPLAY_KNEE + (x - DISPLAY_KNEE) / (1 - DISPLAY_SHOULDER * (x - DISPLAY_KNEE) / (1 - DISPLAY_KNEE)));
 
-export const SQRT_N = 1024;   // the gain LUT is sampled over sqrt(max channel): fine near black, where it is 1
-/** f(m) / m for m = (i / SQRT_N)²: read by the GPU input pass (storage buffer) and by `sceneFromDisplay`. */
+const SQRT_N = 1024;   // the gain LUT is sampled over sqrt(max channel): fine near black, where it is 1
+/** f(m) / m for m = (i / SQRT_N)²: read by the GPU input pass (storage buffer) and by `displayGain`. */
 export const DISPLAY_GAIN_LUT = Float32Array.from({ length: SQRT_N + 1 }, (_, i) => {
   const m = (i / SQRT_N) ** 2;
   return m > 0 ? displayToScene(m) / m : 1;

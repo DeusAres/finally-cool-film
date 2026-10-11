@@ -172,7 +172,9 @@ impl Pipeline {
 
     /// Return a copy of this calibrated pipeline with updated runtime params.
     /// Callers must only use this when the calibration-affecting inputs match
-    /// the pipeline that was originally built.
+    /// the pipeline that was originally built: rgb_to_raw_method, input_gamut_compress,
+    /// development_time, normalize_print_exposure, print_exposure_compensation,
+    /// preflash and neutral-filter settings are baked at construction and ignored here.
     pub fn with_params(mut self, params: RuntimeParams) -> Self {
         let mut params = params;
         apply_film_specific_params(&self.film, &mut params);
@@ -246,12 +248,15 @@ impl Pipeline {
             self.frontier = None;
             return;
         }
-        let key = |v: &dyn erased::Ser| v.json();
+        fn key<T: serde::Serialize>(v: &T) -> String {
+            serde_json::to_string(v).unwrap_or_default()
+        }
         let base_key = key(&(
             &p.scanner.frontier.model,
             &p.film_render.dir_couplers,
             p.film_render.density_curve_gamma,
             &p.io.input_color_space,
+            &p.film_render.halation,
         ));
         let lut_key = key(&(
             &p.scanner.frontier,
@@ -301,17 +306,6 @@ impl Pipeline {
         let d = self.film_density(&thumb, &p);
         let cmy: Vec<f32> = d.data.iter().map(|&v| v as f32).collect();
         Some(crate::frontier::auto_setup(&base, &cmy, w, h))
-    }
-}
-
-mod erased {
-    pub trait Ser {
-        fn json(&self) -> String;
-    }
-    impl<T: serde::Serialize> Ser for T {
-        fn json(&self) -> String {
-            serde_json::to_string(self).unwrap_or_default()
-        }
     }
 }
 
@@ -718,7 +712,7 @@ impl Pipeline {
             tracing::info!("pipeline: printing complete");
             dump_if_env("SPEKTRAFILM_DUMP_PRINT_DENSITY", &printed);
             let t = Instant::now();
-            let result = stages::scanning::process(
+            let result = stages::scanning::scan(
                 &printed,
                 &self.print,
                 &self.params,
@@ -804,7 +798,7 @@ impl Pipeline {
         // are homogeneous in the input RGB, so scaling the matrix is
         // equivalent to scaling the input — saves a separate "scale" compute
         // pass at the head of the chain. Auto-exposure metering itself stays
-        // on CPU (~30 ms at 6 MP after the per-row rayon parallelization);
+        // on CPU (it downsamples to <= 256 px first, so it is cheap at any size);
         // the result is a single float that's cheap to roll into the matrix.
         let mut exposure_scale_f64 = 1.0f64;
         if self.params.camera.auto_exposure {
@@ -1008,11 +1002,6 @@ impl Pipeline {
         // per-channel µm sigmas, converts to pixel space, and passes the
         // resulting scalars to the shaders.
         let halation = if self.params.film_render.halation.active {
-            let pix_um = stages::filming::pixel_size_um(
-                self.params.camera.film_format_mm,
-                image.width,
-                image.height,
-            );
             let h = &self.params.film_render.halation;
             // GPU shaders take f32 — narrow at the boundary.
             let avg_f64 = |a: [f64; 3]| (a[0] + a[1] + a[2]) / 3.0;
@@ -1055,11 +1044,6 @@ impl Pipeline {
         // Held in this binding so `&density_curves_0_f64` outlives the
         // backend call.
         let dir_inputs = if self.params.film_render.dir_couplers.active {
-            let pix_um = stages::filming::pixel_size_um(
-                self.params.camera.film_format_mm,
-                image.width,
-                image.height,
-            );
             let dir = &self.params.film_render.dir_couplers;
             let matrix = spektrafilm_model::couplers::compute_dir_couplers_matrix(
                 dir.gamma_samelayer_rgb,
@@ -1148,28 +1132,8 @@ impl Pipeline {
         // sampling; CPU does the same whenever λ > 30 / var > 9, which is
         // the typical regime for ≥ 1 MP images.
         let grain = if self.params.film_render.grain.applies() {
-            let pix_um = stages::filming::pixel_size_um(
-                self.params.camera.film_format_mm,
-                image.width,
-                image.height,
-            );
             let g = &self.params.film_render.grain;
-            let pixel_area = pix_um * pix_um;
             let n_sub = g.n_sub_layers.max(1);
-            // GPU shaders are f32 — narrow the f64 grain params at the boundary.
-            let mut npp = [0.0f32; 3];
-            for c in 0..3 {
-                let particle_area = g.agx_particle_area_um2 * g.agx_particle_scale[c];
-                npp[c] = ((pixel_area as f64 / particle_area) / n_sub as f64) as f32;
-            }
-            let film_curves_f32 = self.film.density_curves_f32();
-            let norm_curves_f32 =
-                spektrafilm_model::density_curves::normalize_density_curves(&film_curves_f32);
-            let dmax_curves = spektrafilm_model::density_curves::max_density(&norm_curves_f32);
-            let mut density_max = [0.0f32; 3];
-            for c in 0..3 {
-                density_max[c] = dmax_curves[c] + g.density_min[c] as f32;
-            }
             let hash_setup = if g.is_hash() {
                 Some(stages::filming::hash_grain_setup(
                     &self.params,
@@ -1198,6 +1162,21 @@ impl Pipeline {
                     }),
                 })
             } else {
+            let pixel_area = pix_um * pix_um;
+            // GPU shaders are f32 — narrow the f64 grain params at the boundary.
+            let mut npp = [0.0f32; 3];
+            for c in 0..3 {
+                let particle_area = g.agx_particle_area_um2 * g.agx_particle_scale[c];
+                npp[c] = ((pixel_area as f64 / particle_area) / n_sub as f64) as f32;
+            }
+            let film_curves_f32 = self.film.density_curves_f32();
+            let norm_curves_f32 =
+                spektrafilm_model::density_curves::normalize_density_curves(&film_curves_f32);
+            let dmax_curves = spektrafilm_model::density_curves::max_density(&norm_curves_f32);
+            let mut density_max = [0.0f32; 3];
+            for c in 0..3 {
+                density_max[c] = dmax_curves[c] + g.density_min[c] as f32;
+            }
             Some(spektrafilm_gpu::GrainGpuParams {
                 density_min: [
                     g.density_min[0] as f32,

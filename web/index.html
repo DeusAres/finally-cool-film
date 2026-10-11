@@ -10,7 +10,7 @@
 <title>finally cool film</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400&display=swap" rel="stylesheet">
 <style>
   :root { --bg: #0e0d0c; --fg: #efe9e1; --muted: #8f877d; --accent: #e8a33d; --line: #2a2622; --card: #171513; }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -67,18 +67,14 @@
   .row.toggle input:checked::after { transform: translateX(18px); }
   .row.act { display: flex; justify-content: flex-end; }
   .row.act .btn { min-width: 96px; }
-  .section { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
-         padding: 8px 0 2px; }
   .row label { font-size: 14px; color: var(--muted); }
   .row output { font: 12px ui-monospace, Menlo, monospace; text-align: right; color: var(--muted); }
   input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; }
   .filebtns { display: grid; grid-template-columns: 1fr; gap: 8px; padding: 4px 0 6px; }
   .filebtns .btn { border-radius: 14px; padding: 10px 8px; font-size: 16px; min-height: 46px; }
-  .filebtns .btn[hidden] { display: none; }
   .row2 { display: flex; gap: 10px; }
   .row2 .btn { flex: 1; }
   .filebtns .wide { grid-column: 1 / -1; }
-  .pane[hidden] { display: none; }
   .pane { padding-top: 4px; }
   #tabs { flex: none; display: flex; background: var(--card); border-top: 1px solid var(--line); padding: 0 4px; }
   #tabs button { flex: 1; background: none; border: 0; color: var(--muted); padding: 6px 0 4px; display: flex; flex-direction: column;

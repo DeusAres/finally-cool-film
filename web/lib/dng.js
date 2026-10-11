@@ -351,6 +351,7 @@ function parseGainMaps(bytes) {
   let p = 4;
   for (let k = 0; k < n && p + 16 <= bytes.length; k++) {
     const id = dv.getUint32(p), size = dv.getUint32(p + 12), q = p + 16;
+    if (q + size > bytes.length || size < 76) break;
     if (id === 9) {
       const u = j => dv.getUint32(q + 4 * j);
       const g = {
@@ -360,6 +361,7 @@ function parseGainMaps(bytes) {
         orV: dv.getFloat64(q + 56), orH: dv.getFloat64(q + 64), mapPlanes: u(18),
       };
       const cnt = g.nv * g.nh * g.mapPlanes;
+      if (76 + 4 * cnt > size) { p = q + size; continue; }
       g.gains = new Float32Array(cnt);
       for (let i = 0; i < cnt; i++) g.gains[i] = dv.getFloat32(q + 76 + 4 * i);
       maps.push(g);
@@ -373,7 +375,7 @@ function parseGainMaps(bytes) {
 // image coordinate (oy + step*(y+0.5), ox + step*(x+0.5)) of an imgW x imgH image.
 function gainEvaluator(maps, imgW, imgH, ox, oy, step, outW) {
   const prepped = maps.map(g => {
-    const i0s = new Int32Array(outW), i1s = new Int32Array(outW), colW = new Float32Array(outW);
+    const i0s = new Int32Array(outW), i1s = new Int32Array(outW), colW = new Float32Array(outW), clamped = new Uint8Array(outW);
     let any = false;
     for (let x = 0; x < outW; x++) {
       const cx = ox + step * (x + 0.5);
@@ -382,6 +384,7 @@ function gainEvaluator(maps, imgW, imgH, ox, oy, step, outW) {
         i0s[x] = i1s[x] = g.nh + 1; continue; // not covered
       }
       let f = (cx / imgW - g.orH) / g.spH;
+      clamped[x] = f <= 0 || f >= g.nh - 1 ? 1 : 0;
       f = Math.min(Math.max(f, 0), g.nh - 1);
       const i0 = Math.min(Math.floor(f), Math.max(g.nh - 2, 0));
       i0s[x] = i0; i1s[x] = Math.min(i0 + 1, g.nh - 1); colW[x] = g.nh > 1 ? f - i0 : 0; any = true;
@@ -391,7 +394,7 @@ function gainEvaluator(maps, imgW, imgH, ox, oy, step, outW) {
     for (let x = 0; x < outW;) {
       if (i0s[x] > g.nh) { x++; continue; }
       let e = x + 1;
-      while (e < outW && i0s[e] === i0s[x] && i1s[e] === i1s[x] && step * (e - x) === Math.floor(ox + step * (e + 0.5)) - Math.floor(ox + step * (x + 0.5)) && g.colPitch === 1) e++;
+      while (e < outW && i0s[e] === i0s[x] && i1s[e] === i1s[x] && clamped[e] === clamped[x] && step * (e - x) === Math.floor(ox + step * (e + 0.5)) - Math.floor(ox + step * (x + 0.5)) && g.colPitch === 1) e++;
       segs.push({ xs: x, xe: e, i0: i0s[x], i1: i1s[x], w0: colW[x], dw: e - x > 1 ? (colW[e - 1] - colW[x]) / (e - 1 - x) : 0 });
       x = e;
     }
@@ -624,7 +627,7 @@ function mhcRB(a, w, rgb, i, ob, x0, n, swap, gR, gG, gB, M, sat) {
 
 const PAD = 2;
 
-export async function decodeDNG(arrayBuffer, { maxLongSide, _stage } = {}) {
+export async function decodeDNG(arrayBuffer, { maxLongSide } = {}) {
   const buf = ArrayBuffer.isView(arrayBuffer)
     ? arrayBuffer.buffer.slice(arrayBuffer.byteOffset, arrayBuffer.byteOffset + arrayBuffer.byteLength)
     : arrayBuffer;
@@ -667,8 +670,7 @@ export async function decodeDNG(arrayBuffer, { maxLongSide, _stage } = {}) {
 
   // ---- decode + linearize into padded Uint16 CFA (WB'd / wbMax, clip -> 65535)
   const PW = aW + 2 * PAD, PH = aH + 2 * PAD;
-  const cfa = _stage === 'raw' ? null : new Uint16Array(PW * PH);
-  const rawOut = _stage === 'raw' ? new Uint16Array(W * H) : null;
+  const cfa = new Uint16Array(PW * PH);
   const u8 = new Uint8Array(buf);
   const lin = linTable ? Uint16Array.from(linTable) : null;
   // per-phase black & scale (black repeat dims dividing 2 are exact; DeltaH/V added per pixel)
@@ -679,10 +681,6 @@ export async function decodeDNG(arrayBuffer, { maxLongSide, _stage } = {}) {
   const scaleC = [0, 1, 2].map(c => (wb[c] / wbMax) * 65535 / (white - blackAt(0, 0)));
   const put = (tile, tw, th, x0, y0) => {
     const xe = Math.min(x0 + tw, W), ye = Math.min(y0 + th, H);
-    if (rawOut) {
-      for (let y = y0; y < ye; y++) rawOut.set(tile.subarray((y - y0) * tw, (y - y0) * tw + xe - x0), y * W + x0);
-      return;
-    }
     for (let y = Math.max(y0, aT); y < Math.min(ye, aT + aH); y++) {
       const ay = y - aT;
       const dv = dVv ? dVv[ay] || 0 : 0;
@@ -717,7 +715,7 @@ export async function decodeDNG(arrayBuffer, { maxLongSide, _stage } = {}) {
   const tw = P.one(raw, 322, 0), th = P.one(raw, 323, 0);
   let offs, cnts, segW, segH;
   if (tw) { offs = P.values(raw, 324); cnts = P.values(raw, 325); segW = tw; segH = th; }
-  else { offs = P.values(raw, 273); cnts = P.values(raw, 279); segW = W; segH = P.one(raw, 278, H); }
+  else { offs = P.values(raw, 273); cnts = P.values(raw, 279); segW = W; segH = Math.min(P.one(raw, 278, H), H); }
   const across = Math.ceil(W / segW);
   const tileBuf = new Uint16Array(segW * segH * 2);
   for (let t = 0; t < offs.length; t++) {
@@ -747,7 +745,6 @@ export async function decodeDNG(arrayBuffer, { maxLongSide, _stage } = {}) {
     meta.focalLength = P.one(ex, 37386, undefined);
     meta.dateTimeOriginal = P.str(ex, 36867) || undefined;
   }
-  if (rawOut) return { w: W, h: H, raw: rawOut, meta };
 
   // reflect-101 padding (preserves CFA phase)
   for (let y = PAD; y < PH - PAD; y++) {
@@ -760,14 +757,13 @@ export async function decodeDNG(arrayBuffer, { maxLongSide, _stage } = {}) {
   }
 
   // ---- colour
-  const camera = _stage === 'camera';
   const col = buildColour(P, ifd0, neutral);
   const s = wbMax / 65535;
   const sat = wb.map(w => w / wbMax * 65535); // per-channel sensor-white in CFA units
   satStats(cfa, PW, PAD, cx, cy, cw, ch, colorAt, sat);
-  const M = camera ? diag([s, s, s]) : col.M.map(v => v * s);
+  const M = col.M.map(v => v * s);
   meta.cct = col.cct; meta.whiteXY = col.whiteXY; meta.cameraToRec2020 = col.M;
-  const maps = camera ? [] : parseGainMaps(P.bytes(raw, 51022) || P.bytes(ifd0, 51022));
+  const maps = parseGainMaps(P.bytes(raw, 51022) || P.bytes(ifd0, 51022));
   meta.gainMaps = maps.length;
   const [m0, m1, m2, m3, m4, m5, m6, m7, m8] = M;
 
@@ -828,5 +824,5 @@ export async function decodeDNG(arrayBuffer, { maxLongSide, _stage } = {}) {
     outW = dw; outH = dh;
   }
 
-  return { w: outW, h: outH, rgb, space: camera ? 'camera' : 'rec2020', exposure: baseline, meta };
+  return { w: outW, h: outH, rgb, space: 'rec2020', exposure: baseline, meta };
 }

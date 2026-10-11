@@ -258,7 +258,7 @@ fn meter_luminance(lum: &[f64], sw: usize, sh: usize, method: &str) -> f64 {
 
 /// Per-pixel `raw = m · rgb` for the Mallett2019 path (f64 matmul, rayon-parallel).
 fn apply_mallett_matrix(image: &ImageBuf, m: &[[f64; 3]; 3]) -> ImageBuf {
-    let mut out = image.clone();
+    let mut out = ImageBuf::new(image.width, image.height);
     out.data
         .par_chunks_exact_mut(3)
         .zip(image.data.par_chunks_exact(3))
@@ -310,7 +310,7 @@ pub fn expose(
         let m = crate::mallett::film_matrix(core, &params.io.input_color_space);
         apply_mallett_matrix(&rgb, &m)
     } else if let Some(lut) = tc_lut {
-        // Full Hanatos2025 spectral upsampling with CAT02 adaptation.
+        // Full Hanatos2025 spectral upsampling with CAT16/CAT02 adaptation (settings.use_cat16).
         backend.hanatos2025_rgb_to_raw(
             &rgb,
             lut,
@@ -320,7 +320,7 @@ pub fn expose(
         )
     } else {
         // Simplified fallback: treat RGB values as proportional to raw exposure
-        rgb.clone()
+        rgb
     };
 
     // Order mirrors Python filming: boost → diffusion → lens_blur → halation.
@@ -420,10 +420,9 @@ pub fn develop(
     // f64 chain for Python parity — curves are f64 in the profile JSON.
     let log_exposure_f64 = film.log_exposure_f64();
     let density_curves_f64 = film.density_curves_f64();
-    // f32 versions kept for DIR couplers (still f32 API) and grain (legacy).
+    // f32 versions kept for DIR couplers (still f32 API).
     let log_exposure = &film.log_exposure_f32();
     let density_curves = &film.density_curves_f32();
-    let norm_curves = spektrafilm_model::density_curves::normalize_density_curves(density_curves);
     let gamma = params.film_render.density_curve_gamma;
 
     // Filming.develop uses NORMALIZED curves (Python `develop` subtracts nanmin).
@@ -480,9 +479,6 @@ pub fn develop(
         // f32 storage in `GrainParams` would otherwise truncate to ~7
         // decimals and shift every Poisson lambda by ~5e-8, producing a
         // visibly different grain pattern.
-        let norm_curves_f64 = spektrafilm_model::density_curves::normalize_density_curves_f64(
-            &film.density_curves_f64(),
-        );
         let density_max = spektrafilm_model::density_curves::max_density_f64(&norm_curves_f64);
         density_cmy = spektrafilm_model::grain::apply_grain_to_density(
             &density_cmy,

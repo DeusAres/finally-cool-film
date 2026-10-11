@@ -6,7 +6,7 @@ use rand::rngs::StdRng;
 use rand_distr::{Distribution, LogNormal};
 use spektrafilm_math::gaussian;
 use spektrafilm_math::image::ImageBuf;
-use spektrafilm_math::precision::{Scalar, from_f32, from_f64};
+use spektrafilm_math::precision::{Scalar, from_f64};
 
 /// Generate the per-pixel glare_amount field (lognormal sampled, then blurred, then /100).
 ///
@@ -80,63 +80,4 @@ pub fn add_glare_with_amount(
         px[1] += g * space_offset[1];
         px[2] += g * space_offset[2];
     }
-}
-
-/// Add viewing glare to an XYZ image.
-///
-/// Port of Python `add_glare`. Generates a random glare pattern
-/// using lognormal distribution, blurs it, and adds it as
-/// a fraction of the illuminant.
-pub fn add_glare(
-    xyz: &ImageBuf,
-    illuminant_xyz: [f32; 3],
-    percent: f32,
-    roughness: f32,
-    blur: f32,
-) -> ImageBuf {
-    if percent <= 0.0 {
-        return xyz.clone();
-    }
-
-    let n_pixels = xyz.pixel_count();
-    let amount = percent;
-    let sigma = roughness * amount;
-
-    // Generate random glare amount per pixel
-    let mu = (amount as f64).ln() - 0.5 * (sigma as f64 / amount as f64).powi(2).ln_1p();
-    let s = ((sigma as f64 / amount as f64).powi(2).ln_1p()).sqrt();
-    let dist = LogNormal::new(mu, s).unwrap_or_else(|_| LogNormal::new(0.0, 1.0).unwrap());
-    let mut rng = StdRng::seed_from_u64(42);
-
-    let mut glare_map: Vec<Scalar> = (0..n_pixels)
-        .map(|_| from_f64(dist.sample(&mut rng)))
-        .collect();
-
-    // Blur the glare map
-    if blur > 0.0 {
-        let mut glare_img = ImageBuf::from_data(
-            xyz.width,
-            xyz.height,
-            glare_map.iter().flat_map(|&v| [v, v, v]).collect(),
-        );
-        glare_img = gaussian::gaussian_blur(&glare_img, blur);
-        glare_map = glare_img.extract_channel(0);
-    }
-
-    // Apply: xyz += glare_amount * illuminant_xyz / 100
-    let illum = [
-        from_f32(illuminant_xyz[0]),
-        from_f32(illuminant_xyz[1]),
-        from_f32(illuminant_xyz[2]),
-    ];
-    let inv100 = from_f64(1.0 / 100.0);
-    let mut result = xyz.clone();
-    for (i, px) in result.pixels_mut().enumerate() {
-        let g = glare_map[i] * inv100;
-        px[0] += g * illum[0];
-        px[1] += g * illum[1];
-        px[2] += g * illum[2];
-    }
-
-    result
 }

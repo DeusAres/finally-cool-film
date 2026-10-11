@@ -37,20 +37,6 @@ pub fn to_f32(v: Scalar) -> f32 {
 
 /// Zero constant.
 pub const ZERO: Scalar = 0.0;
-/// One constant.
-pub const ONE: Scalar = 1.0;
-
-/// Scalar-aware pow(10, x).
-#[inline(always)]
-pub fn pow10(x: Scalar) -> Scalar {
-    from_f64(10.0).powf(x)
-}
-
-/// Scalar-aware log10.
-#[inline(always)]
-pub fn log10(x: Scalar) -> Scalar {
-    x.log10()
-}
 
 /// Scalar-aware powf.
 #[inline(always)]

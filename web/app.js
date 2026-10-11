@@ -152,7 +152,6 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
   const rgb = lensActive(lens)
     ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, expo, lensGeometry(frame.w, frame.h, lens), true)
     : extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, expo, true);
-  if (wb.some((g) => g !== 1)) for (let i = 0; i < rgb.length; i += 3) { rgb[i] *= wb[0]; rgb[i + 1] *= wb[1]; rgb[i + 2] *= wb[2]; }
   const out = engine.process(rgb, w, h), d32 = new Uint32Array(target.buffer, target.byteOffset, w * h);
   const px = new Float32Array(3), p3 = outP3();
   for (let p = 0, j = 0; p < w * h; p++, j += 3) {
@@ -166,7 +165,7 @@ const q8 = (v) => Math.round(255 * Math.min(1, Math.max(0, v)));
 // ---------- auto ----------
 // Auto = the engine's own exposure metering on a thumb of the photo (Esposizione), then the
 // scanner's AutoSetup on that thumb as the film will see it (frontier.auto).
-// v2-calib: auto_exposure_ev's target (mid grey) and clamp. AutoSetup is a function of (Interno on/off, the exposure it ran at):
+// Auto exposure = engine meter on the thumb, clamped to the Esposizione slider range. AutoSetup is a function of (Interno on/off, the exposure it ran at):
 // cached per photo, never touches the sliders, so toggling Interno off restores the exact previous result.
 
 function autoSetup(on, evIn = null) {
@@ -178,13 +177,10 @@ function autoSetup(on, evIn = null) {
   // The meter sees the scene as shot: it never compensates Interno's U (the negative stays thin).
   const ev = evIn !== null ? evIn : Math.max(+$('ev').min, Math.min(+$('ev').max, Math.round(eng.auto_exposure_ev(rgb.slice(), w, h) * 10) / 10));
   scale(2 ** (ev - underEv(on)));
-  const wb = sceneWb(on);
-  for (let i = 0; i < rgb.length; i += 3) { rgb[i] *= wb[0]; rgb[i + 1] *= wb[1]; rgb[i + 2] *= wb[2]; }
-  // The scanner model arrives with the engine: until then the app loads with neutral scanner setup.
   // Engine.frontier_auto_setup takes linear RGBA f32 (w*h*4), not RGB.
   const rgba = new Float32Array(w * h * 4);
   for (let i = 0, j = 0; i < w * h * 3; i += 3, j += 4) { rgba[j] = rgb[i]; rgba[j + 1] = rgb[i + 1]; rgba[j + 2] = rgb[i + 2]; rgba[j + 3] = 1; }
-  const auto = typeof eng.frontier_auto_setup === 'function' ? Array.from(eng.frontier_auto_setup(rgba, w, h)) : [0, 0, 0, 0];
+  const auto = Array.from(eng.frontier_auto_setup(rgba, w, h));
   return { ev, auto };
 }
 
@@ -302,6 +298,7 @@ let dustStripCanvas = null;
 let showingBefore = false;
 function showBefore(on) {
   if (!photo?.after) return;
+  if (on === showingBefore) return;
   showingBefore = on;
   drawDustLayer();
   const img = on ? photo.preview.before : photo.after;
@@ -384,7 +381,6 @@ window.addEventListener('mousemove', (e) => {
 window.addEventListener('mouseup', () => { dragging = false; });
 stage.addEventListener('dblclick', (e) => { if (photo) fitted ? setZoom(1 / devicePixelRatio, e.clientX, e.clientY) : fitToScreen(); });
 $('fit').addEventListener('click', fitToScreen);
-window.addEventListener('resize', () => { if (fitted) fitToScreen(); });
 // The stage also changes size when the slider panel is resized.
 new ResizeObserver(() => { if (fitted) fitToScreen(); }).observe(stage);
 
@@ -436,8 +432,10 @@ grip.addEventListener('dblclick', () => {
 
 // ---------- photo ----------
 
+let loadSeq = 0;
 async function loadPhoto(file) {
   if (!file) return;
+  const my = ++loadSeq, prev = photo;
   status('Decodifica…');
   // Nothing exportable until this photo has loaded and been auto-measured; stays disabled on error.
   $('export').disabled = $('exportIG').disabled = $('auto').disabled = true; $('exportIG').hidden = true;
@@ -448,6 +446,7 @@ async function loadPhoto(file) {
       if (!gpu) throw new Error('I file DNG richiedono WebGPU');
       const t = performance.now(), raw = await loadRaw(file, PREVIEW_LONG_SIDE);
       while (rendering || exporting) await sleep(20);
+      if (my !== loadSeq) return;
       const preview = { data: rawPreviewRGBA(raw), w: raw.w, h: raw.h, p3: true, raw };
       preview.before = new ImageData(preview.data, preview.w, preview.h, { colorSpace: 'display-p3' });
       log(`DNG ${raw.fullW}x${raw.fullH}, preview ${raw.w}x${raw.h}, orientation ${raw.orientation}, baseline ${raw.baseline} EV, ${Math.round(performance.now() - t)} ms`);
@@ -459,8 +458,12 @@ async function loadPhoto(file) {
       const bitmap = await createImageBitmap(file);
       // A render or export in flight still uses the current photo, engine and GPU frame.
       while (rendering || exporting) await sleep(20);
-      const preview = decodeRGBA(bitmap, PREVIEW_LONG_SIDE);
-      preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
+      if (my !== loadSeq) { bitmap.close(); return; }
+      let preview;
+      try {
+        preview = decodeRGBA(bitmap, PREVIEW_LONG_SIDE);
+        preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
+      } catch (e) { bitmap.close(); throw e; }
       log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
       photo?.bitmap?.close();   // full-resolution decode of the previous photo
       $('indoor').checked = false;
@@ -484,6 +487,10 @@ async function loadPhoto(file) {
   } catch (e) {
     log('load error: ' + (e?.stack || e));
     status('Errore: ' + (e?.message || e));
+    if (my === loadSeq && photo === prev && prev) {   // failed decode: the previous photo is still shown, keep it usable
+      $('export').disabled = $('auto').disabled = false;
+      $('exportIG').hidden = !(prev.preview.h > prev.preview.w); $('exportIG').disabled = false;
+    }
   }
 }
 
@@ -540,8 +547,10 @@ function paperWhite(u) {
 // 12 MP and downscaled it averages away; at 1080 it survives IG's recompression).
 async function exportFull(ig = false) {
   if (!photo || exporting) return;
+  while (internoBusy) await sleep(20);   // a pending Interno toggle / AutoSetup must land before the snapshot
+  if (!photo || exporting) return;
   exporting = true;
-  $('export').disabled = $('exportIG').disabled = $('auto').disabled = $('newPhoto').disabled = $('pick').disabled = true;
+  $('export').disabled = $('exportIG').disabled = $('auto').disabled = $('newPhoto').disabled = $('pick').disabled = $('indoor').disabled = true;
   setBusy('export');
   // A preview render in flight shares the engine and the GPU frame: let it finish first.
   while (rendering) await sleep(20);
@@ -642,7 +651,7 @@ async function exportFull(ig = false) {
     setBusy(null);
     exporting = false;
     if (dustStripCanvas) { dustStripCanvas.width = dustStripCanvas.height = 0; dustStripCanvas = null; }   // release the backing store
-    $('export').disabled = $('exportIG').disabled = $('auto').disabled = $('newPhoto').disabled = $('pick').disabled = false;
+    $('export').disabled = $('exportIG').disabled = $('auto').disabled = $('newPhoto').disabled = $('pick').disabled = $('indoor').disabled = false;
     try {
       if (gpu) {   // back to the preview frame
         if (photo.preview.raw) uploadRaw(sf, photo.preview.raw);
@@ -707,12 +716,16 @@ $('reseed').addEventListener('click', () => {
 $('pick').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadPhoto(f); });
 $('newPhoto').addEventListener('click', () => $('pick').click());
 $('auto').addEventListener('click', () => runAuto());
+let internoBusy = 0;
 $('indoor').addEventListener('change', async () => {
   if (!photo) return;
-  while (rendering || exporting) await sleep(20);
-  const on = $('indoor').checked;   // the lab re-reads the (thin) negative; sliders are not touched
-  photo.autoCache[on] ??= autoSetup(on, photo.autoEv).auto;
-  photo.auto = photo.autoCache[on];
+  internoBusy++;
+  try {
+    while (rendering || exporting) await sleep(20);
+    const on = $('indoor').checked;   // the lab re-reads the (thin) negative; sliders are not touched
+    photo.autoCache[on] ??= autoSetup(on, photo.autoEv).auto;
+    photo.auto = photo.autoCache[on];
+  } finally { internoBusy--; }
   render();
 });
 $('export').addEventListener('click', () => exportFull());

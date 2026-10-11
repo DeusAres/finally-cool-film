@@ -10,7 +10,6 @@ pub mod numpy_rng;
 pub mod pchip3d;
 pub mod precision;
 pub mod spectral;
-pub mod stats;
 pub mod vforce;
 
 pub use precision::Scalar;

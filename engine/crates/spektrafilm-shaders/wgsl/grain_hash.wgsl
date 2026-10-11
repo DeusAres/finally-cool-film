@@ -81,7 +81,9 @@ fn poisson(lambda: f32, st: ptr<function, u32>) -> f32 {
             if u <= c { break; }
             k += 1.0;
             f *= lambda / k;
-            c += f;
+            let c2 = c + f;
+            if c2 == c { break; }
+            c = c2;
         }
         return k;
     }
@@ -107,7 +109,9 @@ fn binomial(n: f32, p: f32, q: f32, st: ptr<function, u32>) -> f32 {
             if u <= c || k >= n { break; }
             f *= (n - k) / (k + 1.0) * ratio;
             k += 1.0;
-            c += f;
+            let c2 = c + f;
+            if c2 == c { break; }
+            c = c2;
         }
         if flip { return n - k; }
         return k;

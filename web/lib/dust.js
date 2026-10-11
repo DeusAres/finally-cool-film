@@ -186,12 +186,8 @@ export function drawDust(ctx, marks, amount, W, H, x0 = 0, y0 = 0) {
       const stroke = (width, alpha) => {
         ctx.lineWidth = width; ctx.strokeStyle = col(alpha);
         ctx.beginPath();
-        let pen = false;
-        m.pts.forEach(([x, y], i) => {
-          const on = !m.dash || m.dash[i];
-          if (on && pen) ctx.lineTo(x, y); else if (on) ctx.moveTo(x, y);
-          pen = on;
-        });
+        ctx.moveTo(m.pts[0][0], m.pts[0][1]);
+        for (let i = 1; i < m.pts.length; i++) ctx.lineTo(m.pts[i][0], m.pts[i][1]);
         ctx.stroke();
       };
       if (m.soft) { stroke(w * 3.5, a * 0.18); stroke(w * 1.8, a * 0.3); }
