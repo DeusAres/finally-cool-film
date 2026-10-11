@@ -18,9 +18,8 @@ Principle: colour and tone come from physics (film model + Frontier scanner). No
 ## App (JS/WGSL) owns: input conditioning, spatial effects, UI, export
 - Input: JPEG → EOTF decode → ONE fixed generic display→scene inverse (`lib/color.js`), no measured pipeline inverse.
   DNG → scene-linear Rec.2020 (ColorMatrix + ForwardMatrix when present).
-- Esposizione = scene gain 2^ev before film (physical). Interno = extra underexposure from EXIF estimate, clamp [0,2] EV.
-- Kept: lens (CA/vignette/falloff), chroma NR, Texture, Chiarezza, clip→halation boost, grain (post-scan), dust,
-  export tiling/jpegli, IG, A/B, log.
+- Esposizione = scene gain 2^ev before film (physical). Interno = fixed 2 EV underexposure (INTERNO_EV in web/lib/interno.js), not EXIF-based.
+- Kept: lens (CA/vignette/falloff), chroma NR, Texture, Chiarezza, grain (engine film_render.grain, rng 'hash', not post-scan), dust, export tiling/jpegli, IG, A/B, log.
 - Removed: castGains, readTransfer/measured inverse, SCAN_PTS, scanLevels, greyBalance, scan.js inversion,
   GOLD toning, PRINT look + Stampa slider, skyHue, vibrance, TOE tint, FADE_TINT.
 - Slider mapping: Contrasto→frontier.contrast, Alte luci→frontier.highlight, Magenta/Giallo filtri→frontier.cmy,

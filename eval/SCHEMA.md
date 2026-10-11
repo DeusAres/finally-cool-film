@@ -4,7 +4,7 @@ Scene: synthetic chart, scene-linear, rendered by `spektrafilm-eval`.
 - `grey`: neutral patches at reflectance 0.18 * 2^ev, ev = -4..+5 step 1/3 (lit by D55-ish daylight = film reference).
 - `cc24`: X-Rite ColorChecker 24 (classic), reference Lab D50 (BabelColor/X-Rite post-2014), at normal exposure.
 Output: final displayed image (after scanner), sRGB-encoded, converted to CIELAB D50 (Bradford from D65).
-Exposure normalisation: the 0 EV grey patch is the anchor; spec targets are absolute L*a*b* of the output.
+Exposure is absolute: no normalisation to the 0 EV grey patch. The 0 EV patch (reflectance 0.18) is only the reference for gradation checks; spec targets are absolute L*a*b* of the output.
 
 ## eval/gold200_spec.json
 {

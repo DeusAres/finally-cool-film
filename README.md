@@ -24,8 +24,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   (`frontier.highlight`), filtri colore dello scanner magenta↔verde e giallo↔blu (`frontier.cmy`), nero (`frontier.black_lift`,
   neutro), texture, chiarezza, grana, halation, aberrazione, vignettatura, falloff, polvere (quantità). Auto = esposizione
   automatica del motore + `frontier_auto_setup`. Doppio tap sull'etichetta = reset.
-- **Interno / luce scarsa** (interruttore in Tono e colore): sottoesposizione extra da EXIF (tempo, diaframma, ISO), 0–2 EV.
-  Preselezionato dagli EXIF (luce sotto la portata di una compatta f/2.8 1/30 a 200 ISO).
+- **Interno / luce scarsa** (interruttore nella scheda **Luce**): sottoesposizione fissa di 2 EV prima della pellicola (`INTERNO_EV` in `web/lib/interno.js`), senza dati EXIF. Disattivato a ogni caricamento di foto.
 - **Lens** (portato da grain pro e migliorato, `web/lib/lens.js` + shader WebGPU `lens-gpu.js`): aberrazione cromatica laterale
   (calibrata in µm sul 35 mm, max 60 µm), vignettatura in luce lineare e falloff condiviso, applicati alla luce *prima* della pellicola.
 - Zoom/pan: pizzica, trascina, doppio tap (adatta ↔ 100%). Tieni premuto **A/B** = originale.
@@ -49,7 +48,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 - **Polvere e graffi** (`web/lib/dust.js`): procedurali, niente texture. Granelli irregolari (alcuni sfocati), fibre a curvatura
   casuale, rari graffi lungo lo scorrimento della pellicola, in µm sul fotogramma 36 mm, quindi identici in anteprima ed export.
   Stanno sul negativo e, dopo l'inversione, appaiono bianchi. Layer separato: slider e **Rimescola** non ri-renderizzano nulla.
-- **Nero** (0..1, default 0.15, mostrato come 15): neri sollevati dallo scanner, neutri nello spazio scanner.
+- **Nero** (0..1, default 0, mostrato come 0): neri sollevati dallo scanner, neutri nello spazio scanner.
 - Tocca la riga di stato per il **log**; se la scheda muore durante un export, al riavvio il log si apre da solo.
 
 ### Validazione
@@ -58,7 +57,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   con le impostazioni dell'app e misura il risultato. Non include grana, polvere, lens, Texture e Chiarezza.
 - Spec di accettazione `eval/gold200_spec.json` (`eval/SPEC.md`): **confidenza bassa sui valori assoluti**. Nessuna carta Gold 200
   misurata disponibile; i target sono priori da curve qualitative, recensioni e tolleranze larghe. Non leggerli come misure.
-- Score carta attuale: **97.5** (`eval/calib/CALIB.md`, ultima calibrazione con guardia AutoSetup e black point 0.05).
+- Score carta attuale: **97.2** (`eval/calib/CALIB.md`, ultima calibrazione con guardia AutoSetup e black point 0.022).
 
 ## Versione
 
@@ -76,7 +75,7 @@ python3 -m http.server -d web   # WebGPU richiede https o localhost
 
 ## Deploy
 
-`.github/workflows/pages.yml` builda e pubblica `web/` su GitHub Pages a ogni push.
+`.github/workflows/pages.yml` builda e pubblica `web/` su GitHub Pages a ogni push su `main` o sul branch `claude/spektrafilm-mobile-web-har40e`, e manualmente (workflow_dispatch).
 Una tantum: Settings → Pages → Source: **GitHub Actions**.
 
 ## Licenza

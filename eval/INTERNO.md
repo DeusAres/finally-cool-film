@@ -1,21 +1,14 @@
-# Interno / luce scarsa — contract (binding)
+# Interno / luce scarsa — current model
 
-Bug: the toggle does nothing. `underEv()` returns `photo.under` (EXIF estimate), which is 0 for well-lit EXIF,
-and any underexposure is then re-normalised by camera auto exposure / AutoSetup.
+A pure toggle (Luce tab), off on every photo load, no EXIF or white-balance coupling.
 
-Physical model when Interno is ON (all physics, no tints):
-1. Thin negative: film sees scene × 2^-U, U = clamp(max(EXIF estimate, 1.5), 1, 2.5) EV. The camera meter
-   (app auto exposure) must NOT compensate U.
-2. Real light colour: daylight film does not white-balance. The film sees the scene under its real illuminant:
-   per-channel gains in scene-linear (input space) that undo the camera white balance back to the scene
-   illuminant, relative to the film reference (D55). DNG: illuminant from AsShotNeutral (dng.js already
-   interpolates by CCT). JPEG: no illuminant data -> fixed 3400 K (mixed tungsten/LED) assumption.
-3. Lab: Frontier AutoSetup runs on the thin negative (re-run on toggle). Its density correction may lift up to
-   +2.5 EV; its colour correction stays partial (existing k_col), so part of the warm cast survives, as in real
-   lab scans. Blacks cannot go below base+fog density -> milky blacks; layer toes differ -> shadow crossover.
-4. Grain: density-domain grain is amplified by the scanner gain: grain amplitude × 2^(0.5·U).
+When ON (all physics, no tints):
+1. Thin negative: the film sees scene × 2^-`INTERNO_EV` (2 EV, `web/lib/interno.js`). The camera meter
+   (app auto exposure) does not compensate it.
+2. Lab recovery: Frontier AutoSetup runs on the thin negative (cached per Interno state, so off→on→off is exact).
+   The film-type setup neutralises only the normal density range (`setup_neutral_ev` = ±2 EV); below it the toe
+   keeps its layer imbalance (`setup_toe_slope`) → cyan recovered shadows, warm mids, milky blacks.
+3. Grain: amplified by the scanner gain, grain amount × 2^(0.5·U) (`internoParams().grain`).
 
-Shared code: `web/lib/interno.js` (no DOM) exports
-  `internoParams({ under, isRaw, cctK }) -> { under: U, gains: [r,g,b], grain: g }`
-  used by app.js AND eval/dng2npy.mjs (single source of truth).
-Harness: `sf-eval image ... --under U --gains r,g,b` (no auto-meter compensation of U; AutoSetup on the thin negative).
+Shared code: `internoParams()` → `{ under: 2, gains: [1,1,1], grain: 2 }`, used by `web/app.js` and
+`eval/dng2npy.mjs --interno`. Harness: `sf-eval image ... --under 2` (or `under` in the meta JSON).
