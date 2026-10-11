@@ -9,10 +9,9 @@ import { iccSegment } from './lib/icc.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, inputUniform } from './lib/lens-gpu.js';
 import { dustField, drawDust, compositeDust } from './lib/dust.js';
-import { GRAIN_WGSL, grainParams, toP3CPU } from './lib/grain.js';
+import { GRAIN_WGSL, packParams, toP3CPU } from './lib/grain.js';
 
 const PREVIEW_LONG_SIDE = 2000;   // display canvas cap (bigger canvases make iOS compositing crash when zoomed)
-const GRAIN_AREA_UM2 = 0.2;       // engine default AgX particle area
 const FILM_FORMAT_MM = 35;        // engine default; sets the physical pixel size
 const EXPORT_TILE = 1024;         // export tile core size (px)
 const EXPORT_PAD = 128;           // tile overlap: covers halation / DIR diffusion reach at 12 MP
@@ -66,7 +65,9 @@ const sceneGain = (u) => 2 ** (u.ev - underEv() + baselineEv());
 // our input pass only conditions the light (display→scene, exposure, lens, Texture, Chiarezza).
 const outP3 = () => !!photo?.preview.p3;
 
-function renderParams(u, { noGrain = false } = {}) {
+// `region` {x0, y0, fw, fh}: the rendered region's origin and its frame's size, in px (the engine's grain
+// is a hash of the frame position, so every tile of an export gets the same grain as the whole frame).
+function renderParams(u, { noGrain = false, region = null } = {}) {
   return {
     camera: { auto_exposure: false, film_format_mm: FILM_FORMAT_MM },
     // P3 photos end up in Display P3 (same transfer curve as sRGB, so tones are
@@ -89,17 +90,19 @@ function renderParams(u, { noGrain = false } = {}) {
       },
     },
     film_render: {
-      // On the GPU path grain is ours (grain.js, in the output pass); the engine's is the CPU fallback.
-      // (Inactive on the GPU path: a constant area keeps the grain slider from changing the params JSON, so no engine.update.)
-      grain: { active: !gpu && !noGrain && u.grain > 0, agx_particle_area_um2: GRAIN_AREA_UM2 * (gpu ? 1 : Math.max(u.grain * grainFactor(), 0.01)) },
+      // Grain is the engine's (rng 'hash': a pure function of seed + frame position, see eval/GRAIN.md).
+      grain: {
+        active: !noGrain && u.grain > 0, rng: 'hash', amount: u.grain * grainFactor(), seed: photo.grainSeed,
+        origin_px: region ? [region.x0, region.y0] : [0, 0], frame_px: region ? [region.fw, region.fh] : [photo.preview.w, photo.preview.h],
+      },
       // v2-calib: strength comes from the profile's antihalation; halation_amount is a multiplier on it (Halation slider).
       halation: { active: u.halation > 0, halation_amount: u.halation },
     },
   };
 }
 
-function renderParamsJson(u, noGrain = false, tileMm = 0) {
-  const p = renderParams(u, { noGrain });
+function renderParamsJson(u, noGrain = false, tileMm = 0, region = null) {
+  const p = renderParams(u, { noGrain, region });
   return JSON.stringify(tileMm ? deepMerge(p, { camera: { film_format_mm: tileMm } }) : p);
 }
 
@@ -143,7 +146,7 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
     const space = frame.raw ? 'rec2020' : frame.p3 ? 'p3' : 'srgb';
     return engine.process_frame(INPUT_WGSL, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb),
       DISPLAY_GAIN_LUT, w, h, PACK_LUT,
-      GRAIN_WGSL, grainParams(w, x0, y0, Math.max(frame.w, frame.h), u.grain * grainFactor(), photo.grainSeed, outP3()), target);
+      GRAIN_WGSL, packParams(outP3()), target);
   }
   const rgb = lensActive(lens)
     ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, expo, lensGeometry(frame.w, frame.h, lens), true)
@@ -198,7 +201,7 @@ async function render() {
       // Breadcrumb: if iOS kills the tab mid-render, the next load says so.
       setBusy(`anteprima #${n} ${pv.w}x${pv.h} ${JSON.stringify(u)}`);
       ensureEngine();
-      updateEngine(renderParamsJson(u));
+      updateEngine(renderParamsJson(u, false, 0, { x0: 0, y0: 0, fw: pv.w, fh: pv.h }));
       const cs = outP3() ? 'display-p3' : 'srgb';
       if (photo.after?.width !== pv.w || photo.after?.height !== pv.h || photo.after.colorSpace !== cs) photo.after = new ImageData(pv.w, pv.h, { colorSpace: cs });
       await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), u);
@@ -601,7 +604,7 @@ async function exportFull(ig = false) {
         status(`Esporto ${w}×${h}: tile ${s * cols + c + 1}/${strips * cols}…`);
         const x0 = Math.max(0, tx - EXPORT_PAD), y0 = Math.max(0, ty - EXPORT_PAD);
         const tw = Math.min(w, tx + EXPORT_TILE + EXPORT_PAD) - x0, th = Math.min(h, ty + EXPORT_TILE + EXPORT_PAD) - y0;
-        updateEngine(renderParamsJson(u, false, FILM_FORMAT_MM * Math.max(tw, th) / longSide));
+        updateEngine(renderParamsJson(u, false, FILM_FORMAT_MM * Math.max(tw, th) / longSide, { x0, y0, fw: w, fh: h }));
         const tile = (tileBuf = tileBuf?.length >= tw * th * 4 ? tileBuf : new Uint8Array(tw * th * 4)).subarray(0, tw * th * 4);
         await renderRegion(frame, x0, y0, tw, th, tile, u);
         const cw = Math.min(EXPORT_TILE, w - tx);
