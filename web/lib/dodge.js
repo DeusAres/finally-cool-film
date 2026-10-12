@@ -58,14 +58,32 @@ export function dodgeBase(rgb, w, h, luma) {
   for (let i = 0, j = 0; i < w * h; i++, j += 3) L[i] = Math.log2(Math.max(1e-6, luma[0] * rgb[j] + luma[1] * rgb[j + 1] + luma[2] * rgb[j + 2]));
   const base = guided(L, w, h, Math.max(1, Math.round(DODGE_R * Math.max(w, h))), DODGE_EPS);
   const s = Float32Array.from(base.filter((_, i) => L[i] > DODGE_LIT_EV)).sort();
-  if (s.length < DODGE_MIN_LIT * w * h) return { w, h, base, M: 0, P: 0, none: true };
-  return { w, h, base, M: s[Math.floor(0.5 * (s.length - 1))], P: s[Math.floor(DODGE_PCT * (s.length - 1))] };
+  if (s.length < DODGE_MIN_LIT * w * h) return { w, h, base, near: new Float32Array(w * h), M: 0, P: 0, none: true };
+  const M = s[Math.floor(0.5 * (s.length - 1))], P = s[Math.floor(DODGE_PCT * (s.length - 1))];
+  return { w, h, base, near: nearBright(base, w, h, M + DODGE_KNEE), M, P };
 }
 
-/** { knee, A, rho } for a base and the Contrasto key (A = 0: nothing to dodge). */
-export function dodgeParams(d, contrast) {
+/** 0..1: inside or within DODGE_NEAR thumbnail px of a large bright area (base above the knee). Only there
+ * may a pixel's own level raise its dodge (skyline rim); a lit face of a dark subject keeps its base (no dodge). */
+function nearBright(base, w, h, knee) {
+  const t = base.map((b) => { const x = Math.min(1, Math.max(0, b - knee)); return x * x * (3 - 2 * x); });
+  const r = DODGE_NEAR, row = new Float32Array(w * h), out = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let m = 0; for (let i = Math.max(0, x - r); i <= Math.min(w - 1, x + r); i++) m = Math.max(m, t[y * w + i]);
+    row[y * w + x] = m;
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let m = 0; for (let j = Math.max(0, y - r); j <= Math.min(h - 1, y + r); j++) m = Math.max(m, row[j * w + x]);
+    out[y * w + x] = m;
+  }
+  return out;
+}
+
+/** { knee, A, rho } for a base, the Contrasto key and the Esposizione moved away from Auto (`evOff`, EV:
+ * the sky rises with it, so the bright base must land that much lower). A = 0: nothing to dodge. */
+export function dodgeParams(d, contrast, evOff = 0) {
   const knee = d.M + DODGE_KNEE, rho = DODGE_RHO, e = Math.max(d.P - knee, 1e-6);
-  const target = Math.min(d.P - (d.M + head(contrast)), 0.97 * rho * e, DODGE_MAX_EV);
+  const target = Math.min(d.P - (d.M + head(contrast) - evOff), 0.97 * rho * e, DODGE_MAX_EV);
   if (d.none || !(target > 0)) return { knee, A: 0, rho };
   let lo = target, hi = 50 * target;   // A (1 - exp(-rho e / A)) = target, increasing in A
   for (let i = 0; i < 60; i++) {
@@ -88,30 +106,31 @@ export const hlcGain = (v) => (v > 0 ? HLC_UP * v : HLC_DOWN * v);
 // A dark pixel next to a bright area may lower its base by at most DODGE_DELTA (no dark rim at skylines);
 // symmetrically a bright pixel may raise its base by at most DODGE_DELTA for the highlight dodge, so small
 // speculars on dark rock (reflections, sparkles) are not dodged.
-const SHADOW_KNEE = 1.5, SHADOW_MAX = 1.5, SHADOW_RHO = 0.8, DODGE_DELTA = 1.5;
+const SHADOW_KNEE = 1.5, SHADOW_MAX = 1.5, SHADOW_RHO = 0.8, DODGE_DELTA = 1.5, DODGE_NEAR = 3;
 const HDR = 12;
 
 /** Header + base appended to the input pass's gain array (read by dodgeWGSL from `at0`):
  * [dodge on, base w, base h, knee, A, rho, highlight-contrast k, pivot, shadow S, shadow knee, shadow rho, delta]. */
 export function dodgeArray(gainLut, d, prm, hlc = 0, shadows = 0) {
-  const at0 = gainLut.length, out = new Float32Array(at0 + HDR + (d ? d.w * d.h : 0));
+  const at0 = gainLut.length, out = new Float32Array(at0 + HDR + (d ? 2 * d.w * d.h : 0));
   out.set(gainLut);
   if (d) {
     const S = d.none ? 0 : SHADOW_MAX * Math.max(0, shadows);
     out.set([prm.dodge && prm.A > 0 ? 1 : 0, d.w, d.h, prm.knee, prm.A, prm.rho, hlcGain(hlc), 0.5 * (prm.knee + d.P),
       S, d.M + SHADOW_KNEE, SHADOW_RHO, DODGE_DELTA], at0);
     out.set(d.base, at0 + HDR);
+    out.set(d.near, at0 + HDR + d.w * d.h);
   }
   return out;
 }
 
 /** WGSL: dodging of `c` (scene light before the exposure gain) at frame position `pos`. */
 export const dodgeWGSL = (arr, at0) => /* wgsl */`
-fn dodgeBaseAt(pos: vec2<f32>) -> f32 {
+fn dodgeBaseAt(pos: vec2<f32>, map: u32) -> f32 {
   let bw = ${arr}[${at0}u + 1u]; let bh = ${arr}[${at0}u + 2u];
   let q = clamp((pos + 0.5) / p.frame * vec2<f32>(bw, bh) - 0.5, vec2<f32>(0.0), vec2<f32>(bw - 1.0, bh - 1.0));
   let i0 = vec2<u32>(floor(q)); let i1 = min(i0 + 1u, vec2<u32>(u32(bw) - 1u, u32(bh) - 1u)); let f = q - floor(q);
-  let o = ${at0}u + ${HDR}u; let W = u32(bw);
+  let W = u32(bw); let o = ${at0}u + ${HDR}u + map * W * u32(bh);
   let a = mix(${arr}[o + i0.y * W + i0.x], ${arr}[o + i0.y * W + i1.x], f.x);
   let b = mix(${arr}[o + i1.y * W + i0.x], ${arr}[o + i1.y * W + i1.x], f.x);
   return mix(a, b, f.y);
@@ -121,7 +140,7 @@ fn dodge(c0: vec3<f32>, pos: vec2<f32>) -> vec3<f32> {
   if (${arr}[${at0}u + 1u] < 0.5) { return c; }   // no base map
   let knee = ${arr}[${at0}u + 3u]; let A = ${arr}[${at0}u + 4u]; let rho = ${arr}[${at0}u + 5u];
   let hk = ${arr}[${at0}u + 6u]; let S = ${arr}[${at0}u + 8u]; let dl = ${arr}[${at0}u + 11u];
-  let L0 = log2(max(dot(c, p.luma.xyz), 1e-6)); let B = dodgeBaseAt(pos);
+  let L0 = log2(max(dot(c, p.luma.xyz), 1e-6)); let B = dodgeBaseAt(pos, 0u);
   if (hk != 0.0) {   // Contrasto luci
     let pv = max(${arr}[${at0}u + 7u], knee + 0.25);
     let w = smoothstep(knee, pv, L0) * smoothstep(knee, pv, B);
@@ -133,7 +152,7 @@ fn dodge(c0: vec3<f32>, pos: vec2<f32>) -> vec3<f32> {
     c *= exp2(S * (1.0 - exp(-${arr}[${at0}u + 10u] * es / S)));
   }
   if (${arr}[${at0}u] < 0.5) { return c; }   // Luci auto
-  let b = max(B, min(L0, B + dl));
+  let b = max(B, B + dodgeBaseAt(pos, 1u) * (min(L0, B + dl) - B));
   let e = max(b - knee, 0.0);
   return c * exp2(-A * (1.0 - exp(-rho * e / A)));
 }`;
@@ -155,11 +174,13 @@ export function dodgeCPU(rgb, w, h, x0, y0, fw, fh, expo, arr, at0, luma) {
       const a = arr[o + iy * bw + ix] + (arr[o + iy * bw + ix1] - arr[o + iy * bw + ix]) * fx;
       const b = arr[o + iy1 * bw + ix] + (arr[o + iy1 * bw + ix1] - arr[o + iy1 * bw + ix]) * fx;
       const B = a + (b - a) * fy;
+      const o2 = o + bw * bh, na = arr[o2 + iy * bw + ix] + (arr[o2 + iy * bw + ix1] - arr[o2 + iy * bw + ix]) * fx;
+      const nb = arr[o2 + iy1 * bw + ix] + (arr[o2 + iy1 * bw + ix1] - arr[o2 + iy1 * bw + ix]) * fx, near = na + (nb - na) * fy;
       const L = Math.log2(Math.max(1e-6, luma[0] * rgb[j] + luma[1] * rgb[j + 1] + luma[2] * rgb[j + 2])) - le;
       let g = 0;
       if (hk !== 0) g += hk * Math.min(0, Math.max(-2, L - B)) * sstep(knee, pv, L) * sstep(knee, pv, B);
       if (S > 0) { const es = Math.max(sk - Math.min(B, Math.max(L, B - dl)), 0); g += S * (1 - Math.exp(-srho * es / S)); }
-      if (on >= 0.5) { const e = Math.max(Math.max(B, Math.min(L, B + dl)) - knee, 0); g -= A * (1 - Math.exp(-rho * e / A)); }
+      if (on >= 0.5) { const e = Math.max(Math.max(B, B + near * (Math.min(L, B + dl) - B)) - knee, 0); g -= A * (1 - Math.exp(-rho * e / A)); }
       if (g !== 0) { const k = 2 ** g; rgb[j] *= k; rgb[j + 1] *= k; rgb[j + 2] *= k; }
     }
   }

@@ -92,7 +92,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
       model: 'frontier', black_correction: false, white_correction: false, unsharp_mask: [0, 0],
       frontier: {
         cmy: frontierCmy(u), contrast: u.contrast, highlight: u.highlight, whites: u.whites, black_lift: u.black,
-        auto: photo.auto, ...(V3 ? { debug_contrast_mode: 2 } : {}),
+        auto: photo.auto, ...(V3 ? { debug_contrast_mode: 3 } : {}),
       },
     },
     film_render: {
@@ -174,7 +174,7 @@ function v3Gain(u, space) {
     photo.dodge = dodgeBase(rgb, w, h, LUMA[space === 'p3' ? 'rec2020' : space]);   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
     log(`v3 dodge base ${w}x${h} median ${photo.dodge.M.toFixed(2)} p99 ${photo.dodge.P.toFixed(2)}`);
   }
-  return dodgeArray(DISPLAY_GAIN_LUT, photo.dodge, { ...dodgeParams(photo.dodge, u.contrast), dodge: u.v3dodge }, u.hlc, u.shadows);
+  return dodgeArray(DISPLAY_GAIN_LUT, photo.dodge, { ...dodgeParams(photo.dodge, u.contrast, u.ev - (photo.autoEv ?? u.ev)), dodge: u.v3dodge }, u.hlc, u.shadows);
 }
 const q8 = (v) => Math.round(255 * Math.min(1, Math.max(0, v)));
 
