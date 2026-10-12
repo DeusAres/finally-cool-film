@@ -19,8 +19,9 @@
   html, body { margin: 0; height: 100%; color: var(--fg);
          font: 15px/1.35 -apple-system, system-ui, sans-serif; overscroll-behavior: none; }
   /* dynamic viewport height (iOS: 100% did not follow the real screen); the bottom safe area is filled by #status */
-  body { position: fixed; inset: 0; height: auto; display: flex; flex-direction: column; background: var(--bg);
-         padding: env(safe-area-inset-top) 0 0; }
+  /* normal flow + dynamic viewport height: position:fixed on body shifted iOS touch targets (a tap on the tab bar
+     moved the slider above it) */
+  body { height: 100dvh; display: flex; flex-direction: column; background: var(--bg); padding: env(safe-area-inset-top) 0 0; }
   header { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 30px; padding: 0 12px; flex: none;
          font-family: "Silkscreen", "Press Start 2P", ui-monospace, Menlo, monospace; }
   header h1 { font: 400 13px/1 "Silkscreen", ui-monospace, Menlo, monospace; margin: 0; letter-spacing: .04em; white-space: nowrap;
