@@ -777,6 +777,38 @@ const crashed = takeCrashMarker();
 if (crashed) openLog(`La sessione precedente si è interrotta durante: ${crashed}. Copia il log e mandamelo.`);
 log(`boot ${BUILD} ${navigator.userAgent}`);
 
+// Update check: the deploy writes version.txt (commit id). index.html is cached (GitHub Pages ~10 min, and an iOS
+// home-screen app stays in memory), so at start and whenever the app comes back to the foreground we read
+// version.txt past every cache; on a new deploy we reload (without a photo open) or offer a tap to update.
+const BUILD_ID = '__BUILD_ID__';
+let updating = false;
+async function freshReload() {
+  updating = true;
+  try { await fetch('index.html', { cache: 'reload' }); } catch { /* offline: plain reload */ }
+  location.reload();
+}
+async function checkUpdate() {
+  if (BUILD_ID.startsWith('__') || updating) return;
+  try {
+    const r = await fetch(`version.txt?t=${Date.now()}`, { cache: 'no-store' });
+    if (!r.ok) return;
+    const id = (await r.text()).trim();
+    if (!id || id === BUILD_ID) return;
+    log(`update available ${BUILD_ID} -> ${id}`);
+    // one automatic reload per new id: the CDN may still serve the old index.html for a few minutes (no loop)
+    let tried = null; try { tried = sessionStorage.getItem('fcf_reload_for'); } catch { /* storage blocked */ }
+    if (!photo && !exporting && tried !== id) {
+      try { sessionStorage.setItem('fcf_reload_for', id); } catch { /* storage blocked */ }
+      return freshReload();
+    }
+    status('Nuova versione disponibile — tocca qui per aggiornare');
+    $('status').onclick = () => { if (!exporting) freshReload(); };
+  } catch { /* offline */ }
+}
+checkUpdate();
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
+addEventListener('pageshow', (e) => { if (e.persisted) checkUpdate(); });
+
 bootEngine().then(async (ok) => {
   gpu = ok;
   log(`engine ready, gpu=${gpu}`);

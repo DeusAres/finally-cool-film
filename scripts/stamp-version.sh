@@ -17,6 +17,8 @@ when=$(TZ=Europe/Rome date -d "@$(git log -1 --format=%ct 2>/dev/null || date +%
 label="v$(cat "$(dirname "$0")/../VERSION" 2>/dev/null)" || { echo "stamp-version: VERSION file missing or unreadable" >&2; exit 1; }
 case "$v" in dbg-*) label="$label debug" ;; esac
 sed -i "s#'__BUILD__'#'$label · $when'#" "$dir/app.js"
+sed -i "s#'__BUILD_ID__'#'$v'#" "$dir/app.js"
+printf '%s\n' "$v" > "$dir/version.txt"   # read by app.js checkUpdate (no-store) to reload on a new deploy
 sed -i "s#new Worker('export-worker.js')#new Worker('export-worker.js?v=$v')#" "$dir/app.js"
 sed -i "s#importScripts('vendor/jpegli_wasm2.js')#importScripts('vendor/jpegli_wasm2.js?v=$v')#" "$dir/export-worker.js"
 sed -i "s#new URL('spektrafilm_wasm_bg.wasm', import.meta.url)#new URL('spektrafilm_wasm_bg.wasm?v=$v', import.meta.url)#" "$dir/pkg/spektrafilm_wasm.js"
@@ -24,5 +26,5 @@ sed -i "s#new URL('spektrafilm_wasm_bg.wasm', import.meta.url)#new URL('spektraf
 for f in "$dir/app.js" "$dir/export-worker.js" "$dir/pkg/spektrafilm_wasm.js" "$dir/index.html"; do
   grep -q "?v=$v" "$f" || { echo "stamp-version: nothing stamped in $f" >&2; exit 1; }
 done
-grep -q "__BUILD__" "$dir/app.js" && { echo "stamp-version: build label not stamped" >&2; exit 1; }
+grep -q "__BUILD__\|__BUILD_ID__" "$dir/app.js" && { echo "stamp-version: build label not stamped" >&2; exit 1; }
 echo "stamped $v ($when)"
