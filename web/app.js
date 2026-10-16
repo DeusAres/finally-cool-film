@@ -3,7 +3,7 @@ import { sleep, store } from './lib/util.js';
 import { DISPLAY_GAIN_LUT } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
-import { isRaw, loadRaw, uploadRaw, rawThumb, rawPreviewRGBA } from './lib/raw.js';
+import { isRaw, loadRaw, uploadRaw, rawThumb, rawPreviewRGBA, withRotation } from './lib/raw.js';
 import { internoParams } from './lib/interno.js';
 import { iccSegment } from './lib/icc.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
@@ -37,7 +37,7 @@ let engineParams = '';      // JSON last given to `engine.update` (re-sending it
 // v3 (default; index.html?v2 = the previous app): Luce has Esposizione, Contrasto, Contrasto luci,
 // automatic highlight dodging (lib/dodge.js, eval/V3.md) and the free contrast curve.
 const V3 = !new URLSearchParams(location.search).has('v2');
-let photo = null;           // { file, bitmap, preview, after, auto: scanner AutoSetup [d, c, m, y], ... }
+let photo = null;           // { file, bitmap, preview, after, auto: scanner AutoSetup [d, c, m, y], rot: quarter turns clockwise, ... }
 let rendering = false, dirty = false, exporting = false, renderCount = 0;
 
 // ---------- params ----------
@@ -469,8 +469,8 @@ async function loadPhoto(file) {
       preview.before = new ImageData(preview.data, preview.w, preview.h, { colorSpace: 'display-p3' });
       log(`raw ${raw.fullW}x${raw.fullH}, preview ${raw.w}x${raw.h}, orientation ${raw.orientation}, baseline ${raw.baseline} EV, ${Math.round(performance.now() - t)} ms`);
       photo?.bitmap?.close();
-      $('indoor').checked = false;
-      photo = { file, bitmap: null, preview, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
+      $('indoor').checked = false; rotPending = 0;
+      photo = { file, bitmap: null, preview, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file), rot: 0 };
       uploadRaw(sf, raw);
     } else {
       const bitmap = await createImageBitmap(file);
@@ -484,21 +484,14 @@ async function loadPhoto(file) {
       } catch (e) { bitmap.close(); throw e; }
       log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
       photo?.bitmap?.close();   // full-resolution decode of the previous photo
-      $('indoor').checked = false;
-      photo = { file, bitmap, preview, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file) };
+      $('indoor').checked = false; rotPending = 0;
+      photo = { file, bitmap, preview, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file), rot: 0 };
       if (gpu) {
         uploadFrame(preview.data, preview.w, preview.h);
       }
     }
-    const { preview } = photo;
     engine?.free(); engine = null;
-    view.width = preview.w; view.height = preview.h;
-    view.style.width = preview.w + 'px'; view.style.height = preview.h + 'px';
-    view.style.display = 'block'; $('empty').style.display = 'none'; $('tools').hidden = false;
-    drawDustLayer();
-    ctx.putImageData(preview.before, 0, 0);
-    drawHistogram(preview.before);
-    fitToScreen();
+    showPreview();
     await runAuto();
     $('export').disabled = false; $('auto').disabled = false; $('newPhoto').hidden = false;
     $('exportIG').hidden = !(photo.preview.h > photo.preview.w); $('exportIG').disabled = false;   // IG export: verticals only
@@ -511,6 +504,59 @@ async function loadPhoto(file) {
     }
   }
 }
+
+/** Canvas, dust layer, 'before' image and fit for the current photo.preview (new photo or a turn). */
+function showPreview() {
+  const { preview } = photo;
+  view.width = preview.w; view.height = preview.h;
+  view.style.width = preview.w + 'px'; view.style.height = preview.h + 'px';
+  view.style.display = 'block'; $('empty').style.display = 'none'; $('tools').hidden = false;
+  drawDustLayer();
+  ctx.putImageData(preview.before, 0, 0);
+  drawHistogram(preview.before);
+  fitToScreen();
+}
+
+// ---------- transform: quarter turns ----------
+// The turn is applied at the source (raw.js withRotation / common.js decodeRGBA, forEachStrip): the preview,
+// the dodging base, AutoSetup thumbs and the export tiles all see an upright frame of the turned size.
+// Sliders and the auto exposure stay (they do not depend on the frame's orientation).
+let rotPending = 0, rotBusy = false;
+async function rotate(quarters) {
+  if (!photo) return;
+  rotPending += quarters;
+  if (rotBusy) return;   // folded into the running turn
+  rotBusy = true;
+  try {
+    while (rotPending) {
+      const q = rotPending; rotPending = 0;
+      while (rendering || exporting || internoBusy) await sleep(20);
+      if (!photo) return;
+      const rot = (photo.rot + q + 4) & 3;
+      let preview;
+      if (photo.preview.raw) {
+        const raw = withRotation(photo.preview.raw, rot);
+        preview = { data: rawPreviewRGBA(raw), w: raw.w, h: raw.h, p3: true, raw };
+        preview.before = new ImageData(preview.data, preview.w, preview.h, { colorSpace: 'display-p3' });
+        uploadRaw(sf, raw);
+      } else {
+        preview = decodeRGBA(photo.bitmap, PREVIEW_LONG_SIDE, rot);
+        preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
+        if (gpu) uploadFrame(preview.data, preview.w, preview.h);
+      }
+      Object.assign(photo, { rot, preview, dodge: null });   // dodging base: rebuilt from the turned thumb
+      log(`rotate ${rot * 90}°, preview ${preview.w}x${preview.h}`);
+      showPreview();
+      $('exportIG').hidden = !(preview.h > preview.w);   // IG export: verticals only
+    }
+    await render();
+  } catch (e) {
+    log('rotate error: ' + (e?.stack || e));
+    status('Errore: ' + (e?.message || e));
+  } finally { rotBusy = false; }
+}
+$('rotL').addEventListener('click', () => rotate(-1));
+$('rotR').addEventListener('click', () => rotate(1));
 
 async function runAuto() {
   // render() returns early while another render / export is in flight: wait first (the engine is shared).
@@ -568,7 +614,7 @@ async function exportFull(ig = false) {
   while (internoBusy) await sleep(20);   // a pending Interno toggle / AutoSetup must land before the snapshot
   if (!photo || exporting) return;
   exporting = true;
-  $('export').disabled = $('exportIG').disabled = $('auto').disabled = $('newPhoto').disabled = $('pick').disabled = $('indoor').disabled = true;
+  $('export').disabled = $('exportIG').disabled = $('auto').disabled = $('newPhoto').disabled = $('pick').disabled = $('indoor').disabled = $('rotL').disabled = $('rotR').disabled = true;
   setBusy('export');
   // A preview render in flight shares the engine and the GPU frame: let it finish first.
   while (rendering) await sleep(20);
@@ -576,7 +622,8 @@ async function exportFull(ig = false) {
   const t0 = performance.now();
   try {
     const { bitmap } = photo, rawPv = photo.preview.raw;
-    const fw = rawPv ? rawPv.fullW : bitmap.width, fh = rawPv ? rawPv.fullH : bitmap.height;
+    const rot = photo.rot || 0, turned = rot & 1;
+    const fw = rawPv ? rawPv.fullW : turned ? bitmap.height : bitmap.width, fh = rawPv ? rawPv.fullH : turned ? bitmap.width : bitmap.height;
     const bFrac = $('border').checked ? BORDER_FRACTION : 0;
     // IG: (image + 2 mats) = IG_WIDTH; mat = bFrac of the image's long side (as below).
     const scale = ig ? Math.min(1, IG_WIDTH / (fw + 2 * bFrac * Math.max(fw, fh)))
@@ -594,17 +641,17 @@ async function exportFull(ig = false) {
     let frame;   // { data (CPU path only), w, h, p3, raw }
     if (rawPv) {
       // Full-resolution raw decode, uploaded as half-float strips, then dropped.
-      const raw = await loadRaw(photo.file, scale < 1 ? Math.round(longCap) : undefined);
+      const raw = await loadRaw(photo.file, scale < 1 ? Math.round(longCap) : undefined, rot);
       uploadRaw(sf, raw);
       frame = { data: null, w: raw.w, h: raw.h, p3: true, raw: true };
     } else if (gpu && scale === 1) {
       // Native size: decoded and uploaded a strip at a time, so the full
       // frame (~50 MB at 12 MP, plus its canvas) is never in memory.
-      frame = { data: null, w: bitmap.width, h: bitmap.height, p3: false };
+      frame = { data: null, w: fw, h: fh, p3: false };
       sf.alloc_frame(frame.w, frame.h);
-      forEachStrip(bitmap, (data, y0, rows, p3) => { sf.set_frame_rows(data, y0); frame.p3 = p3; });
+      forEachStrip(bitmap, (data, y0, rows, p3) => { sf.set_frame_rows(data, y0); frame.p3 = p3; }, rot);
     } else {
-      frame = decodeRGBA(bitmap, longCap);
+      frame = decodeRGBA(bitmap, longCap, rot);
       // GPU: the pixels live in the frame texture; drop them for the tile loop.
       if (gpu) { uploadFrame(frame.data, frame.w, frame.h); frame.data = null; }
     }
@@ -669,7 +716,7 @@ async function exportFull(ig = false) {
     setBusy(null);
     exporting = false;
     if (dustStripCanvas) { dustStripCanvas.width = dustStripCanvas.height = 0; dustStripCanvas = null; }   // release the backing store
-    $('export').disabled = $('exportIG').disabled = $('auto').disabled = $('newPhoto').disabled = $('pick').disabled = $('indoor').disabled = false;
+    $('export').disabled = $('exportIG').disabled = $('auto').disabled = $('newPhoto').disabled = $('pick').disabled = $('indoor').disabled = $('rotL').disabled = $('rotR').disabled = false;
     try {
       if (gpu) {   // back to the preview frame
         if (photo.preview.raw) uploadRaw(sf, photo.preview.raw);

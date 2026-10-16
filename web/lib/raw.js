@@ -22,18 +22,36 @@ export async function isRaw(file) {
     || isORFHeader(h);
 }
 
-/** Decode (optionally downscaled); returns { w, h, rgb, baseline, orientation, fullW, fullH }, sizes AFTER orientation. */
-export async function loadRaw(file, maxLongSide) {
+/** Decode (optionally downscaled); returns { w, h, rgb, baseline, orientation, fullW, fullH }, sizes AFTER orientation.
+ * `rot`: the user's extra quarter turns clockwise (withRotation). */
+export async function loadRaw(file, maxLongSide, rot = 0) {
   const buf = await file.arrayBuffer(), opt = maxLongSide ? { maxLongSide } : {};
   const d = await (isORFHeader(new Uint8Array(buf, 0, 4)) ? decodeORF : decodeDNG)(buf, opt);
   const o = d.meta?.orientation || 1, swap = o >= 5;
   const [cw, ch] = (d.meta?.crop || [0, 0, d.w, d.h]).slice(2);   // full (cropped) sensor size
-  return { sw: d.w, sh: d.h, w: swap ? d.h : d.w, h: swap ? d.w : d.h, rgb: d.rgb, baseline: d.exposure || 0, orientation: o,
-    fullW: swap ? ch : cw, fullH: swap ? cw : ch };
+  const ow = swap ? d.h : d.w, oh = swap ? d.w : d.h, ofw = swap ? ch : cw, ofh = swap ? cw : ch;
+  return withRotation({ sw: d.w, sh: d.h, ow, oh, ofw, ofh, rgb: d.rgb, baseline: d.exposure || 0, orientation: o }, rot);
 }
 
-// Source pixel index of oriented pixel (x, y) (EXIF orientation semantics).
+/** The same decoded raw turned by `rot` quarter turns clockwise after its EXIF orientation (no pixel copy:
+ * srcIndex maps every read). w/h and fullW/fullH are the turned sizes. */
+export function withRotation(r, rot = 0) {
+  rot &= 3;
+  const odd = rot & 1;
+  return { ...r, rot, w: odd ? r.oh : r.ow, h: odd ? r.ow : r.oh, fullW: odd ? r.ofh : r.ofw, fullH: odd ? r.ofw : r.ofh };
+}
+
+// Source pixel index of displayed pixel (x, y): the user's turn (r.rot, as common.js turnTransform),
+// then the EXIF orientation.
 function srcIndex(r, x, y) {
+  if (r.rot) {
+    const t = x;
+    switch (r.rot) {
+      case 1: x = y; y = r.oh - 1 - t; break;
+      case 2: x = r.ow - 1 - x; y = r.oh - 1 - y; break;
+      case 3: x = r.ow - 1 - y; y = t; break;
+    }
+  }
   const W = r.sw, H = r.sh;
   switch (r.orientation) {
     case 2: return y * W + (W - 1 - x);

@@ -48,21 +48,37 @@ const SRGB_LINEAR_INPUT = { io: { input_color_space: 'sRGB', input_cctf_decoding
 export const inputParams = (p3) => (p3 ? REC2020_LINEAR_INPUT : SRGB_LINEAR_INPUT);
 
 /**
- * Draw `bitmap` scaled to fit `longSide` and return its 8-bit RGBA pixels,
- * read as Display P3 when the canvas supports it.
+ * Canvas transform (a, b, c, d, e, f) taking a w x h source turned by `rot` quarter turns clockwise
+ * (1 = 90° right, 2 = 180°, 3 = 90° left) into its output frame, shifted up by `y0` output rows.
+ * Integer coefficients: with smoothing off the turn is an exact pixel copy.
  */
-export function decodeRGBA(bitmap, longSide = Infinity) {
+export function turnTransform(rot, w, h, y0 = 0) {
+  switch (rot & 3) {
+    case 1: return [0, 1, -1, 0, h, -y0];        // X = h - y, Y = x
+    case 2: return [-1, 0, 0, -1, w, h - y0];    // X = w - x, Y = h - y
+    case 3: return [0, -1, 1, 0, 0, w - y0];     // X = y, Y = w - x
+    default: return [1, 0, 0, 1, 0, -y0];
+  }
+}
+
+/**
+ * Draw `bitmap` scaled to fit `longSide` and return its 8-bit RGBA pixels,
+ * read as Display P3 when the canvas supports it. `rot`: quarter turns clockwise (turnTransform).
+ */
+export function decodeRGBA(bitmap, longSide = Infinity, rot = 0) {
   const s = Math.min(1, longSide / Math.max(bitmap.width, bitmap.height));
   const w = Math.round(bitmap.width * s), h = Math.round(bitmap.height * s);
+  const [ow, oh] = rot & 1 ? [h, w] : [w, h];
   const canvas = document.createElement('canvas');
-  canvas.width = w; canvas.height = h;
+  canvas.width = ow; canvas.height = oh;
   const ctx = canvas.getContext('2d', { colorSpace: 'display-p3' });
   const p3 = ctx.getContextAttributes?.().colorSpace === 'display-p3';
   ctx.imageSmoothingQuality = 'high';
+  if (rot & 3) ctx.setTransform(...turnTransform(rot, w, h));
   ctx.drawImage(bitmap, 0, 0, w, h);
-  const data = (p3 ? ctx.getImageData(0, 0, w, h, { colorSpace: 'display-p3' }) : ctx.getImageData(0, 0, w, h)).data;
+  const data = (p3 ? ctx.getImageData(0, 0, ow, oh, { colorSpace: 'display-p3' }) : ctx.getImageData(0, 0, ow, oh)).data;
   canvas.width = canvas.height = 0;   // release the backing store now (matters on iOS)
-  return { data, w, h, p3 };
+  return { data, w: ow, h: oh, p3 };
 }
 
 // Strips of about this many bytes (8-bit RGBA) when a full-size frame is
@@ -72,11 +88,13 @@ export const stripRows = (w) => Math.max(1, Math.floor(STRIP_BYTES / (w * 4)));
 
 /**
  * `bitmap` at its native size as 8-bit RGBA, a strip of rows at a time:
- * fn(data, y0, rows, p3). The same pixels as decodeRGBA(bitmap) (a 1:1 draw
+ * fn(data, y0, rows, p3). The same pixels as decodeRGBA(bitmap, Infinity, rot) (a 1:1 draw
  * is a copy), without the whole frame and its canvas in memory at once.
+ * `rot`: quarter turns clockwise; each output strip draws only the source band it covers.
  */
-export function forEachStrip(bitmap, fn) {
-  const w = bitmap.width, H = bitmap.height, step = stripRows(w);
+export function forEachStrip(bitmap, fn, rot = 0) {
+  const bw = bitmap.width, bh = bitmap.height;
+  const w = rot & 1 ? bh : bw, H = rot & 1 ? bw : bh, step = stripRows(w);
   const canvas = document.createElement('canvas');
   canvas.width = w; canvas.height = Math.min(step, H);
   const ctx = canvas.getContext('2d', { colorSpace: 'display-p3' });
@@ -84,8 +102,17 @@ export function forEachStrip(bitmap, fn) {
   ctx.imageSmoothingEnabled = false;   // 1:1: an exact copy, strip edges included
   for (let y0 = 0; y0 < H; y0 += step) {
     const rows = Math.min(step, H - y0);
-    ctx.clearRect(0, 0, w, rows);
-    ctx.drawImage(bitmap, 0, y0, w, rows, 0, 0, w, rows);
+    if (rot & 3) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, w, rows);
+      ctx.setTransform(...turnTransform(rot, bw, bh, y0));
+      // source band of output rows [y0, y0 + rows), drawn at its own place in source coordinates
+      const [sx, sy, sw, sh] = [[0, 0, bw, bh], [y0, 0, rows, bh], [0, bh - y0 - rows, bw, rows], [bw - y0 - rows, 0, rows, bh]][rot & 3];
+      ctx.drawImage(bitmap, sx, sy, sw, sh, sx, sy, sw, sh);
+    } else {
+      ctx.clearRect(0, 0, w, rows);
+      ctx.drawImage(bitmap, 0, y0, w, rows, 0, 0, w, rows);
+    }
     fn((p3 ? ctx.getImageData(0, 0, w, rows, { colorSpace: 'display-p3' }) : ctx.getImageData(0, 0, w, rows)).data, y0, rows, p3);
   }
   canvas.width = canvas.height = 0;
