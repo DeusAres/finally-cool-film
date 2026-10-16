@@ -103,7 +103,9 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
         origin_px: region ? [region.x0, region.y0] : [0, 0], frame_px: region ? [region.fw, region.fh] : [photo.preview.w, photo.preview.h],
       },
       // v2-calib: strength comes from the profile's antihalation; halation_amount is a multiplier on it (Halation slider).
-      halation: { active: u.halation > 0, halation_amount: u.halation },
+      // v3.12: film scatter (core 2.2 / tail 9.3 µm) at half size: at full size it took ~35 % of the fine detail
+      // everywhere, visible in the highlights where the shoulder leaves no contrast to hide it (sunlit walls).
+      halation: { active: u.halation > 0, halation_amount: u.halation, scatter_spatial_scale: SCATTER_SCALE },
     },
   };
 }
@@ -715,6 +717,7 @@ const FORMAT = {
 };
 // v2-calib: contrast / highlight / black defaults are the lab's standard (0); the old look defaults (Contrasto .35, Alte luci .6, Nero .15) are gone with their stages.
 const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, whites: 0, mshift: 0, yshift: 0, black: 0, grain: 1, halation: 1, texture: 0.2, clarity: 0.1, ca: 1, vignette: 0.65, falloff: 0.4, dust: 0.27 };
+const SCATTER_SCALE = 0.5;   // film scatter size multiplier (engine default 1), see renderParams
 const GRAIN_UNIT = 0.625;   // slider 1× -> engine amount (= old slider 0.25 / old default 0.4)
 const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }

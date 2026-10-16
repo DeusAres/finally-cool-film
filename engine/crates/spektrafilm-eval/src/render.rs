@@ -72,7 +72,7 @@ fn app_params() -> Value {
         "scanner": { "model": "frontier", "black_correction": false, "white_correction": false, "unsharp_mask": [0, 0] },
         "film_render": {
             "grain": { "active": false },
-            "halation": { "active": true, "halation_amount": 1.0 },
+            "halation": { "active": true, "halation_amount": 1.0, "scatter_spatial_scale": 0.5 },
             "glare": { "roughness": 0 }
         },
         "print_render": { "glare": { "roughness": 0 } }

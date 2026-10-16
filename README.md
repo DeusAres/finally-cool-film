@@ -43,6 +43,10 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 - **Chiarezza** (0..1): bagliore dreamy in luce lineare (stile Orton, ~220 µm): la luce delle forme chiare si spande
   sui vicini più scuri, più un velo leggero; i dettagli restano. Sempre attivi: morbidezza ottica di lente + scanner
   (0.6 px) e compressione del crunch da ISP (15–60 µm).
+- **Nitidezza della pellicola** (v3.11–3.12): lo scatter della luce nell'emulsione (core 2.2 / coda 9.3 µm) è a metà scala (`SCATTER_SCALE` in `web/app.js`):
+  a scala piena toglieva ~35 % del dettaglio fine, visibile nelle luci dove la spalla non lascia contrasto (muri al sole). Il blur
+  dye-cloud della grana agisce solo sulla grana, non sull'immagine (prima la Grana accesa ammorbidiva tutta la foto). Muro al sole,
+  Grana 1.5 + Texture +100: dettaglio 0.035 → 0.060 (originale 0.068); toni invariati sui 10 DNG di prova; carta colori identica.
 - **Pulizia del colore** (sempre attiva, stadio d'ingresso): il rumore di colore del sensore del telefono, invisibile
   nella foto, la saturazione della pellicola lo amplificava ~5× in puntini colorati digitali. Come in laboratorio,
   si media solo la crominanza (RGB / luminanza) su due anelli, rispettando i bordi di luminanza: dettaglio e grana
