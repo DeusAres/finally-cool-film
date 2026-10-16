@@ -42,7 +42,8 @@
     ],
     "setup_neutral_ev": 1.5,
     "green_hue_shift": 24,
-    "saturation_green": -0.08
+    "saturation_green": -0.08,
+    "cool_neutral_warm": 0.8
    },
    "debug_contrast_mode": 3
   }
