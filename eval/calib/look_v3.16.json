@@ -35,7 +35,7 @@
      "strength": 0.85,
      "highlight_margin": 0.1672
     },
-    "saturation_blue": 0.85,
+    "saturation_blue": 0.8,
     "setup_toe_slope": [
      0.9,
      1.0
@@ -43,7 +43,8 @@
     "setup_neutral_ev": 1.5,
     "green_hue_shift": 24,
     "saturation_green": -0.08,
-    "cool_neutral_warm": 0.8
+    "cool_neutral_warm": 0.8,
+    "highlight_neutral": 0.4
    },
    "debug_contrast_mode": 3
   }

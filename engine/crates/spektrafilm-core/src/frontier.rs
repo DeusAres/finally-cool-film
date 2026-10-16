@@ -368,6 +368,7 @@ impl FrontierBase {
             sat_green: m.saturation_green,
             green_shift: m.green_hue_shift,
             cool_warm: m.cool_neutral_warm,
+            hl_neutral: m.highlight_neutral,
             whites: (keys.whites as f64).clamp(-1.0, 1.0),
             whites_x0: Gradation::solve(m.gradation_a, sh, m).knee_x() - WHITES_REACH,
             out: IDENTITY,
@@ -586,6 +587,8 @@ pub struct Stage {
     green_shift: f64,
     /// Share of the cold chroma removed from dark-to-mid low-chroma tones (see `FrontierModelParams::cool_neutral_warm`).
     cool_warm: f64,
+    /// Share of the warm chroma removed from pale light tones (see `FrontierModelParams::highlight_neutral`).
+    hl_neutral: f64,
     /// Encoded slope of the gradation at mid grey (the film's mid-tone density -> level slope).
     mid_slope: f64,
     /// Linear sRGB (the model's working primaries) -> linear output primaries.
@@ -745,6 +748,9 @@ impl Stage {
         if self.cool_warm != 0.0 {
             lin = cool_neutral(&lin, l, self.cool_warm);
         }
+        if self.hl_neutral != 0.0 {
+            lin = pale_light_neutral(&lin, l, self.hl_neutral);
+        }
         let sat = if self.sat_blue != 0.0 {
             // cyan-blue hues, light ones only: the gain fades out below SAT_BLUE_L (linear luma), so dark blues (the chart's
             // blue sky, deep shadows) keep their chroma while a bright sky gets the full boost
@@ -762,7 +768,7 @@ impl Stage {
 }
 
 /// Linear-luma ramp (from, to) of the `saturation_blue` gain.
-const SAT_BLUE_L: (f64, f64) = (0.22, 0.36);
+const SAT_BLUE_L: (f64, f64) = (0.06, 0.18);
 
 /// Weight (0..1) of the cyan-blue hue band, from the hue angle on the opponent axes of linear
 /// light (red 30, yellow 90, green 150, cyan 210, blue 270, magenta 330 deg): 1 from 223 to 251
@@ -801,7 +807,7 @@ fn green_weight(lin: &[f64; 3]) -> f64 {
 
 /// Low-chroma, dark-to-mid, cold-hued tones (grey-green-blue casts of shadows / mid-tones, e.g. rock) lose a share
 /// `k * weight` of their component away from the neutral-warm direction (opponent hue 60 deg), luminance kept.
-/// Weights: chroma (opponent axes, linear light) ramps up 0.002-0.008 (neutral greys untouched) and down 0.05-0.09 (saturated
+/// Weights: chroma (opponent axes, linear light) ramps up 0.002-0.008 (neutral greys untouched) and down 0.03-0.06 (saturated
 /// blues / sea / clothes untouched), hue 135-160 up and 255-275 down (skin, reds, yellows untouched), linear luma full below 0.18, 0 above 0.30
 /// (light sky untouched).
 fn cool_neutral(lin: &[f64; 3], l: f64, k: f64) -> [f64; 3] {
@@ -816,7 +822,7 @@ fn cool_neutral(lin: &[f64; 3], l: f64, k: f64) -> [f64; 3] {
         t * t * (3.0 - 2.0 * t)
     };
     let h = o2.atan2(o1).to_degrees().rem_euclid(360.0);
-    let w = ss(0.002, 0.008, c) * (1.0 - ss(0.05, 0.09, c)) * ss(135.0, 160.0, h) * (1.0 - ss(255.0, 275.0, h)) * (1.0 - ss(0.18, 0.30, l));
+    let w = ss(0.002, 0.008, c) * (1.0 - ss(0.03, 0.06, c)) * ss(135.0, 160.0, h) * (1.0 - ss(255.0, 275.0, h)) * (1.0 - ss(0.18, 0.30, l));
     if w <= 0.0 {
         return *lin;
     }
@@ -826,6 +832,37 @@ fn cool_neutral(lin: &[f64; 3], l: f64, k: f64) -> [f64; 3] {
     let (p1, p2) = (o1 - k * w * pw * wx, o2 - k * w * pw * wy);
     let m = (lin[0] + lin[1] + lin[2]) / 3.0;
     let (a, b) = (p1 * std::f64::consts::FRAC_1_SQRT_2, p2 / 6f64.sqrt());
+    let mut out = [m + a + b, m - a + b, m - 2.0 * b];
+    let lo = LUMA[0] * out[0] + LUMA[1] * out[1] + LUMA[2] * out[2];
+    for v in out.iter_mut() {
+        *v += l - lo;
+    }
+    out
+}
+
+/// Pale, light, warm-hued tones (whites that come out cream / yellow: sunlit rails, walls, clouds) lose the share
+/// `k * weight` of their chroma, luminance kept. Weights: linear luma ramps up 0.55-0.75 (L* ~79-89: mids stay as they are),
+/// chroma 1 below 0.20 and 0 above 0.32 (saturated yellows, skin, oranges untouched), opponent hue 55-70 up / 105-125 down
+/// (yellow-orange band only).
+fn pale_light_neutral(lin: &[f64; 3], l: f64, k: f64) -> [f64; 3] {
+    let o1 = (lin[0] - lin[1]) * std::f64::consts::FRAC_1_SQRT_2;
+    let o2 = (lin[0] + lin[1] - 2.0 * lin[2]) / 6f64.sqrt();
+    let c = (o1 * o1 + o2 * o2).sqrt();
+    if c < 1e-9 {
+        return *lin;
+    }
+    let ss = |a: f64, b: f64, x: f64| {
+        let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    let h = o2.atan2(o1).to_degrees().rem_euclid(360.0);
+    let w = ss(0.55, 0.75, l) * (1.0 - ss(0.20, 0.32, c)) * ss(55.0, 70.0, h) * (1.0 - ss(105.0, 125.0, h));
+    if w <= 0.0 {
+        return *lin;
+    }
+    let f = 1.0 - k * w;
+    let m = (lin[0] + lin[1] + lin[2]) / 3.0;
+    let (a, b) = (o1 * f * std::f64::consts::FRAC_1_SQRT_2, o2 * f / 6f64.sqrt());
     let mut out = [m + a + b, m - a + b, m - 2.0 * b];
     let lo = LUMA[0] * out[0] + LUMA[1] * out[1] + LUMA[2] * out[2];
     for v in out.iter_mut() {

@@ -37,3 +37,6 @@ negative DENSITY, before the Frontier scanner LUT. `web/lib/grain.js` grain is r
   autocorr size Y ≥ M ≥ C; std follows LUT slope (peaks mids, lower at extremes).
 - Overall visible intensity per L* band within ±25% of today's grain.js at default (user likes it).
 - Survives IG export (1080 px) — visible after JPEG q~80.
+- v3.18: the coupling also rises to 0.90 with the spread (max - min) of the three developed fractions, 0.12 -> 0.22 (COUPLING_S0/S1, Rust + WGSL):
+  saturated colours (deep blue sky, p 0.37 / 0.49 / 0.57) kept c/l ~1.75 because the scanner's blue gain acts on the chroma part of the grain;
+  now ~1.36 there (luma std unchanged); grey patches (spread ~0.05) identical.

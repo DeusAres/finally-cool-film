@@ -296,6 +296,9 @@ pub struct FrontierModelParams {
     /// tones (see `cool_neutral`): warms grey-blue-green casts of shadows / mid-tones without touching saturated blues, skin,
     /// light skies or the neutral greys. Luminance kept. 0 = off.
     pub cool_neutral_warm: f64,
+    /// Share (0..1) of the chroma removed from pale, light, yellow-orange tones (see `pale_light_neutral`): whites that
+    /// come out cream. Luminance kept; mids, saturated yellows, skin untouched. 0 = off.
+    pub highlight_neutral: f64,
     /// Film-type balance of this stock (Fuji "film master" setup): fixed C, M, Y
     /// offset in logD, same sign as `FrontierParams::cmy` (+ = more of that
     /// colour). Applied with the keys but outside AutoSetup, which keeps
@@ -329,6 +332,7 @@ impl Default for FrontierModelParams {
             green_hue_shift: 0.0,
             saturation_green: 0.0,
             cool_neutral_warm: 0.0,
+            highlight_neutral: 0.0,
             balance_cmy: [0.0, 0.0, 0.02],
             auto: FrontierAutoParams::default(),
         }
