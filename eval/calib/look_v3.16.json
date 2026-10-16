@@ -23,7 +23,7 @@
     "balance_cmy": [
      0,
      0.005,
-     0.023
+     0.0245
     ],
     "setup_lut": true,
     "setup_fit_ev": 4.5,

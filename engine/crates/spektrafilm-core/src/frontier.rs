@@ -759,8 +759,8 @@ impl Stage {
 const SAT_BLUE_L: (f64, f64) = (0.22, 0.36);
 
 /// Weight (0..1) of the cyan-blue hue band, from the hue angle on the opponent axes of linear
-/// light (red 30, yellow 90, green 150, cyan 210, blue 270, magenta 330 deg): 1 from 215 to 250
-/// (cyan, sky), smooth ramps 190-215 and 250-270, 0 elsewhere (skin, reds, yellows, greens,
+/// light (red 30, yellow 90, green 150, cyan 210, blue 270, magenta 330 deg): 1 from 223 to 251
+/// (cyan, sky), smooth ramps 198-223 and 251-266, 0 elsewhere (skin, reds, yellows, greens,
 /// magentas).
 fn blue_weight(lin: &[f64; 3]) -> f64 {
     let o1 = (lin[0] - lin[1]) * std::f64::consts::FRAC_1_SQRT_2;
@@ -773,7 +773,7 @@ fn blue_weight(lin: &[f64; 3]) -> f64 {
         let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
         t * t * (3.0 - 2.0 * t)
     };
-    ss(190.0, 215.0, h) * (1.0 - ss(243.0, 258.0, h))
+    ss(198.0, 223.0, h) * (1.0 - ss(251.0, 266.0, h))
 }
 
 /// Weight (0..1) of the green hue band (same opponent-axis hue angle as `blue_weight`: yellow 90,
