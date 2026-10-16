@@ -16,6 +16,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 - Scegli foto → **input**: JPEG → decode EOTF → un'unica inversa generica display→scena (`web/lib/color.js`), nessuna
   misura della pipeline. DNG → luce lineare Rec.2020 con ColorMatrix + ForwardMatrix quando presente.
+  ORF Olympus (`web/lib/orf.js`, v3.13): compressione Olympus a 12 bit (algoritmo di dcraw), nero / bilanciamento / ritaglio
+  dal MakerNote, matrice colore Adobe del modello (tabella LibRaw); poi lo stesso sviluppo del DNG. Provato su XZ-1; l'ORF a 14 bit
+  (OM-1 e successive) non è supportato.
 - **Gold 200 spettrale → scanner Frontier SP-3000** (motore, `scanner.frontier`): sensore LED RGB (proxy Status M), D-min
   per canale, bilanciamento per tipo di film, AutoSetup con guardia sulle alte luci, gradazione, saturazione. Il motore
   restituisce il positivo (`io.scan_film` + `scanner.model="frontier"`). Modello inferito: nessun dato misurato sullo

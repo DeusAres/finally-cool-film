@@ -23,12 +23,13 @@
 
 const TYPE_SIZE = [0, 1, 1, 2, 4, 8, 1, 1, 2, 4, 8, 4, 8, 4];
 
-function parseTIFF(buf) {
+export function parseTIFF(buf) {
   const dv = new DataView(buf);
   const bom = dv.getUint16(0, false);
   const le = bom === 0x4949;
   if (!le && bom !== 0x4d4d) throw new Error('DNG: not a TIFF file');
-  if (dv.getUint16(2, le) !== 42) throw new Error('DNG: BigTIFF/unknown TIFF variant');
+  const magic = dv.getUint16(2, le);   // 42; Olympus ORF: 0x4f52 'RO' / 0x5352 'RS'
+  if (magic !== 42 && magic !== 0x4f52 && magic !== 0x5352) throw new Error('DNG: BigTIFF/unknown TIFF variant');
 
   function readIFD(off) {
     const n = dv.getUint16(off, le);
@@ -297,14 +298,20 @@ function blendByCCT(m1, m2, T1, T2, T) {
 function buildColour(P, ifd, neutral) {
   const cm1 = P.values(ifd, 50721), cm2 = P.values(ifd, 50722);
   if (!cm1) throw new Error('DNG: no ColorMatrix1');
-  const cc1 = P.values(ifd, 50723) || diag([1, 1, 1]);
-  const cc2 = P.values(ifd, 50724) || diag([1, 1, 1]);
-  const ab = P.values(ifd, 50727) || [1, 1, 1];
-  const AB = diag(ab);
+  return cameraColour({
+    cm1, cm2, cc1: P.values(ifd, 50723), cc2: P.values(ifd, 50724), ab: P.values(ifd, 50727),
+    fm1: P.values(ifd, 50964), fm2: P.values(ifd, 50965),   // ForwardMatrix1/2: camera -> XYZ D50
+    T1: ILLUM_TEMP[P.one(ifd, 50778, 21)] || 6504, T2: ILLUM_TEMP[P.one(ifd, 50779, 21)] || 6504,
+  }, neutral);
+}
+
+/** Camera (white-balanced, clip = 1) -> linear Rec.2020 D65, from DNG-convention matrices (ColorMatrix =
+ * XYZ -> camera; optional CameraCalibration, AnalogBalance, ForwardMatrix, illuminant CCTs) and AsShotNeutral. */
+export function cameraColour({ cm1, cm2, cc1, cc2, ab, fm1, fm2, T1 = 6504, T2 = 6504 }, neutral) {
+  cc1 = cc1 || diag([1, 1, 1]); cc2 = cc2 || diag([1, 1, 1]);
+  const AB = diag(ab || [1, 1, 1]);
   const M1 = mul3(mul3(AB, cc1), cm1);
   const M2 = cm2 ? mul3(mul3(AB, cc2), cm2) : null;
-  const fm1 = P.values(ifd, 50964), fm2 = P.values(ifd, 50965);   // ForwardMatrix1/2: camera -> XYZ D50
-  const T1 = ILLUM_TEMP[P.one(ifd, 50778, 21)] || 6504, T2 = ILLUM_TEMP[P.one(ifd, 50779, 21)] || 6504;
   const interp = T => blendByCCT(M1, M2, T1, T2, T);
   // DNG SDK NeutralToXY: iterate CCT <-> matrix until the white point converges.
   let x = 0.3457, y = 0.3585, cct = 5003;
@@ -625,7 +632,7 @@ function mhcRB(a, w, rgb, i, ob, x0, n, swap, gR, gG, gB, M, sat) {
 
 // ---------------------------------------------------------------- main
 
-const PAD = 2;
+export const PAD = 2;
 
 export async function decodeDNG(arrayBuffer, { maxLongSide } = {}) {
   const buf = ArrayBuffer.isView(arrayBuffer)
@@ -746,6 +753,23 @@ export async function decodeDNG(arrayBuffer, { maxLongSide } = {}) {
     meta.dateTimeOriginal = P.str(ex, 36867) || undefined;
   }
 
+  const col = buildColour(P, ifd0, neutral);
+  meta.cct = col.cct; meta.whiteXY = col.whiteXY; meta.cameraToRec2020 = col.M;
+  const maps = parseGainMaps(P.bytes(raw, 51022) || P.bytes(ifd0, 51022));
+  meta.gainMaps = maps.length;
+  const out = developCFA({ cfa, PW, PH, aW, aH, cx, cy, cw, ch, colorAt, wb, M: col.M, maps, maxLongSide });
+  return { ...out, space: 'rec2020', exposure: baseline, meta };
+}
+
+/**
+ * Shared back end of the raw decoders: `cfa` is the padded (PAD) Uint16 Bayer image of the active area
+ * (aW x aH), linearized and white balanced as decodeDNG's `put` does (per channel wb[c] / max(wb), sensor
+ * white of the strongest-gain channel = 65535); `M` maps white-balanced camera RGB (clip = 1) to linear
+ * Rec.2020; `maps` are GainMaps (or []). Pads, demosaics (or bins) the crop (cx, cy, cw, ch) and resizes to
+ * `maxLongSide`. Returns { w, h, rgb }.
+ */
+export function developCFA({ cfa, PW, PH, aW, aH, cx, cy, cw, ch, colorAt, wb, M: Mcam, maps, maxLongSide }) {
+  const wbMax = Math.max(...wb);
   // reflect-101 padding (preserves CFA phase)
   for (let y = PAD; y < PH - PAD; y++) {
     const o = y * PW;
@@ -757,14 +781,10 @@ export async function decodeDNG(arrayBuffer, { maxLongSide } = {}) {
   }
 
   // ---- colour
-  const col = buildColour(P, ifd0, neutral);
   const s = wbMax / 65535;
   const sat = wb.map(w => w / wbMax * 65535); // per-channel sensor-white in CFA units
   satStats(cfa, PW, PAD, cx, cy, cw, ch, colorAt, sat);
-  const M = col.M.map(v => v * s);
-  meta.cct = col.cct; meta.whiteXY = col.whiteXY; meta.cameraToRec2020 = col.M;
-  const maps = parseGainMaps(P.bytes(raw, 51022) || P.bytes(ifd0, 51022));
-  meta.gainMaps = maps.length;
+  const M = Mcam.map(v => v * s);
   const [m0, m1, m2, m3, m4, m5, m6, m7, m8] = M;
 
   const halfW = cw >> 1, halfH = ch >> 1;
@@ -823,6 +843,5 @@ export async function decodeDNG(arrayBuffer, { maxLongSide } = {}) {
     rgb = areaResize(rgb, outW, outH, dw, dh);
     outW = dw; outH = dh;
   }
-
-  return { w: outW, h: outH, rgb, space: 'rec2020', exposure: baseline, meta };
+  return { w: outW, h: outH, rgb };
 }

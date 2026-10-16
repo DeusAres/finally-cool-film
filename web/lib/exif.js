@@ -77,7 +77,8 @@ function exifFromTiff(buf) {
   if (buf.length < 16) return null;
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   const m = dv.getUint16(0);
-  if ((m !== 0x4949 && m !== 0x4D4D) || dv.getUint16(2, m === 0x4949) !== 42) return null;
+  const magic = dv.getUint16(2, m === 0x4949);   // 42; Olympus ORF 0x4f52 'RO' / 0x5352 'RS'
+  if ((m !== 0x4949 && m !== 0x4D4D) || (magic !== 42 && magic !== 0x4f52 && magic !== 0x5352)) return null;
   const le = m === 0x4949;
   const all0 = readIfd(buf, dv, le, dv.getUint32(4, le));
   const ptrOf = (tag) => { const e = all0.find((x) => x.tag === tag); return e && e.type === 4 ? new DataView(e.data.buffer).getUint32(0, true) : 0; };
@@ -149,7 +150,7 @@ async function exifFromHeic(file) {
 export async function readExifSegment(file) {
   if (!file) return null;
   const id = `${file.type || ''} ${file.name || ''}`;
-  if (/dng|tiff?\b/i.test(id) || /\.(dng|tiff?)$/i.test(file.name || '')) {
+  if (/dng|orf|tiff?\b/i.test(id) || /\.(dng|orf|tiff?)$/i.test(file.name || '')) {
     return exifFromTiff(new Uint8Array(await file.slice(0, 8 << 20).arrayBuffer()));
   }
   if (/hei[cf]/i.test(id)) return exifFromHeic(file);

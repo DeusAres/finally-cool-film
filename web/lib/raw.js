@@ -1,4 +1,4 @@
-// Raw (DNG) photos: the bridge between dng.js and the app.
+// Raw photos (DNG; Olympus ORF via orf.js): the bridge between the raw decoders and the app.
 //
 // A DNG is scene-linear light (Rec.2020, white-balanced, sensor clip = 1), the
 // input a film simulation actually wants: no phone tone curve to invert, no HDR
@@ -10,19 +10,22 @@
 // so the full-resolution float image is never copied.
 
 import { decodeDNG } from './dng.js';
+import { decodeORF, isORFHeader } from './orf.js';
 import { REC2020_TO_P3, linearToSrgb } from './color.js';
 
-/** True for a DNG (by name/type, or a TIFF header when the name says nothing). */
+/** True for a DNG or an Olympus ORF (by name/type, or a TIFF / ORF header when the name says nothing). */
 export async function isRaw(file) {
-  if (/\.dng$/i.test(file.name || '') || /dng/i.test(file.type || '')) return true;
+  if (/\.(dng|orf)$/i.test(file.name || '') || /dng|orf/i.test(file.type || '')) return true;
   if (file.type && file.type !== 'application/octet-stream') return false;
   const h = new Uint8Array(await file.slice(0, 4).arrayBuffer());
-  return (h[0] === 0x49 && h[1] === 0x49 && h[2] === 0x2a && h[3] === 0) || (h[0] === 0x4d && h[1] === 0x4d && h[2] === 0 && h[3] === 0x2a);
+  return (h[0] === 0x49 && h[1] === 0x49 && h[2] === 0x2a && h[3] === 0) || (h[0] === 0x4d && h[1] === 0x4d && h[2] === 0 && h[3] === 0x2a)
+    || isORFHeader(h);
 }
 
 /** Decode (optionally downscaled); returns { w, h, rgb, baseline, orientation, fullW, fullH }, sizes AFTER orientation. */
 export async function loadRaw(file, maxLongSide) {
-  const d = await decodeDNG(await file.arrayBuffer(), maxLongSide ? { maxLongSide } : {});
+  const buf = await file.arrayBuffer(), opt = maxLongSide ? { maxLongSide } : {};
+  const d = await (isORFHeader(new Uint8Array(buf, 0, 4)) ? decodeORF : decodeDNG)(buf, opt);
   const o = d.meta?.orientation || 1, swap = o >= 5;
   const [cw, ch] = (d.meta?.crop || [0, 0, d.w, d.h]).slice(2);   // full (cropped) sensor size
   return { sw: d.w, sh: d.h, w: swap ? d.h : d.w, h: swap ? d.w : d.h, rgb: d.rgb, baseline: d.exposure || 0, orientation: o,
