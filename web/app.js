@@ -23,7 +23,9 @@ const IG_WIDTH = 1080;            // Instagram feed width (3:4 portrait = 1080 Ã
 // INTERNO_EV off the scene exposure before the film: a pure function of the checkbox. The lab scanner's AutoSetup
 // (frontier.auto) decides what it does about the thin negative.
 const NO_AUTO = [0, 0, 0, 0];   // scanner AutoSetup result [d, c, m, y]: neutral
-const JPEG_DISTANCE = 1.0;        // butteraugli distance for jpegli
+const JPEG_QUALITY_DEFAULT = 90;   // export slider default: jpegli quality 90 = distance 1.0 (visually lossless), the pre-v3.15 fixed setting
+/** jpegli's quality -> butteraugli distance (jpegli_quality_to_distance): 90 -> 1.0, 100 -> 0.1 (largest files). */
+const jpegDistance = (q) => (q >= 30 ? 0.1 + (100 - q) * 0.09 : 53 / 3000 * q * q - 23 / 20 * q + 25);
 const PROGRESSIVE_PIXEL_LIMIT = 6e6; // progressive keeps all DCT coeffs in the wasm heap (~29 B/px): baseline above
 const BORDER_FRACTION = 0.01;     // mat (the image's paper white), fraction of the long side, all four sides (as in grain pro)
 
@@ -556,6 +558,13 @@ async function rotate(quarters) {
   } finally { rotBusy = false; }
 }
 $('rotL').addEventListener('click', () => rotate(-1));
+// Export JPEG quality (File tab): only read by exportFull, never re-renders. Double tap the label: back to the default.
+{
+  const q = $('quality'), out = () => { q.nextElementSibling.textContent = `${q.value}%`; };
+  q.addEventListener('input', out);
+  q.previousElementSibling.addEventListener('dblclick', () => { q.value = JPEG_QUALITY_DEFAULT; out(); });
+  out();
+}
 $('rotR').addEventListener('click', () => rotate(1));
 
 async function runAuto() {
@@ -668,7 +677,9 @@ async function exportFull(ig = false) {
     encoderError = null;
     const done = new Promise((resolve, reject) => { encoderDone = { resolve, reject }; });
     done.catch(() => {});
-    encoder.postMessage({ cmd: 'start', width: w, height: h, distance: JPEG_DISTANCE, progressive, yuv444: 1, border, mat: border ? paperWhite(u) : undefined });
+    const quality = +$('quality').value, distance = jpegDistance(quality);
+    log(`export quality ${quality} (distance ${distance.toFixed(2)})`);
+    encoder.postMessage({ cmd: 'start', width: w, height: h, distance, progressive, yuv444: 1, border, mat: border ? paperWhite(u) : undefined });
 
     for (let s = 0; s < strips; s++) {
       const ty = s * EXPORT_TILE, ch = Math.min(EXPORT_TILE, h - ty);
