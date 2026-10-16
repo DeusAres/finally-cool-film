@@ -98,8 +98,10 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
         // v3.16 Gold 200 look (tuned on 3 samples with a Gold 200 reviewer; chart 96.9): saturation_blue lifts cyan / sky hues (215-243 deg in the LUT) only where light (linear luma 0.22-0.36), so the
         // dark chart blues and the skin / greens stay put; Y 0.02 (no C) warms midtones and lights; narrower B / farther R sensors;
         // black 0.015 + a 6.2 against the milky blacks; setup_neutral_ev 1.5 + toe [R 0.9, B 1.0] take the cast out of the deep shadows.
-        model: { saturation: 1.01, saturation_blue: 0.55, balance_cmy: [0, 0.005, 0.02], sensor_peak_nm: [650, 540, 450], sensor_fwhm_nm: [40, 50, 40],
-                 black_point: 0.015, gradation_a: 6.2, setup_toe_slope: [0.9, 1.0], setup_neutral_ev: 1.5 },
+        // v3.17: green_hue_shift 24 (greens towards yellow-olive, luminance kept; foliage chroma -0.08 so it does not grow),
+        // saturation_blue 0.7 (paler upper sky), AutoSetup k_col 0.3 (a lab corrects part of a tungsten cast; daylight frames barely move).
+        model: { saturation: 1.01, saturation_blue: 0.7, green_hue_shift: 24, saturation_green: -0.08, balance_cmy: [0, 0.005, 0.02], sensor_peak_nm: [650, 540, 450], sensor_fwhm_nm: [40, 50, 40],
+                 black_point: 0.015, gradation_a: 6.2, setup_toe_slope: [0.9, 1.0], setup_neutral_ev: 1.5, auto: { k_col: 0.3 } },
       },
     },
     film_render: {

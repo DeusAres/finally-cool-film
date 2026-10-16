@@ -38,6 +38,22 @@ pub const FAST_COUNT_FRAC: f32 = 0.002;
 /// deviation replaced by the mean deviation of all three layers (correlated
 /// density noise shared across the dye layers).
 pub const LAYER_COUPLING: f32 = 0.72;
+/// Coupling in the lights: from mean developed fraction `COUPLING_P0` (just above mid grey) to
+/// `COUPLING_P1` the coupling rises smoothly to `LAYER_COUPLING_HI`. There the scanner's shoulder
+/// squeezes the luma grain (mid -> +2 EV: luma std /2.4) but the chroma-preserving highlight stage
+/// does not squeeze the inter-channel differences, so chroma/luma noise doubled (1.1 -> 2.0 at
+/// +1/+2 EV, blotchy coloured grain in skies). Only the differential part is reduced; the
+/// common-mode (luma) deviation `mean` is untouched.
+pub const LAYER_COUPLING_HI: f32 = 0.90;
+pub const COUPLING_P0: f32 = 0.5;
+pub const COUPLING_P1: f32 = 0.6;
+
+/// Layer coupling for a pixel whose three layers have the mean developed fraction `pbar`.
+#[inline]
+pub fn layer_coupling(pbar: f32) -> f32 {
+    let t = ((pbar - COUPLING_P0) / (COUPLING_P1 - COUPLING_P0)).clamp(0.0, 1.0);
+    LAYER_COUPLING + (LAYER_COUPLING_HI - LAYER_COUPLING) * (t * t * (3.0 - 2.0 * t))
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct HashGrain {
@@ -171,6 +187,7 @@ pub fn binomial(n: f32, p: f32, q: f32, st: &mut u32) -> f32 {
 pub fn grain_density_pixel(g: &HashGrain, d: [f32; 3], gx: u32, gy: u32) -> [f32; 3] {
     let mut out = d;
     let mut devs = [0.0f32; 3];
+    let mut p_sum = 0.0f32;
     for ch in 0..3usize {
         let layer = if g.monochrome { 0 } else { ch as u32 };
         let dmin = g.density_min[ch];
@@ -179,6 +196,7 @@ pub fn grain_density_pixel(g: &HashGrain, d: [f32; 3], gx: u32, gy: u32) -> [f32
         let od_particle = dmax / npp;
         let d_in = d[ch] + dmin;
         let p = (d_in / dmax).clamp(1e-6, 1.0 - 1e-6);
+        p_sum += p;
         let q = ((dmax - d_in) / dmax).clamp(1e-6, 1.0 - 1e-6);
         let sat = 1.0 - p * g.uniformity[ch] * (1.0 - 1e-6);
         let lambda = npp / sat;
@@ -221,8 +239,9 @@ pub fn grain_density_pixel(g: &HashGrain, d: [f32; 3], gx: u32, gy: u32) -> [f32
         devs[ch] = dev;
     }
     let mean = (devs[0] + devs[1] + devs[2]) * (1.0 / 3.0);
+    let cpl = layer_coupling(p_sum * (1.0 / 3.0));
     for ch in 0..3usize {
-        out[ch] = d[ch] + g.amount * (devs[ch] + LAYER_COUPLING * (mean - devs[ch]));
+        out[ch] = d[ch] + g.amount * (devs[ch] + cpl * (mean - devs[ch]));
     }
     out
 }
@@ -365,6 +384,7 @@ mod tests {
         fn grain_density(p: &Params, d: [f32; 3], gx: u32, gy: u32) -> [f32; 3] {
             let mut out = d;
             let mut devs = [0.0f32; 3];
+            let mut p_sum = 0.0f32;
             for ch in 0..3usize {
                 let layer = if p.monochrome != 0 { 0 } else { ch as u32 };
                 let dmin = p.density_min[ch];
@@ -373,6 +393,7 @@ mod tests {
                 let od = dmax / npp;
                 let d_in = d[ch] + dmin;
                 let pp = (d_in / dmax).clamp(1e-6, 1.0 - 1e-6);
+                p_sum += pp;
                 let q = ((dmax - d_in) / dmax).clamp(1e-6, 1.0 - 1e-6);
                 let sat = 1.0 - pp * p.uniformity[ch] * (1.0 - 1e-6);
                 let lambda = npp / sat;
@@ -416,8 +437,10 @@ mod tests {
                 devs[ch] = dev;
             }
             let mean = (devs[0] + devs[1] + devs[2]) * (1.0 / 3.0);
+            let tt = (((p_sum * (1.0 / 3.0)) - super::COUPLING_P0) / (super::COUPLING_P1 - super::COUPLING_P0)).clamp(0.0, 1.0);
+            let cpl = super::LAYER_COUPLING + (super::LAYER_COUPLING_HI - super::LAYER_COUPLING) * (tt * tt * (3.0 - 2.0 * tt));
             for ch in 0..3usize {
-                out[ch] = d[ch] + p.amount * (devs[ch] + super::LAYER_COUPLING * (mean - devs[ch]));
+                out[ch] = d[ch] + p.amount * (devs[ch] + cpl * (mean - devs[ch]));
             }
             out
         }
@@ -490,7 +513,7 @@ mod tests {
         for k in [
             "747796405u", "2891336453u", "277803737u", "0x68e31da4u", "0x9e3779b9u", "0x7f4a7c15u",
             "0x9e3779b1u", "0x85ebca6bu", "0x27d4eb2fu", "6.2831855", "EXACT_MAX_MEAN: f32 = 30.0",
-            "MAX_STEPS: u32 = 120u", "LAYER_COUPLING: f32 = 0.72", "FAST_OD_SHARE: f32 = 0.3", "FAST_K: f32 = 3.3", "FAST_COUNT_FRAC: f32 = 0.002", "1000u + layer", "layer + sl * 10u",
+            "MAX_STEPS: u32 = 120u", "LAYER_COUPLING: f32 = 0.72", "LAYER_COUPLING_HI: f32 = 0.9", "COUPLING_P0: f32 = 0.5", "COUPLING_P1: f32 = 0.6", "FAST_OD_SHARE: f32 = 0.3", "FAST_K: f32 = 3.3", "FAST_COUNT_FRAC: f32 = 0.002", "1000u + layer", "layer + sl * 10u",
         ] {
             assert!(src.contains(k), "WGSL missing {k}");
         }

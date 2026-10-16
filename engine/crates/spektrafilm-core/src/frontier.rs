@@ -365,6 +365,8 @@ impl FrontierBase {
             },
             sat: (m.saturation * keys.saturation as f64).max(0.0),
             sat_blue: m.saturation_blue,
+            sat_green: m.saturation_green,
+            green_shift: m.green_hue_shift,
             whites: (keys.whites as f64).clamp(-1.0, 1.0),
             whites_x0: Gradation::solve(m.gradation_a, sh, m).knee_x() - WHITES_REACH,
             out: IDENTITY,
@@ -577,6 +579,10 @@ pub struct Stage {
     sat: f64,
     /// Extra chroma gain on cyan-blue hues (see `FrontierModelParams::saturation_blue`).
     sat_blue: f64,
+    /// Extra chroma gain on green hues (see `FrontierModelParams::saturation_green`).
+    sat_green: f64,
+    /// Hue rotation of the greens towards yellow, degrees (see `FrontierModelParams::green_hue_shift`).
+    green_shift: f64,
     /// Encoded slope of the gradation at mid grey (the film's mid-tone density -> level slope).
     mid_slope: f64,
     /// Linear sRGB (the model's working primaries) -> linear output primaries.
@@ -727,8 +733,12 @@ impl Stage {
         }
         // Saturation about the luminance, in linear light (Y-preserving). Scaling
         // about a gamma-encoded luma compressed bright saturated yellows.
-        let lin = y.map(srgb_decode);
+        let mut lin = y.map(srgb_decode);
         let l = LUMA[0] * lin[0] + LUMA[1] * lin[1] + LUMA[2] * lin[2];
+        let gw = if self.green_shift != 0.0 || self.sat_green != 0.0 { green_weight(&lin) } else { 0.0 };
+        if self.green_shift != 0.0 && gw > 0.0 {
+            lin = rotate_hue(&lin, l, -self.green_shift * gw);
+        }
         let sat = if self.sat_blue != 0.0 {
             // cyan-blue hues, light ones only: the gain fades out below SAT_BLUE_L (linear luma), so dark blues (the chart's
             // blue sky, deep shadows) keep their chroma while a bright sky gets the full boost
@@ -736,7 +746,7 @@ impl Stage {
             self.sat * (1.0 + self.sat_blue * blue_weight(&lin) * t * t * (3.0 - 2.0 * t))
         } else {
             self.sat
-        };
+        } * (1.0 + self.sat_green * gw);
         let lin = lin.map(|v| (l + sat * (v - l)).clamp(0.0, 1.0));
         // Working space = sRGB primaries, whatever the output: only this last matrix
         // (and the sRGB transfer) knows the output space.
@@ -764,6 +774,40 @@ fn blue_weight(lin: &[f64; 3]) -> f64 {
         t * t * (3.0 - 2.0 * t)
     };
     ss(190.0, 215.0, h) * (1.0 - ss(243.0, 258.0, h))
+}
+
+/// Weight (0..1) of the green hue band (same opponent-axis hue angle as `blue_weight`: yellow 90,
+/// green 150, cyan 210): smooth ramp 95-120 up, 1 from 120 to 165, ramp 165-195 down, so that yellows
+/// (90), skin / reds (< 80) and the cyan-blue band (>= 190, `blue_weight`) are untouched.
+fn green_weight(lin: &[f64; 3]) -> f64 {
+    let o1 = (lin[0] - lin[1]) * std::f64::consts::FRAC_1_SQRT_2;
+    let o2 = (lin[0] + lin[1] - 2.0 * lin[2]) / 6f64.sqrt();
+    if o1 * o1 + o2 * o2 < 1e-12 {
+        return 0.0;
+    }
+    let h = o2.atan2(o1).to_degrees().rem_euclid(360.0);
+    let ss = |a: f64, b: f64, x: f64| {
+        let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    ss(95.0, 120.0, h) * (1.0 - ss(165.0, 195.0, h))
+}
+
+/// Rotates the chroma of linear RGB `lin` by `deg` degrees on the opponent axes (+ = rising hue angle: yellow
+/// -> green -> cyan), keeping the linear luma `l` (Rec.709); the result may leave [0, 1], the caller clamps.
+fn rotate_hue(lin: &[f64; 3], l: f64, deg: f64) -> [f64; 3] {
+    let o1 = (lin[0] - lin[1]) * std::f64::consts::FRAC_1_SQRT_2;
+    let o2 = (lin[0] + lin[1] - 2.0 * lin[2]) / 6f64.sqrt();
+    let m = (lin[0] + lin[1] + lin[2]) / 3.0;
+    let (s, c) = deg.to_radians().sin_cos();
+    let (p1, p2) = (c * o1 - s * o2, s * o1 + c * o2);
+    let (a, b) = (p1 * std::f64::consts::FRAC_1_SQRT_2, p2 / 6f64.sqrt());
+    let mut out = [m + a + b, m - a + b, m - 2.0 * b];
+    let lo = LUMA[0] * out[0] + LUMA[1] * out[1] + LUMA[2] * out[2];
+    for v in out.iter_mut() {
+        *v += l - lo;
+    }
+    out
 }
 
 /// The baked scanner LUT: film density (cmy) -> sRGB-encoded positive.

@@ -286,6 +286,12 @@ pub struct FrontierModelParams {
     /// Extra saturation of the cyan-blue hues only (opponent-axis hue 190-270 deg, soft edges, see `blue_weight`):
     /// chroma x (1 + saturation_blue * weight). 0 = off; skin, reds, yellows, greens untouched.
     pub saturation_blue: f64,
+    /// Rotation of the green hues towards yellow, degrees (opponent-axis hue ~100-190 deg, soft edges, see
+    /// `green_weight`; yellows, skin, reds, cyan-blue untouched), luminance preserved. 0 = off. Gold-like
+    /// foliage is yellow-olive where a neutral scan gives blue-green.
+    pub green_hue_shift: f64,
+    /// Extra saturation of the green hues only (same band as `green_hue_shift`): chroma x (1 + saturation_green * weight). 0 = off.
+    pub saturation_green: f64,
     /// Film-type balance of this stock (Fuji "film master" setup): fixed C, M, Y
     /// offset in logD, same sign as `FrontierParams::cmy` (+ = more of that
     /// colour). Applied with the keys but outside AutoSetup, which keeps
@@ -316,6 +322,8 @@ impl Default for FrontierModelParams {
             black_lift_max: 0.25,
             saturation: 1.12,
             saturation_blue: 0.0,
+            green_hue_shift: 0.0,
+            saturation_green: 0.0,
             balance_cmy: [0.0, 0.0, 0.02],
             auto: FrontierAutoParams::default(),
         }
