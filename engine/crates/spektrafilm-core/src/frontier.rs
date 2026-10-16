@@ -841,7 +841,7 @@ fn cool_neutral(lin: &[f64; 3], l: f64, k: f64) -> [f64; 3] {
 }
 
 /// Pale, light, warm-hued tones (whites that come out cream / yellow: sunlit rails, walls, clouds) lose the share
-/// `k * weight` of their chroma, luminance kept. Weights: linear luma ramps up 0.55-0.75 (L* ~79-89: mids stay as they are),
+/// `k * weight` of their chroma, luminance kept. Weights: linear luma ramps up 0.38-0.62 (L* ~68-82: mids stay as they are),
 /// chroma 1 below 0.20 and 0 above 0.32 (saturated yellows, skin, oranges untouched), opponent hue 55-70 up / 105-125 down
 /// (yellow-orange band only).
 fn pale_light_neutral(lin: &[f64; 3], l: f64, k: f64) -> [f64; 3] {
@@ -856,13 +856,16 @@ fn pale_light_neutral(lin: &[f64; 3], l: f64, k: f64) -> [f64; 3] {
         t * t * (3.0 - 2.0 * t)
     };
     let h = o2.atan2(o1).to_degrees().rem_euclid(360.0);
-    let w = ss(0.55, 0.75, l) * (1.0 - ss(0.20, 0.32, c)) * ss(55.0, 70.0, h) * (1.0 - ss(105.0, 125.0, h));
+    let w = ss(0.38, 0.62, l) * (1.0 - ss(0.20, 0.32, c)) * ss(55.0, 70.0, h) * (1.0 - ss(105.0, 125.0, h));
     if w <= 0.0 {
         return *lin;
     }
     let f = 1.0 - k * w;
+    // yellow-green whites (hue > 72) are also pulled back towards the warm-neutral side (a* -> 0), by up to 0.8 deg per deg, 20 deg
+    let (sn, cs) = (-0.8 * k * w * (h - 72.0).clamp(0.0, 25.0)).to_radians().sin_cos();
+    let (r1, r2) = (cs * o1 - sn * o2, sn * o1 + cs * o2);
     let m = (lin[0] + lin[1] + lin[2]) / 3.0;
-    let (a, b) = (o1 * f * std::f64::consts::FRAC_1_SQRT_2, o2 * f / 6f64.sqrt());
+    let (a, b) = (r1 * f * std::f64::consts::FRAC_1_SQRT_2, r2 * f / 6f64.sqrt());
     let mut out = [m + a + b, m - a + b, m - 2.0 * b];
     let lo = LUMA[0] * out[0] + LUMA[1] * out[1] + LUMA[2] * out[2];
     for v in out.iter_mut() {

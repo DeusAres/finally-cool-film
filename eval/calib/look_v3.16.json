@@ -8,7 +8,7 @@
     "shoulder_start": 0.6928,
     "shoulder_sharpness": 1.7142,
     "saturation": 1.01,
-    "black_point": 0.015,
+    "black_point": 0.012,
     "white_point": 0.9908,
     "sensor_peak_nm": [
      650,
@@ -23,7 +23,7 @@
     "balance_cmy": [
      0,
      0.005,
-     0.0245
+     0.02
     ],
     "setup_lut": true,
     "setup_fit_ev": 4.5,
@@ -35,7 +35,7 @@
      "strength": 0.85,
      "highlight_margin": 0.1672
     },
-    "saturation_blue": 0.8,
+    "saturation_blue": 1.0,
     "setup_toe_slope": [
      0.9,
      1.0
@@ -43,8 +43,8 @@
     "setup_neutral_ev": 1.5,
     "green_hue_shift": 24,
     "saturation_green": -0.08,
-    "cool_neutral_warm": 0.8,
-    "highlight_neutral": 0.4
+    "cool_neutral_warm": 1.0,
+    "highlight_neutral": 0.6
    },
    "debug_contrast_mode": 3
   }
