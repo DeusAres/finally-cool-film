@@ -99,8 +99,8 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
         // dark chart blues and the skin / greens stay put; Y 0.02 (no C) warms midtones and lights; narrower B / farther R sensors;
         // black 0.015 + a 6.2 against the milky blacks; setup_neutral_ev 1.5 + toe [R 0.9, B 1.0] take the cast out of the deep shadows.
         // v3.17: green_hue_shift 24 (greens towards yellow-olive, luminance kept; foliage chroma -0.08 so it does not grow),
-        // saturation_blue 0.7 (paler upper sky), AutoSetup k_col 0.3 (a lab corrects part of a tungsten cast; daylight frames barely move).
-        model: { saturation: 1.01, saturation_blue: 0.7, green_hue_shift: 24, saturation_green: -0.08, balance_cmy: [0, 0.005, 0.02], sensor_peak_nm: [650, 540, 450], sensor_fwhm_nm: [40, 50, 40],
+        // saturation_blue 0.85 (paler upper sky), Y 0.023 (a step of warmth in mids / shadows), AutoSetup k_col 0.3 (a lab corrects part of a tungsten cast; daylight frames barely move).
+        model: { saturation: 1.01, saturation_blue: 0.85, green_hue_shift: 24, saturation_green: -0.08, balance_cmy: [0, 0.005, 0.023], sensor_peak_nm: [650, 540, 450], sensor_fwhm_nm: [40, 50, 40],
                  black_point: 0.015, gradation_a: 6.2, setup_toe_slope: [0.9, 1.0], setup_neutral_ev: 1.5, auto: { k_col: 0.3 } },
       },
     },
@@ -781,7 +781,7 @@ const FORMAT = {
   texture: signPct, clarity: pctOff, dust: pctOff, black: pctOff,
 };
 // v2-calib: contrast / highlight / black defaults are the lab's standard (0); the old look defaults (Contrasto .35, Alte luci .6, Nero .15) are gone with their stages.
-const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, whites: 0, mshift: 0, yshift: 0, black: 0, grain: 1, halation: 1, texture: 0.2, clarity: 0.1, ca: 1, vignette: 0.12, falloff: 0.25, dust: 0.27 };
+const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, whites: 0, mshift: 0, yshift: 0, black: 0, grain: 1, halation: 1, texture: 0.2, clarity: 0.1, ca: 1, vignette: 0.12, falloff: 0.18, dust: 0.27 };
 const SCATTER_SCALE = 0.5;   // film scatter size multiplier (engine default 1), see renderParams
 const GRAIN_UNIT = 0.65;   // slider 1× -> engine amount (= old slider 0.25 / old default 0.4)
 const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render

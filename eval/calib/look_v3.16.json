@@ -23,7 +23,7 @@
     "balance_cmy": [
      0,
      0.005,
-     0.02
+     0.023
     ],
     "setup_lut": true,
     "setup_fit_ev": 4.5,
@@ -35,7 +35,7 @@
      "strength": 0.85,
      "highlight_margin": 0.1672
     },
-    "saturation_blue": 0.7,
+    "saturation_blue": 0.85,
     "setup_toe_slope": [
      0.9,
      1.0
