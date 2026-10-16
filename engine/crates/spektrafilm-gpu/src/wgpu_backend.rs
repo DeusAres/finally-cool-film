@@ -5573,13 +5573,15 @@ impl GamutState {
 /// optional post-blur pipeline state.
 ///
 /// CPU equivalent: `spektrafilm_model::grain::apply_grain_to_density`.
-/// Operates in place on `buf_a` (density_cmy). When `grain_blur > 0.4`,
+/// Operates in place on `buf_a` (density_cmy). When `grain_blur > 0.1`,
 /// follows up with a separable Gaussian blur that uses `buf_b` as mid
 /// (free at this point — DIR's `density_curve_0` already overwrote
-/// buf_b's role).
+/// buf_b's role). Hash grain blurs only its deviation (`grain_dev`),
+/// added back onto the clean density by the V pass.
 #[cfg(feature = "wgpu-backend")]
 struct GrainState {
     grain_dispatch: DispatchJob,
+    _grain_dev: wgpu::Buffer,
     blur: Option<BlurJob>,
     blur_pipe_h: CachedPipelineRef,
     blur_pipe_v: CachedPipelineRef,
@@ -5596,12 +5598,24 @@ fn build_grain_state(
     backend: &WgpuBackend,
 ) -> GrainState {
     let n_pixels = (width as usize) * (height as usize);
+    // Hash grain with a dye-cloud blur: the blur shapes the grain only. The
+    // shader writes the deviation (grainy - clean) to `grain_dev`, the H pass
+    // blurs it into buf_b and the V pass adds it onto the clean density in
+    // buf_a (CPU: filming.rs). Blurring the whole density softened the image.
+    let dev_only = gp.hash.is_some() && gp.grain_blur > 0.1;
+    let grain_dev = device.create_buffer_t(&wgpu::BufferDescriptor {
+        label: Some("grain_dev"),
+        size: if dev_only { (n_pixels * 3 * std::mem::size_of::<f32>()) as u64 } else { 16 },
+        usage: wgpu::BufferUsages::STORAGE,
+        mapped_at_creation: false,
+    });
 
     let grain_dispatch = if let Some(h) = gp.hash.as_ref() {
         let grain_pipe = backend.cached_pipeline(
             include_str!("../../spektrafilm-shaders/wgsl/grain_hash.wgsl"),
             &[
                 wgpu::BufferBindingType::Uniform,
+                wgpu::BufferBindingType::Storage { read_only: false },
                 wgpu::BufferBindingType::Storage { read_only: false },
             ],
         );
@@ -5622,7 +5636,8 @@ fn build_grain_state(
             uniformity: [f32; 4],
             micro_sigma: f32,
             amount: f32,
-            _pad: [f32; 2],
+            dev_only: f32,
+            _pad: f32,
         }
         let v4 = |a: [f32; 3]| [a[0], a[1], a[2], 0.0];
         let params = HashParams {
@@ -5640,7 +5655,8 @@ fn build_grain_state(
             uniformity: v4(gp.grain_uniformity),
             micro_sigma: h.micro_sigma,
             amount: h.amount,
-            _pad: [0.0; 2],
+            dev_only: if dev_only { 1.0 } else { 0.0 },
+            _pad: 0.0,
         };
         let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some("grain_hash_params"),
@@ -5653,6 +5669,7 @@ fn build_grain_state(
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: buf_a.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: grain_dev.as_entire_binding() },
             ],
         });
         DispatchJob { _params_buf: params_buf, pipeline: grain_pipe, bg }
@@ -5735,7 +5752,11 @@ fn build_grain_state(
         blur_layout,
     );
     let blur_pipe_v = backend.cached_pipeline(
-        include_str!("../../spektrafilm-shaders/wgsl/gaussian_blur_v.wgsl"),
+        if dev_only {
+            include_str!("../../spektrafilm-shaders/wgsl/gaussian_blur_v_add.wgsl")
+        } else {
+            include_str!("../../spektrafilm-shaders/wgsl/gaussian_blur_v.wgsl")
+        },
         blur_layout,
     );
     let blur = if gp.grain_blur > 0.1 {
@@ -5787,8 +5808,8 @@ fn build_grain_state(
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: buf_a.as_entire_binding(),
-                }, // src
+                    resource: if dev_only { grain_dev.as_entire_binding() } else { buf_a.as_entire_binding() },
+                }, // src: the grain deviation (hash), or the grainy density
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: kernel_buf.as_entire_binding(),
@@ -5833,6 +5854,7 @@ fn build_grain_state(
 
     GrainState {
         grain_dispatch,
+        _grain_dev: grain_dev,
         blur,
         blur_pipe_h,
         blur_pipe_v,

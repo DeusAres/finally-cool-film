@@ -6,7 +6,9 @@
 // global px = origin + local) draws a Poisson number of seeds and a binomial
 // developed count (exact inversion below mean 30, normal approximation
 // above), then a log-normal micro-structure on the deviation. The dye-cloud
-// blur is a separate gaussian pass.
+// blur is a separate gaussian pass on the grain only: with `dev_only` set the
+// density is left as is and the deviation goes to `grain_dev`, blurred and
+// added back (gaussian_blur_v_add.wgsl), so the image itself is not softened.
 
 struct Params {
     width: u32,
@@ -23,12 +25,13 @@ struct Params {
     uniformity: vec4<f32>,
     micro_sigma: f32,
     amount: f32,
-    pad0: f32,
+    dev_only: f32,                // 1: write grainy - clean to grain_dev, keep density_cmy
     pad1: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read_write> density_cmy: array<f32>;
+@group(0) @binding(2) var<storage, read_write> grain_dev: array<f32>;
 
 const EXACT_MAX_MEAN: f32 = 30.0;
 const MAX_STEPS: u32 = 120u;
@@ -191,6 +194,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let base = idx * 3u;
     let d = vec3<f32>(density_cmy[base], density_cmy[base + 1u], density_cmy[base + 2u]);
     let o = grain_density(d, params.origin_x + idx % params.width, params.origin_y + idx / params.width);
+    if params.dev_only > 0.5 {
+        grain_dev[base] = o.x - d.x;
+        grain_dev[base + 1u] = o.y - d.y;
+        grain_dev[base + 2u] = o.z - d.z;
+        return;
+    }
     density_cmy[base] = o.x;
     density_cmy[base + 1u] = o.y;
     density_cmy[base + 2u] = o.z;

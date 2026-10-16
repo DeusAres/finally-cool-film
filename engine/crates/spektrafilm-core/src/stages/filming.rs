@@ -471,10 +471,24 @@ pub fn develop(
     if grain.applies() && grain.is_hash() {
         let t = Instant::now();
         let (hg, blur_px) = hash_grain_setup(params, film, density_cmy.width, density_cmy.height);
-        density_cmy = spektrafilm_model::grain_hash::apply_grain_hash(&density_cmy, &hg);
-        if blur_px > 0.1 {
-            density_cmy = backend.gaussian_blur(&density_cmy, blur_px);
-        }
+        let grainy = spektrafilm_model::grain_hash::apply_grain_hash(&density_cmy, &hg);
+        // The dye-cloud blur shapes the grain only: blurring the whole density
+        // softened the image itself as soon as Grana was on (the film's image
+        // sharpness is the scatter stage's, before the curves).
+        density_cmy = if blur_px > 0.1 {
+            let mut dev = grainy;
+            for (g, &d) in dev.data.iter_mut().zip(density_cmy.data.iter()) {
+                *g -= d;
+            }
+            let dev = backend.gaussian_blur(&dev, blur_px);
+            let mut out = density_cmy;
+            for (o, &g) in out.data.iter_mut().zip(dev.data.iter()) {
+                *o += g;
+            }
+            out
+        } else {
+            grainy
+        };
         print_stage_timing(stage_timings, "filming_develop.grain_hash", t);
     } else if grain.active && !grain.is_hash() {
         let t = Instant::now();

@@ -17,6 +17,9 @@ negative DENSITY, before the Frontier scanner LUT. `web/lib/grain.js` grain is r
 - ONE formula in Rust (CPU) mirrored in WGSL (GPU), parity test like the frontier LUT test. Runs in the GPU
   resident chain on the density image right before the scanner LUT. Dye-cloud blur via the existing gaussian
   blur shaders. `active=false` or amount 0 = bit-identical to no grain.
+- v3.11: the dye-cloud blur acts on the grain deviation only (grainy - clean, blurred, added back): it used to
+  blur the whole density, softening the image as soon as Grana was on (sunlit wall texture -28 %, measured).
+  Uniform-patch grain stats unchanged (`sf-eval grain` identical); Grana 0 bit-identical.
 - Scanner sharpening: mild unsharp mask after the scan (Frontier), params in µm, default on (calibrated later).
 
 ## App
