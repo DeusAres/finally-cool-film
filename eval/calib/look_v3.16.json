@@ -1,0 +1,60 @@
+{
+ "scanner": {
+  "frontier": {
+   "model": {
+    "range_density": 1.5923,
+    "gradation_a": 6.2,
+    "mid_grey_out": 0.4683,
+    "shoulder_start": 0.6928,
+    "shoulder_sharpness": 1.7142,
+    "saturation": 1.01,
+    "black_point": 0.015,
+    "white_point": 0.9908,
+    "sensor_peak_nm": [
+     650,
+     540,
+     450
+    ],
+    "sensor_fwhm_nm": [
+     40,
+     50,
+     40
+    ],
+    "balance_cmy": [
+     0,
+     0.005,
+     0.02
+    ],
+    "setup_lut": true,
+    "setup_fit_ev": 4.5,
+    "setup_fit_steps": 19,
+    "auto": {
+     "k_col": 0.2,
+     "target_offset": 0.0109,
+     "k_den": 1.0,
+     "strength": 0.85,
+     "highlight_margin": 0.1672
+    },
+    "saturation_blue": 0.55,
+    "setup_toe_slope": [
+     0.9,
+     1.0
+    ],
+    "setup_neutral_ev": 1.5
+   },
+   "debug_contrast_mode": 3
+  }
+ },
+ "film_render": {
+  "dir_couplers": {
+   "amount": 0.7,
+   "inhibition_interlayer": 0.6,
+   "inhibition_samelayer": 0.6
+  },
+  "halation": {
+   "active": true,
+   "halation_amount": 1.0,
+   "scatter_spatial_scale": 0.5
+  }
+ }
+}

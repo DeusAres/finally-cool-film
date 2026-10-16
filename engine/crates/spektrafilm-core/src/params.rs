@@ -283,6 +283,9 @@ pub struct FrontierModelParams {
     pub black_lift_max: f64,
     /// Saturation about Rec.709 luminance (linear light) at `saturation = 1`.
     pub saturation: f64,
+    /// Extra saturation of the cyan-blue hues only (opponent-axis hue 190-270 deg, soft edges, see `blue_weight`):
+    /// chroma x (1 + saturation_blue * weight). 0 = off; skin, reds, yellows, greens untouched.
+    pub saturation_blue: f64,
     /// Film-type balance of this stock (Fuji "film master" setup): fixed C, M, Y
     /// offset in logD, same sign as `FrontierParams::cmy` (+ = more of that
     /// colour). Applied with the keys but outside AutoSetup, which keeps
@@ -312,6 +315,7 @@ impl Default for FrontierModelParams {
             white_point: 0.9908,
             black_lift_max: 0.25,
             saturation: 1.12,
+            saturation_blue: 0.0,
             balance_cmy: [0.0, 0.0, 0.02],
             auto: FrontierAutoParams::default(),
         }

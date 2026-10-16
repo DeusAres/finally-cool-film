@@ -15,7 +15,7 @@ const DODGE_R = 0.08, DODGE_EPS = 1.0, DODGE_KNEE = 1.0, DODGE_RHO = 0.8, DODGE_
  * below DODGE_MIN_LIT of lit pixels nothing is dodged; the shift never exceeds DODGE_MAX_EV. */
 const DODGE_LIT_EV = -12, DODGE_MIN_LIT = 0.1, DODGE_MAX_EV = 3;
 /** EV above the median the bright base may sit at, by contrast (tuned on the samples, eval/V3.md). */
-const head = (c) => (c >= 0 ? 2.6 - 1.2 * c : 2.6 - 1.5 * c);
+const head = (c) => (c >= 0 ? 3.0 - 1.2 * c : 2.6 - 1.5 * c);
 
 /** Box mean of radius r over a w×h array (summed-area table, edges clamped to the inside). */
 function boxMean(a, w, h, r) {

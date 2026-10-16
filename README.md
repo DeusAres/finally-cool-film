@@ -39,6 +39,12 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 - **Esporta**: piena risoluzione (max 12.5 MP) a tile 1024 px, una striscia alla volta passata in streaming a jpegli
   (worker, distance 1.0, 4:4:4, baseline sopra 6 MP perché il progressive tiene tutti i coefficienti DCT in heap),
   EXIF dell'originale preservati, download diretto.
+- **Look Gold 200 (v3.16)**: rivisto in 6 giri con un revisore "Kodak Gold 200" su 3 foto molto diverse (luce piena con pelle e cielo,
+  interno a luce calda, rocce scure ad alto contrasto): cieli azzurri (saturazione selettiva dei blu chiari nello scanner,
+  `saturation_blue`, solo sopra luminanza ~0.22, così pelle, verdi e i blu scuri della carta non si muovono), dodge del cielo meno
+  forte, mezzitoni e luci un po' più caldi, ombre profonde senza dominante blu, vignettatura 0.12 e falloff 0.25 di default, grana
+  con meno rumore di colore (accoppiamento tra layer 0.45 → 0.72, colore/luminanza ~2.1 → ~1.1 nei mezzitoni). Override in
+  `web/app.js` renderParams (`model`); per l'harness: `sf-eval chart --params eval/calib/look_v3.16.json` (carta 96.9).
 - **Qualità JPEG** (scheda File, v3.15): 10–100%, scala di jpegli; default 90% = l'export di prima (distance 1.0, identico al byte),
   100% = distance 0.1 (file ~3–4× più grandi). Doppio tap sull'etichetta = 90%. Vale anche per IG.
 - **IG** (solo foto verticali): export per Instagram a 1080 px di larghezza (3:4 → 1080 × 1440 senza bordo; ≈1080 × 1431 con il bordo bianco, attivo di default), senza ritaglio. L'intera pipeline gira a quella dimensione, così la grana nasce alla risoluzione finale: resa a

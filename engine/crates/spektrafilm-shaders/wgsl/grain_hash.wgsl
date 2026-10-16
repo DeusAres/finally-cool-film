@@ -126,7 +126,7 @@ fn binomial(n: f32, p: f32, q: f32, st: ptr<function, u32>) -> f32 {
 const FAST_OD_SHARE: f32 = 0.3;
 const FAST_K: f32 = 3.3;
 const FAST_COUNT_FRAC: f32 = 0.002;
-const LAYER_COUPLING: f32 = 0.45;
+const LAYER_COUPLING: f32 = 0.72;
 
 fn grain_density(d: vec3<f32>, gx: u32, gy: u32) -> vec3<f32> {
     var out = d;

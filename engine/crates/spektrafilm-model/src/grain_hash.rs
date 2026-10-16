@@ -37,7 +37,7 @@ pub const FAST_COUNT_FRAC: f32 = 0.002;
 /// Inter-layer light scatter / DIR coupling: fraction of each layer's grain
 /// deviation replaced by the mean deviation of all three layers (correlated
 /// density noise shared across the dye layers).
-pub const LAYER_COUPLING: f32 = 0.45;
+pub const LAYER_COUPLING: f32 = 0.72;
 
 #[derive(Debug, Clone, Copy)]
 pub struct HashGrain {
@@ -490,7 +490,7 @@ mod tests {
         for k in [
             "747796405u", "2891336453u", "277803737u", "0x68e31da4u", "0x9e3779b9u", "0x7f4a7c15u",
             "0x9e3779b1u", "0x85ebca6bu", "0x27d4eb2fu", "6.2831855", "EXACT_MAX_MEAN: f32 = 30.0",
-            "MAX_STEPS: u32 = 120u", "LAYER_COUPLING: f32 = 0.45", "FAST_OD_SHARE: f32 = 0.3", "FAST_K: f32 = 3.3", "FAST_COUNT_FRAC: f32 = 0.002", "1000u + layer", "layer + sl * 10u",
+            "MAX_STEPS: u32 = 120u", "LAYER_COUPLING: f32 = 0.72", "FAST_OD_SHARE: f32 = 0.3", "FAST_K: f32 = 3.3", "FAST_COUNT_FRAC: f32 = 0.002", "1000u + layer", "layer + sl * 10u",
         ] {
             assert!(src.contains(k), "WGSL missing {k}");
         }

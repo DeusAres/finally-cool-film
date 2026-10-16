@@ -20,6 +20,8 @@ negative DENSITY, before the Frontier scanner LUT. `web/lib/grain.js` grain is r
 - v3.11: the dye-cloud blur acts on the grain deviation only (grainy - clean, blurred, added back): it used to
   blur the whole density, softening the image as soon as Grana was on (sunlit wall texture -28 %, measured).
   Uniform-patch grain stats unchanged (`sf-eval grain` identical); Grana 0 bit-identical.
+- v3.16: inter-layer coupling LAYER_COUPLING 0.45 → 0.72 (Rust + WGSL): chroma/luma noise ~2.1 → ~1.1 at mid tones
+  (spec 0.6-1.0), luma std -3% compensated by GRAIN_UNIT 0.625 → 0.65; inter-channel correlation rises to ~0.8.
 - Scanner sharpening: mild unsharp mask after the scan (Frontier), params in µm, default on (calibrated later).
 
 ## App

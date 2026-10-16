@@ -364,6 +364,7 @@ impl FrontierBase {
                 (g.curve(0.52) - g.curve(0.48)) / 0.04
             },
             sat: (m.saturation * keys.saturation as f64).max(0.0),
+            sat_blue: m.saturation_blue,
             whites: (keys.whites as f64).clamp(-1.0, 1.0),
             whites_x0: Gradation::solve(m.gradation_a, sh, m).knee_x() - WHITES_REACH,
             out: IDENTITY,
@@ -574,6 +575,8 @@ pub struct Stage {
     curve: Gradation,
     lift: f64,
     sat: f64,
+    /// Extra chroma gain on cyan-blue hues (see `FrontierModelParams::saturation_blue`).
+    sat_blue: f64,
     /// Encoded slope of the gradation at mid grey (the film's mid-tone density -> level slope).
     mid_slope: f64,
     /// Linear sRGB (the model's working primaries) -> linear output primaries.
@@ -726,12 +729,41 @@ impl Stage {
         // about a gamma-encoded luma compressed bright saturated yellows.
         let lin = y.map(srgb_decode);
         let l = LUMA[0] * lin[0] + LUMA[1] * lin[1] + LUMA[2] * lin[2];
-        let lin = lin.map(|v| (l + self.sat * (v - l)).clamp(0.0, 1.0));
+        let sat = if self.sat_blue != 0.0 {
+            // cyan-blue hues, light ones only: the gain fades out below SAT_BLUE_L (linear luma), so dark blues (the chart's
+            // blue sky, deep shadows) keep their chroma while a bright sky gets the full boost
+            let t = ((l - SAT_BLUE_L.0) / (SAT_BLUE_L.1 - SAT_BLUE_L.0)).clamp(0.0, 1.0);
+            self.sat * (1.0 + self.sat_blue * blue_weight(&lin) * t * t * (3.0 - 2.0 * t))
+        } else {
+            self.sat
+        };
+        let lin = lin.map(|v| (l + sat * (v - l)).clamp(0.0, 1.0));
         // Working space = sRGB primaries, whatever the output: only this last matrix
         // (and the sRGB transfer) knows the output space.
         let o = |r: &[f64; 3]| (r[0] * lin[0] + r[1] * lin[1] + r[2] * lin[2]).clamp(0.0, 1.0);
         [srgb_encode(o(&self.out[0])), srgb_encode(o(&self.out[1])), srgb_encode(o(&self.out[2]))]
     }
+}
+
+/// Linear-luma ramp (from, to) of the `saturation_blue` gain.
+const SAT_BLUE_L: (f64, f64) = (0.22, 0.36);
+
+/// Weight (0..1) of the cyan-blue hue band, from the hue angle on the opponent axes of linear
+/// light (red 30, yellow 90, green 150, cyan 210, blue 270, magenta 330 deg): 1 from 215 to 250
+/// (cyan, sky), smooth ramps 190-215 and 250-270, 0 elsewhere (skin, reds, yellows, greens,
+/// magentas).
+fn blue_weight(lin: &[f64; 3]) -> f64 {
+    let o1 = (lin[0] - lin[1]) * std::f64::consts::FRAC_1_SQRT_2;
+    let o2 = (lin[0] + lin[1] - 2.0 * lin[2]) / 6f64.sqrt();
+    if o1 * o1 + o2 * o2 < 1e-12 {
+        return 0.0;
+    }
+    let h = o2.atan2(o1).to_degrees().rem_euclid(360.0);
+    let ss = |a: f64, b: f64, x: f64| {
+        let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    ss(190.0, 215.0, h) * (1.0 - ss(243.0, 258.0, h))
 }
 
 /// The baked scanner LUT: film density (cmy) -> sRGB-encoded positive.
