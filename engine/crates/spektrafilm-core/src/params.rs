@@ -290,10 +290,6 @@ pub struct FrontierModelParams {
     /// `green_weight`; yellows, skin, reds, cyan-blue untouched), luminance preserved. 0 = off. Gold-like
     /// foliage is yellow-olive where a neutral scan gives blue-green.
     pub green_hue_shift: f64,
-    /// Extra saturation of the green hues only (same band as `green_hue_shift`): chroma x (1 + saturation_green * weight). 0 = off.
-    pub saturation_green: f64,
-    /// Extra saturation of vivid red-orange only (chroma > ~0.3 on the opponent axes, see `red_weight`): skin untouched. 0 = off.
-    pub saturation_red: f64,
     /// Extra saturation of pale-to-mid warm tones (peach / amber / golden clouds of low sun; chroma < ~0.13 on the opponent axes, so skin and
     /// saturated oranges stay, see `warm_weight`). 0 = off.
     pub saturation_warm: f64,
@@ -335,8 +331,6 @@ impl Default for FrontierModelParams {
             saturation: 1.12,
             saturation_blue: 0.0,
             green_hue_shift: 0.0,
-            saturation_green: 0.0,
-            saturation_red: 0.0,
             saturation_warm: 0.0,
             cool_neutral_warm: 0.0,
             highlight_neutral: 0.0,

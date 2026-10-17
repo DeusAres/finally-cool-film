@@ -365,9 +365,7 @@ impl FrontierBase {
             },
             sat: (m.saturation * keys.saturation as f64).max(0.0),
             sat_blue: m.saturation_blue,
-            sat_green: m.saturation_green,
             green_shift: m.green_hue_shift,
-            sat_red: m.saturation_red,
             sat_warm: m.saturation_warm,
             cool_warm: m.cool_neutral_warm,
             hl_neutral: m.highlight_neutral,
@@ -583,12 +581,8 @@ pub struct Stage {
     sat: f64,
     /// Extra chroma gain on cyan-blue hues (see `FrontierModelParams::saturation_blue`).
     sat_blue: f64,
-    /// Extra chroma gain on green hues (see `FrontierModelParams::saturation_green`).
-    sat_green: f64,
     /// Hue rotation of the greens towards yellow, degrees (see `FrontierModelParams::green_hue_shift`).
     green_shift: f64,
-    /// Extra chroma gain on vivid red-orange (see `FrontierModelParams::saturation_red`).
-    sat_red: f64,
     /// Extra chroma gain on pale-to-mid warm tones (see `FrontierModelParams::saturation_warm`).
     sat_warm: f64,
     /// Share of the cold chroma removed from dark-to-mid low-chroma tones (see `FrontierModelParams::cool_neutral_warm`).
@@ -747,20 +741,13 @@ impl Stage {
         // about a gamma-encoded luma compressed bright saturated yellows.
         let mut lin = y.map(srgb_decode);
         let l = LUMA[0] * lin[0] + LUMA[1] * lin[1] + LUMA[2] * lin[2];
-        let gw = if self.green_shift != 0.0 || self.sat_green != 0.0 { green_weight(&lin) } else { 0.0 };
-        // greens that are dull (low chroma, low-to-mid luma: woods, shadows) take the full rotation; vivid or light foliage keeps only
-        // GREEN_VIVID_KEEP of it and takes the saturation_green gain instead
-        let (wv, wg) = if gw > 0.0 {
-            let c = opp_chroma(&lin);
-            // wg: the saturation_green gain fades out again for the very saturated greens (chroma 0.26-0.40: already full)
-            (1.0 - (1.0 - smooth(0.03, 0.08, c)) * (1.0 - smooth(0.12, 0.30, l)), 1.0 - smooth(0.26, 0.40, c))
-        } else {
-            (0.0, 0.0)
-        };
-        if self.green_shift != 0.0 && gw > 0.0 {
+        let gw = if self.green_shift != 0.0 { green_weight(&lin) } else { 0.0 };
+        if gw > 0.0 {
+            // greens that are dull (low chroma, low-to-mid luma: woods, shadows) take the full rotation; vivid or light foliage keeps only
+            // GREEN_VIVID_KEEP of it
+            let wv = 1.0 - (1.0 - smooth(0.03, 0.08, opp_chroma(&lin))) * (1.0 - smooth(0.12, 0.30, l));
             lin = rotate_hue(&lin, l, -self.green_shift * gw * (GREEN_VIVID_KEEP + (1.0 - GREEN_VIVID_KEEP) * (1.0 - wv)));
         }
-        let rw = if self.sat_red != 0.0 { red_weight(&lin) } else { 0.0 };
         let ww = if self.sat_warm != 0.0 { warm_weight(&lin, l) } else { 0.0 };
         if self.cool_warm != 0.0 {
             lin = cool_neutral(&lin, l, self.cool_warm);
@@ -775,7 +762,7 @@ impl Stage {
             self.sat * (1.0 + self.sat_blue * blue_weight(&lin) * t * t * (3.0 - 2.0 * t))
         } else {
             self.sat
-        } * (1.0 + self.sat_green * gw * wv * wg) * (1.0 + self.sat_red * rw) * (1.0 + self.sat_warm * ww);
+        } * (1.0 + self.sat_warm * ww);
         let lin = lin.map(|v| (l + sat * (v - l)).clamp(0.0, 1.0));
         // Working space = sRGB primaries, whatever the output: only this last matrix
         // (and the sRGB transfer) knows the output space.
@@ -818,22 +805,6 @@ fn opp_chroma(lin: &[f64; 3]) -> f64 {
     let o1 = (lin[0] - lin[1]) * std::f64::consts::FRAC_1_SQRT_2;
     let o2 = (lin[0] + lin[1] - 2.0 * lin[2]) / 6f64.sqrt();
     (o1 * o1 + o2 * o2).sqrt()
-}
-
-/// Weight (0..1) of vivid red-orange (a painted bridge, red cloth): opponent hue -10..65 deg (ramps -10..10 and 50..65), and chroma
-/// 0.28..0.42 up: skin / light brown (orange at lower chroma, 90 % of the skin below 0.26) is not touched.
-fn red_weight(lin: &[f64; 3]) -> f64 {
-    let o1 = (lin[0] - lin[1]) * std::f64::consts::FRAC_1_SQRT_2;
-    let o2 = (lin[0] + lin[1] - 2.0 * lin[2]) / 6f64.sqrt();
-    let c = (o1 * o1 + o2 * o2).sqrt();
-    if c < 1e-9 {
-        return 0.0;
-    }
-    let mut h = o2.atan2(o1).to_degrees().rem_euclid(360.0);
-    if h > 300.0 {
-        h -= 360.0;
-    }
-    smooth(-10.0, 10.0, h) * (1.0 - smooth(50.0, 65.0, h)) * smooth(0.28, 0.42, c)
 }
 
 /// Weight (0..1) of pale-to-mid yellow-orange / amber tones (golden cloud edges and sky of a low sun): opponent hue 58-68 up / 100-115 down
