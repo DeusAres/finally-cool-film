@@ -286,7 +286,7 @@ pub struct FrontierModelParams {
     /// Extra saturation of the cyan-blue hues only (opponent-axis hue 190-270 deg, soft edges, see `blue_weight`):
     /// chroma x (1 + saturation_blue * weight). 0 = off; skin, reds, yellows, greens untouched.
     pub saturation_blue: f64,
-    /// Rotation of the green hues towards yellow, degrees (opponent-axis hue ~100-190 deg, soft edges, see
+    /// Rotation of the green hues towards yellow, degrees (dull low-chroma / darker greens: full; vivid or light ones keep 15 %; opponent-axis hue ~100-190 deg, soft edges, see
     /// `green_weight`; yellows, skin, reds, cyan-blue untouched), luminance preserved. 0 = off. Gold-like
     /// foliage is yellow-olive where a neutral scan gives blue-green.
     pub green_hue_shift: f64,
