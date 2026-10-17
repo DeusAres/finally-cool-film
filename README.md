@@ -62,6 +62,10 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   del recupero luci), come bruciare in camera oscura: il negativo ha il dettaglio, quindi muri e cieli restano con texture e colore
   invece di diventare grigi piatti (muro al sole, Alte luci −0.6: texture 0.30 → 0.44, croma 10 → 17). In positivo restano sulla
   curva dello scanner, più delicata. A 0 l'immagine è identica al pixel.
+- **Ombre ciano / verde oliva con Interno (v3.21)**: in v3.16 il piede della pellicola era stato neutralizzato (ombre senza dominante,
+  per le rocce), e così gli interni avevano perso le ombre fredde tipiche di un Gold sottoesposto. Con Interno acceso il piede torna
+  quello della pellicola (R 1.5, B 0.85, zona neutralizzata 2 EV, mezzitoni caldi conservati): gatto, ombre profonde a*/b* +6.6/+6.3 →
+  −0.6/0.0. Con Interno spento l'immagine è identica al pixel a prima.
 - **Qualità JPEG** (scheda File, v3.15): 10–100%, scala di jpegli; default 90% = l'export di prima (distance 1.0, identico al byte),
   100% = distance 0.1 (file ~3–4× più grandi). Doppio tap sull'etichetta = 90%. Vale anche per IG.
 - **IG** (solo foto verticali): export per Instagram a 1080 px di larghezza (3:4 → 1080 × 1440 senza bordo; ≈1080 × 1431 con il bordo bianco, attivo di default), senza ritaglio. L'intera pipeline gira a quella dimensione, così la grana nasce alla risoluzione finale: resa a
