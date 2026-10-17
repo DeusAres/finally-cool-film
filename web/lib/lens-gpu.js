@@ -17,8 +17,11 @@ const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
 const CHROMA_R1 = 1.5, CHROMA_R2 = 3.0, CHROMA_K = 8.0;
 // Texture = micro-contrast: scale (µm), range k (per stop²), midtone width (stops), strength at ±1.
 const MICRO_UM = 60, MICRO_K = 0.4, MICRO_MID_STOPS = 2.5, MICRO_MAX = 0.8;
-// Chiarezza = glow: blur radius (µm), symmetric veil and one-sided bleed of light at 1.
-const GLOW_UM = 220, GLOW_VEIL = 0.25, GLOW_BLEED = 0.6;
+// Chiarezza (v3.26, bipolar, replaces the old Orton glow): local midtone contrast (Lightroom-like Clarity) at CLAR_UM, edge-aware
+// (range k per stop²: taps ~1 stop away barely count, no halos), strength at +1 / -1, cap (EV), midtone width (stops). In scene light
+// before the film, so the film's own curve rolls the result off. Below 0 it flattens the local tones towards their base (softer,
+// no veil, no blur of the edges).
+const CLAR_UM = 500, CLAR_K = 1.0, CLAR_UP = 1.0, CLAR_DOWN = 0.6, CLAR_CAP = 0.7, CLAR_MID_STOPS = 3.5;
 
 
 export const INPUT_WGSL = /* wgsl */`
@@ -28,8 +31,8 @@ struct P {
   dR: f32, dB: f32, blur: f32, depth: f32,
   scale: f32, expo: f32, regionW: f32, regionH: f32,   // lens gain; scene exposure gain (Esposizione, Interno, DNG baseline)
   m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, // frame primaries → engine input primaries, rows (xyz)
-  fx: vec4<f32>,                               // micro-contrast radius (px), Texture strength, Chiarezza glow, frame px per µm
-  wb: vec4<f32>,                               // per-channel gains in the engine input space (Interno: real light colour); 1 otherwise
+  fx: vec4<f32>,                               // micro-contrast radius (px), Texture strength, (unused), frame px per µm
+  wb: vec4<f32>,                               // per-channel gains in the engine input space (Interno: real light colour); 1 otherwise; w: Chiarezza contrast
   luma: vec4<f32>,                             // luma weights of the frame's primaries; w = 1: JPEG, apply the display→scene inverse
 };
 @group(0) @binding(0) var tex: texture_2d<f32>;
@@ -120,22 +123,24 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let mid = exp(-pow((l0 + 2.47) / ${wf(MICRO_MID_STOPS)}, 2.0));   // midtones (log2 0.18 = -2.47)
     c *= exp2(clamp((l0 - sl / sw) * p.fx.y * mid, -0.4, 0.4));
   }
-  // Chiarezza = dreamy glow (GLOW_UM, linear light, Orton-style): a wide blur
-  // whose light bleeds into darker neighbours (halo round bright shapes) plus a
-  // small symmetric veil; flat areas and detail inside them stay as they are.
-  if (p.fx.z > 0.0) {
-    let R = ${wf(GLOW_UM)} * p.fx.w;
+  // Chiarezza = local midtone contrast (CLAR_UM): log luminance pushed away from (> 0) or towards (< 0) an edge-aware local base,
+  // midtone-weighted, capped. > 0 only expands (slope >= 1 in the pixel's own level); < 0 keeps slope >= 1 - CLAR_DOWN > 0.
+  if (p.wb.w != 0.0) {
+    let l0 = log2(max(dot(c, p.luma.xyz), 1e-5));
+    let R = ${wf(CLAR_UM)} * p.fx.w;
     let o = max(0.35 * R, 0.5);
-    var acc = box4(pos, o); var wt = 1.0;
-    for (var t = 0; t < 24; t++) {
+    var sw = 1.0; var sl = l0;
+    for (var t = 0; t < 24; t++) {                // 3 rings × 8, staggered
       let ring = t / 8;
       let ang = f32(t) * 0.7853982 + f32(ring) * 0.2617994;
-      let wr = select(select(0.3, 0.6, ring == 1), 1.0, ring == 0);
-      acc += wr * box4(pos + vec2<f32>(cos(ang), sin(ang)) * (0.5 + 0.65 * f32(ring)) * R, o);
-      wt += wr;
+      let q = pos + vec2<f32>(cos(ang), sin(ang)) * (0.5 + 0.65 * f32(ring)) * R;
+      let lq = log2(max(dot(box4(q, o), p.luma.xyz), 1e-5));
+      let d = lq - l0;
+      let w = exp(-d * d * ${wf(CLAR_K)});
+      sw += w; sl += w * lq;
     }
-    let gl = acc / wt - c;
-    c += p.fx.z * (${wf(GLOW_VEIL)} * gl + ${wf(GLOW_BLEED)} * max(gl, vec3<f32>(0.0)));
+    let mid = exp(-pow((l0 + 2.47) / ${wf(CLAR_MID_STOPS)}, 2.0));
+    c *= exp2(clamp((l0 - sl / sw) * p.wb.w * mid, -${wf(CLAR_CAP)}, ${wf(CLAR_CAP)}));
   }
   // JPEG: display → scene (color.js), a common gain on max(R,G,B). A raw frame is scene-linear already.
   if (p.luma.w > 0.5) { c *= displayGain(max(c.r, max(c.g, c.b))); }
@@ -178,8 +183,8 @@ export function inputUniform(W, H, space, x0, y0, w, h, scale, lens, expo, clari
     geo.dR, geo.dB, geo.blur, geo.depth,
     scale, expo, w, h,
     ...M[0], 0, ...M[1], 0, ...M[2], 0,
-    MICRO_UM * kpx, texture * MICRO_MAX, clarity, kpx,
-    ...wb, 0,
+    MICRO_UM * kpx, texture * MICRO_MAX, 0, kpx,
+    ...wb, clarity * (clarity > 0 ? CLAR_UP : CLAR_DOWN),
     ...LUMA[space], space === 'rec2020' ? 0 : 1,
   ]);
   if (u.length !== UNIFORM_FLOATS) throw new Error('inputUniform: layout drift');

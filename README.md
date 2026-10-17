@@ -84,6 +84,10 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   halation, texture…); Qualità JPEG, interruttori e rotazione restano. **Ombre** va da −100 a +100: in negativo scurisce le zone
   d'ombra prima della pellicola, che scendono nel piede del Gold (il suo limite naturale) invece di tagliarsi al nero. **Nero** si
   chiama **Nostalgia** (è il nero sollevato, l'effetto sbiadito).
+- **Chiarezza (v3.26)**: rifatta. Prima era un glow "sognante" (sfocatura larga che colava la luce sui bordi), anche al default 10.
+  Ora è contrasto locale dei mezzitoni come in Lightroom, da −100 a +100, prima della pellicola, a ~0.5 mm del fotogramma, con
+  base attenta ai bordi (niente aloni sul profilo roccia / cielo). In negativo ammorbidisce i toni locali senza velo né sfocatura.
+  Default 0; il glow è tolto anche dal look di base (differenza al default: ΔE medio 0.2–0.45).
 - **Qualità JPEG** (scheda File, v3.15): 10–100%, scala di jpegli; default 90% = l'export di prima (distance 1.0, identico al byte),
   100% = distance 0.1 (file ~3–4× più grandi). Doppio tap sull'etichetta = 90%. Vale anche per IG.
 - **IG** (solo foto verticali): export per Instagram a 1080 px di larghezza (3:4 → 1080 × 1440 senza bordo; ≈1080 × 1431 con il bordo bianco, attivo di default), senza ritaglio. L'intera pipeline gira a quella dimensione, così la grana nasce alla risoluzione finale: resa a
