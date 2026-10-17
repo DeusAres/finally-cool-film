@@ -127,10 +127,21 @@ const FAST_OD_SHARE: f32 = 0.3;
 const FAST_K: f32 = 3.3;
 const FAST_COUNT_FRAC: f32 = 0.002;
 const LAYER_COUPLING: f32 = 0.72;
+// coupling rises to LAYER_COUPLING_HI between mean developed fraction COUPLING_P0 and COUPLING_P1
+// (lights: less coloured grain where the shoulder squeezes luma only); see grain_hash.rs
+const LAYER_COUPLING_HI: f32 = 0.9;
+const COUPLING_P0: f32 = 0.5;
+const COUPLING_P1: f32 = 0.6;
+// ... and also with the spread (max - min) of the three developed fractions between COUPLING_S0 and COUPLING_S1 (saturated colours)
+const COUPLING_S0: f32 = 0.12;
+const COUPLING_S1: f32 = 0.22;
 
 fn grain_density(d: vec3<f32>, gx: u32, gy: u32) -> vec3<f32> {
     var out = d;
     var devs = vec3<f32>(0.0);
+    var p_sum = 0.0;
+    var p_lo = 1.0;
+    var p_hi = 0.0;
     for (var ch = 0u; ch < 3u; ch++) {
         var layer = ch;
         if params.monochrome != 0u { layer = 0u; }
@@ -140,6 +151,9 @@ fn grain_density(d: vec3<f32>, gx: u32, gy: u32) -> vec3<f32> {
         let od_particle = dmax / npp;
         let d_in = d[ch] + dmin;
         let p = clamp(d_in / dmax, 1e-6, 1.0 - 1e-6);
+        p_sum += p;
+        p_lo = min(p_lo, p);
+        p_hi = max(p_hi, p);
         let q = clamp((dmax - d_in) / dmax, 1e-6, 1.0 - 1e-6);
         let sat = 1.0 - p * params.uniformity[ch] * (1.0 - 1e-6);
         let lambda = npp / sat;
@@ -181,8 +195,11 @@ fn grain_density(d: vec3<f32>, gx: u32, gy: u32) -> vec3<f32> {
         devs[ch] = dev;
     }
     let mean = (devs.x + devs.y + devs.z) * (1.0 / 3.0);
+    let tt = clamp((p_sum * (1.0 / 3.0) - COUPLING_P0) / (COUPLING_P1 - COUPLING_P0), 0.0, 1.0);
+    let uu = clamp((p_hi - p_lo - COUPLING_S0) / (COUPLING_S1 - COUPLING_S0), 0.0, 1.0);
+    let cpl = LAYER_COUPLING + (LAYER_COUPLING_HI - LAYER_COUPLING) * max(tt * tt * (3.0 - 2.0 * tt), uu * uu * (3.0 - 2.0 * uu));
     for (var ch = 0u; ch < 3u; ch++) {
-        out[ch] = d[ch] + params.amount * (devs[ch] + LAYER_COUPLING * (mean - devs[ch]));
+        out[ch] = d[ch] + params.amount * (devs[ch] + cpl * (mean - devs[ch]));
     }
     return out;
 }

@@ -79,18 +79,19 @@ function nearBright(base, w, h, knee) {
   return out;
 }
 
-/** { knee, A, rho } for a base, the Contrasto key and the Esposizione moved away from Auto (`evOff`, EV:
+/** { knee, A, rho, rp, bK } for a base, the Contrasto key and the Esposizione moved away from Auto (`evOff`, EV:
  * the sky rises with it, so the bright base must land that much lower). A = 0: nothing to dodge. */
 export function dodgeParams(d, contrast, evOff = 0) {
   const knee = d.M + DODGE_KNEE, rho = DODGE_RHO, e = Math.max(d.P - knee, 1e-6);
   const target = Math.min(d.P - (d.M + head(contrast) - evOff), 0.97 * rho * e, DODGE_MAX_EV);
-  if (d.none || !(target > 0)) return { knee, A: 0, rho };
+  const rp = d.none ? 0 : Math.max(0, Math.max(evOff, 0) + REC_PC * Math.max(contrast, 0) - REC_FREE), bK = d.M + REC_K;
+  if (d.none || !(target > 0)) return { knee, A: 0, rho, rp, bK };
   let lo = target, hi = 50 * target;   // A (1 - exp(-rho e / A)) = target, increasing in A
   for (let i = 0; i < 60; i++) {
     const mid = 0.5 * (lo + hi);
     if (mid * (1 - Math.exp(-rho * e / mid)) < target) lo = mid; else hi = mid;
   }
-  return { knee, A: hi, rho };
+  return { knee, A: hi, rho, rp, bK };
 }
 
 // Contrasto luci (local contrast inside the highlights): the tones of a bright area that sit below its own
@@ -107,17 +108,26 @@ export const hlcGain = (v) => (v > 0 ? HLC_UP * v : HLC_DOWN * v);
 // symmetrically a bright pixel may raise its base by at most DODGE_DELTA for the highlight dodge, so small
 // speculars on dark rock (reflections, sparkles) are not dodged.
 const SHADOW_KNEE = 1.5, SHADOW_MAX = 1.5, SHADOW_RHO = 0.8, DODGE_DELTA = 1.5, DODGE_NEAR = 3;
-const HDR = 12;
+
+// Recupero luci locale (v3.17): Esposizione above Auto and Contrasto push the bright areas up the scanner shoulder, where the film's log
+// slope falls (a sunlit plaster wall at +0.6 EV / contrast 0.15 lost ~65 % of its texture). Like Lightroom's Highlights, the push is
+// partly taken back from a FINE edge-aware base (REC_R of the long side, bilateral over three rings of taps, per frame so preview, tiles and
+// export agree), not from the pixel's own level, so the detail of the area survives the lowering; the tones below the base are also
+// opened a little (REC_DETAIL), the brightest ones never move. Only the push beyond REC_FREE EV (evOff + REC_PC contrast) counts, and
+// only in areas whose base lies near / above M + REC_K (the level a sunlit wall holds): at Esposizione = Auto and Contrasto <= 0.18
+// nothing happens (bit-identical to v3.16).
+const REC_K = 1.9, REC_RHO = 0.5, REC_FREE = 0.25, REC_PC = 1.4, REC_DETAIL = 1.0, REC_R = 0.012, REC_RANGE = 8.0;
+const HDR = 14;
 
 /** Header + base appended to the input pass's gain array (read by dodgeWGSL from `at0`):
- * [dodge on, base w, base h, knee, A, rho, highlight-contrast k, pivot, shadow S, shadow knee, shadow rho, delta]. */
+ * [dodge on, base w, base h, knee, A, rho, highlight-contrast k, pivot, shadow S, shadow knee, shadow rho, delta, recovery push, recovery knee]. */
 export function dodgeArray(gainLut, d, prm, hlc = 0, shadows = 0) {
   const at0 = gainLut.length, out = new Float32Array(at0 + HDR + (d ? 2 * d.w * d.h : 0));
   out.set(gainLut);
   if (d) {
     const S = d.none ? 0 : SHADOW_MAX * Math.max(0, shadows);
     out.set([prm.dodge && prm.A > 0 ? 1 : 0, d.w, d.h, prm.knee, prm.A, prm.rho, hlcGain(hlc), 0.5 * (prm.knee + d.P),
-      S, d.M + SHADOW_KNEE, SHADOW_RHO, DODGE_DELTA], at0);
+      S, d.M + SHADOW_KNEE, SHADOW_RHO, DODGE_DELTA, prm.dodge && prm.rp > 0 ? prm.rp : 0, prm.bK ?? 0], at0);
     out.set(d.base, at0 + HDR);
     out.set(d.near, at0 + HDR + d.w * d.h);
   }
@@ -135,7 +145,7 @@ fn dodgeBaseAt(pos: vec2<f32>, map: u32) -> f32 {
   let b = mix(${arr}[o + i1.y * W + i0.x], ${arr}[o + i1.y * W + i1.x], f.x);
   return mix(a, b, f.y);
 }
-fn dodge(c0: vec3<f32>, pos: vec2<f32>) -> vec3<f32> {
+fn dodge0(c0: vec3<f32>, pos: vec2<f32>) -> vec3<f32> {
   var c = c0;
   if (${arr}[${at0}u + 1u] < 0.5) { return c; }   // no base map
   let knee = ${arr}[${at0}u + 3u]; let A = ${arr}[${at0}u + 4u]; let rho = ${arr}[${at0}u + 5u];
@@ -155,6 +165,28 @@ fn dodge(c0: vec3<f32>, pos: vec2<f32>) -> vec3<f32> {
   let b = max(B, B + dodgeBaseAt(pos, 1u) * (min(L0, B + dl) - B));
   let e = max(b - knee, 0.0);
   return c * exp2(-A * (1.0 - exp(-rho * e / A)));
+}
+fn dodge(c0: vec3<f32>, pos: vec2<f32>) -> vec3<f32> {
+  let c = dodge0(c0, pos);
+  let rp = ${arr}[${at0}u + 12u];
+  if (rp <= 0.0) { return c; }               // recovery off: exactly the code above
+  let L0 = log2(max(dot(c0, p.luma.xyz), 1e-6));
+  let R = ${REC_R} * max(p.frame.x, p.frame.y);
+  var sw = 1.0; var sl = L0;
+  for (var t = 0; t < 24; t++) {             // bilateral base: 3 rings x 8, range weight on log2 luma
+    let ring = t / 8;
+    let ang = f32(t) * 0.7853982 + f32(ring) * 0.2617994;
+    let rr = select(select(0.35, 0.7, ring == 1), 1.0, ring == 2) * R;
+    var q = at(pos + vec2<f32>(cos(ang), sin(ang)) * rr).rgb;
+    if (p.luma.w > 0.5) { q *= displayGain(max(q.r, max(q.g, q.b))); }
+    let d = log2(max(dot(q, p.luma.xyz), 1e-6)) - L0;
+    let w = exp(-d * d * ${REC_RANGE});
+    sw += w; sl += w * (L0 + d);
+  }
+  let B = sl / sw;
+  let sd = L0 - log2(max(dot(c, p.luma.xyz), 1e-6));   // EV the dodge above already took off here
+  let wg = smoothstep(${arr}[${at0}u + 13u] - rp, ${arr}[${at0}u + 13u], B - sd);
+  return c * exp2(-${REC_RHO} * rp * wg + ${REC_DETAIL} * clamp(L0 - B, -1.0, 0.0) * wg);
 }`;
 
 /** CPU fallback (no WebGPU): dodgeWGSL on a linear RGB region `rgb` (w×h×3, already × `expo`) at
@@ -165,7 +197,21 @@ export function dodgeCPU(rgb, w, h, x0, y0, fw, fh, expo, arr, at0, luma) {
   const knee = arr[at0 + 3], A = arr[at0 + 4], rho = arr[at0 + 5], hk = arr[at0 + 6];
   const pv = Math.max(arr[at0 + 7], knee + 0.25), o = at0 + HDR, le = Math.log2(expo);
   const S = arr[at0 + 8], sk = arr[at0 + 9], srho = arr[at0 + 10], dl = arr[at0 + 11];
-  if (on < 0.5 && hk === 0 && S === 0) return;
+  const rp = arr[at0 + 12], bK = arr[at0 + 13];
+  if (on < 0.5 && hk === 0 && S === 0 && !(rp > 0)) return;
+  // Recovery base: needs the neighbours' own levels, so the region's log2 luma is taken before anything moves (taps outside the region
+  // clamp to its edge: exact for a whole frame, a small seam difference between export tiles on this no-WebGPU path).
+  let Lm = null, taps = null;
+  if (rp > 0) {
+    Lm = new Float32Array(w * h);
+    for (let i = 0, j = 0; i < w * h; i++, j += 3) Lm[i] = Math.log2(Math.max(1e-6, luma[0] * rgb[j] + luma[1] * rgb[j + 1] + luma[2] * rgb[j + 2])) - le;
+    const R = REC_R * Math.max(fw, fh);
+    taps = [];
+    for (let t = 0; t < 24; t++) {
+      const ring = Math.floor(t / 8), ang = t * 0.7853982 + ring * 0.2617994, rr = [0.35, 0.7, 1.0][ring] * R;
+      taps.push([Math.cos(ang) * rr, Math.sin(ang) * rr]);
+    }
+  }
   const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
   for (let y = 0, j = 0; y < h; y++) {
     const qy = Math.min(bh - 1, Math.max(0, (y0 + y + 0.5) / fh * bh - 0.5)), iy = Math.floor(qy), iy1 = Math.min(iy + 1, bh - 1), fy = qy - iy;
@@ -181,6 +227,16 @@ export function dodgeCPU(rgb, w, h, x0, y0, fw, fh, expo, arr, at0, luma) {
       if (hk !== 0) g += hk * Math.min(0, Math.max(-2, L - B)) * sstep(knee, pv, L) * sstep(knee, pv, B);
       if (S > 0) { const es = Math.max(sk - Math.min(B, Math.max(L, B - dl)), 0); g += S * (1 - Math.exp(-srho * es / S)); }
       if (on >= 0.5) { const e = Math.max(Math.max(B, B + near * (Math.min(L, B + dl) - B)) - knee, 0); g -= A * (1 - Math.exp(-rho * e / A)); }
+      if (rp > 0) {
+        const L0 = Lm[y * w + x]; let sw = 1, sl = L0;
+        for (const [tx, ty] of taps) {
+          const qx = Math.min(w - 1, Math.max(0, Math.round(x + tx))), qy2 = Math.min(h - 1, Math.max(0, Math.round(y + ty)));
+          const d = Lm[qy2 * w + qx] - L0, wt = Math.exp(-d * d * REC_RANGE);
+          sw += wt; sl += wt * (L0 + d);
+        }
+        const B = sl / sw, wg = sstep(bK - rp, bK, B + g);   // g = the dodge's own change (EV) so far
+        g += -REC_RHO * rp * wg + REC_DETAIL * Math.min(0, Math.max(-1, L0 - B)) * wg;
+      }
       if (g !== 0) { const k = 2 ** g; rgb[j] *= k; rgb[j + 1] *= k; rgb[j + 2] *= k; }
     }
   }

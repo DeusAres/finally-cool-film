@@ -286,6 +286,20 @@ pub struct FrontierModelParams {
     /// Extra saturation of the cyan-blue hues only (opponent-axis hue 190-270 deg, soft edges, see `blue_weight`):
     /// chroma x (1 + saturation_blue * weight). 0 = off; skin, reds, yellows, greens untouched.
     pub saturation_blue: f64,
+    /// Rotation of the green hues towards yellow, degrees (dull low-chroma / darker greens: full; vivid or light ones keep 15 %; opponent-axis hue ~100-190 deg, soft edges, see
+    /// `green_weight`; yellows, skin, reds, cyan-blue untouched), luminance preserved. 0 = off. Gold-like
+    /// foliage is yellow-olive where a neutral scan gives blue-green.
+    pub green_hue_shift: f64,
+    /// Extra saturation of pale-to-mid warm tones (peach / amber / golden clouds of low sun; chroma < ~0.13 on the opponent axes, so skin and
+    /// saturated oranges stay, see `warm_weight`). 0 = off.
+    pub saturation_warm: f64,
+    /// Share (0..1) of the cold chroma (opponent hue ~150-260 deg, away from neutral-warm) removed from low-chroma, dark-to-mid
+    /// tones (see `cool_neutral`): warms grey-blue-green casts of shadows / mid-tones without touching saturated blues, skin,
+    /// light skies or the neutral greys. Luminance kept. 0 = off.
+    pub cool_neutral_warm: f64,
+    /// Share (0..1) of the chroma removed from pale, light, yellow-orange tones (see `pale_light_neutral`): whites that
+    /// come out cream. Luminance kept; mids, saturated yellows, skin untouched. 0 = off.
+    pub highlight_neutral: f64,
     /// Film-type balance of this stock (Fuji "film master" setup): fixed C, M, Y
     /// offset in logD, same sign as `FrontierParams::cmy` (+ = more of that
     /// colour). Applied with the keys but outside AutoSetup, which keeps
@@ -316,6 +330,10 @@ impl Default for FrontierModelParams {
             black_lift_max: 0.25,
             saturation: 1.12,
             saturation_blue: 0.0,
+            green_hue_shift: 0.0,
+            saturation_warm: 0.0,
+            cool_neutral_warm: 0.0,
+            highlight_neutral: 0.0,
             balance_cmy: [0.0, 0.0, 0.02],
             auto: FrontierAutoParams::default(),
         }
