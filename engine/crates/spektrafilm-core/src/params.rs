@@ -294,6 +294,9 @@ pub struct FrontierModelParams {
     pub saturation_green: f64,
     /// Extra saturation of vivid red-orange only (chroma > ~0.3 on the opponent axes, see `red_weight`): skin untouched. 0 = off.
     pub saturation_red: f64,
+    /// Extra saturation of pale-to-mid warm tones (peach / amber / golden clouds of low sun; chroma < ~0.13 on the opponent axes, so skin and
+    /// saturated oranges stay, see `warm_weight`). 0 = off.
+    pub saturation_warm: f64,
     /// Share (0..1) of the cold chroma (opponent hue ~150-260 deg, away from neutral-warm) removed from low-chroma, dark-to-mid
     /// tones (see `cool_neutral`): warms grey-blue-green casts of shadows / mid-tones without touching saturated blues, skin,
     /// light skies or the neutral greys. Luminance kept. 0 = off.
@@ -334,6 +337,7 @@ impl Default for FrontierModelParams {
             green_hue_shift: 0.0,
             saturation_green: 0.0,
             saturation_red: 0.0,
+            saturation_warm: 0.0,
             cool_neutral_warm: 0.0,
             highlight_neutral: 0.0,
             balance_cmy: [0.0, 0.0, 0.02],
