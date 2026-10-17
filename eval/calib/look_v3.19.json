@@ -44,7 +44,8 @@
     "green_hue_shift": 24,
     "cool_neutral_warm": 1.0,
     "highlight_neutral": 0.6,
-    "saturation_warm": 0.3
+    "saturation_warm": 0.2,
+    "warm_hue_shift": 6
    },
    "debug_contrast_mode": 3
   }

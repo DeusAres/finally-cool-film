@@ -367,6 +367,7 @@ impl FrontierBase {
             sat_blue: m.saturation_blue,
             green_shift: m.green_hue_shift,
             sat_warm: m.saturation_warm,
+            warm_shift: m.warm_hue_shift,
             cool_warm: m.cool_neutral_warm,
             hl_neutral: m.highlight_neutral,
             whites: (keys.whites as f64).clamp(-1.0, 1.0),
@@ -583,8 +584,10 @@ pub struct Stage {
     sat_blue: f64,
     /// Hue rotation of the greens towards yellow, degrees (see `FrontierModelParams::green_hue_shift`).
     green_shift: f64,
-    /// Extra chroma gain on pale-to-mid warm tones (see `FrontierModelParams::saturation_warm`).
+    /// Extra chroma gain on the yellow-orange band (see `FrontierModelParams::saturation_warm`).
     sat_warm: f64,
+    /// Hue rotation of the yellow-orange band towards red, degrees (see `FrontierModelParams::warm_hue_shift`).
+    warm_shift: f64,
     /// Share of the cold chroma removed from dark-to-mid low-chroma tones (see `FrontierModelParams::cool_neutral_warm`).
     cool_warm: f64,
     /// Share of the warm chroma removed from pale light tones (see `FrontierModelParams::highlight_neutral`).
@@ -748,7 +751,10 @@ impl Stage {
             let wv = 1.0 - (1.0 - smooth(0.03, 0.08, opp_chroma(&lin))) * (1.0 - smooth(0.12, 0.30, l));
             lin = rotate_hue(&lin, l, -self.green_shift * gw * (GREEN_VIVID_KEEP + (1.0 - GREEN_VIVID_KEEP) * (1.0 - wv)));
         }
-        let ww = if self.sat_warm != 0.0 { warm_weight(&lin, l) } else { 0.0 };
+        let ww = if self.sat_warm != 0.0 || self.warm_shift != 0.0 { warm_weight(&lin, l) } else { 0.0 };
+        if ww > 0.0 && self.warm_shift != 0.0 {
+            lin = rotate_hue(&lin, l, -self.warm_shift * ww);
+        }
         if self.cool_warm != 0.0 {
             lin = cool_neutral(&lin, l, self.cool_warm);
         }
@@ -807,18 +813,18 @@ fn opp_chroma(lin: &[f64; 3]) -> f64 {
     (o1 * o1 + o2 * o2).sqrt()
 }
 
-/// Weight (0..1) of pale-to-mid yellow-orange / amber tones (golden cloud edges and sky of a low sun): opponent hue 58-68 up / 100-115 down
-/// (skin and warm interiors sit at 40-55, saturated reds below), chroma 0.02-0.04 up / 0.22-0.34 down, linear luma 0.08-0.18 up /
-/// 0.50-0.68 down (not the shadows, not the near-white lights that `highlight_neutral` cleans).
+/// Weight (0..1) of the yellow-orange band (golden / orange clouds of a low sun, amber): opponent hue 44-52 up / 80-100 down
+/// (skin ~42-45 and pure orange / red below stay), relative chroma (opponent chroma / linear luma) 0.15-0.35 up (greys, cream
+/// whites and dull warm interiors stay).
 fn warm_weight(lin: &[f64; 3], l: f64) -> f64 {
     let o1 = (lin[0] - lin[1]) * std::f64::consts::FRAC_1_SQRT_2;
     let o2 = (lin[0] + lin[1] - 2.0 * lin[2]) / 6f64.sqrt();
     let c = (o1 * o1 + o2 * o2).sqrt();
-    if c < 1e-9 {
+    if c < 1e-9 || l < 1e-6 {
         return 0.0;
     }
     let h = o2.atan2(o1).to_degrees().rem_euclid(360.0);
-    smooth(58.0, 68.0, h) * (1.0 - smooth(100.0, 115.0, h)) * smooth(0.02, 0.04, c) * (1.0 - smooth(0.22, 0.34, c)) * smooth(0.08, 0.18, l) * (1.0 - smooth(0.50, 0.68, l))
+    smooth(44.0, 52.0, h) * (1.0 - smooth(80.0, 100.0, h)) * smooth(0.15, 0.35, c / l)
 }
 
 /// Weight (0..1) of the green hue band (same opponent-axis hue angle as `blue_weight`: yellow 90,

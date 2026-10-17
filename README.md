@@ -44,7 +44,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   `saturation_blue`, solo sopra luminanza ~0.22, così pelle, verdi e i blu scuri della carta non si muovono), dodge del cielo meno
   forte, mezzitoni e luci un po' più caldi, ombre profonde senza dominante blu, vignettatura 0.12 e falloff 0.25 di default, grana
   con meno rumore di colore (accoppiamento tra layer 0.45 → 0.72, colore/luminanza ~2.1 → ~1.1 nei mezzitoni). Override in
-  `web/app.js` renderParams (`model`); per l'harness: `sf-eval chart --params eval/calib/look_v3.17.json` (carta 96.9).
+  `web/app.js` renderParams (`model`); per l'harness: `sf-eval chart --params eval/calib/look_v3.19.json`.
 - **Look Gold 200 (v3.17)**: altri 8 giri con il revisore su 10 foto (incluse foto mai viste per verificare che il look
   generalizzi) e un consolidamento per ablazione (tolte le leve senza effetto misurabile). Nello scanner (LUT, costo zero):
   `saturation_blue` esteso ai cieli profondi, `green_hue_shift` solo sui verdi spenti, `saturation_warm` (ambra/pesca, pelle esclusa),
@@ -52,8 +52,12 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   **Recupero luci locale** (dodge.js): quando Esposizione / Contrasto spingono le zone chiare verso il bianco, parte della spinta
   viene ripresa dalla loro base locale, come le Luci di Lightroom: texture dell'intonaco al sole 0.29 → 0.67 a Esposizione +0.6 /
   Contrasto +15. Vignettatura / falloff di partenza 0.12 / 0.18 (in v3.16 l'HTML partiva ancora da 0.65 / 0.4). Grana più
-  monocromatica dove i tre strati divergono (cieli). Harness: `sf-eval chart --params eval/calib/look_v3.17.json` (carta 95.5).
-  Limiti noti in `BUGS.md` (tramonti: arancio verso il giallo, preesistente).
+  monocromatica dove i tre strati divergono (cieli). Limiti noti in `BUGS.md`.
+- **Tramonti / giallo-arancio (v3.19)**: pellicola + scanner rendevano i giallo-arancio ~5° più gialli della scena e del target
+  Gold (nuvole al tramonto gialle invece che arancio). La banda calda dello scanner ora si sceglie per tinta (giallo-arancio,
+  pelle e rossi esclusi, non i quasi-neutri): `warm_hue_shift` 6° verso il rosso + `saturation_warm` 0.2. Nuvola al tramonto
+  tinta 71°/80° → 65°/74° (camera 63°/67°); interni caldi anche loro più vicini alla camera. Harness:
+  `sf-eval chart --params eval/calib/look_v3.19.json` (carta 95.5 → 96.4).
 - **Qualità JPEG** (scheda File, v3.15): 10–100%, scala di jpegli; default 90% = l'export di prima (distance 1.0, identico al byte),
   100% = distance 0.1 (file ~3–4× più grandi). Doppio tap sull'etichetta = 90%. Vale anche per IG.
 - **IG** (solo foto verticali): export per Instagram a 1080 px di larghezza (3:4 → 1080 × 1440 senza bordo; ≈1080 × 1431 con il bordo bianco, attivo di default), senza ritaglio. L'intera pipeline gira a quella dimensione, così la grana nasce alla risoluzione finale: resa a
