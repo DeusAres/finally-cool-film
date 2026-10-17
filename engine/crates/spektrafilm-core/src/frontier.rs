@@ -752,7 +752,7 @@ impl Stage {
         // GREEN_VIVID_KEEP of it and takes the saturation_green gain instead
         let wv = if gw > 0.0 {
             let c = opp_chroma(&lin);
-            1.0 - (1.0 - smooth(0.06, 0.16, c)) * (1.0 - smooth(0.12, 0.30, l))
+            1.0 - (1.0 - smooth(0.03, 0.08, c)) * (1.0 - smooth(0.12, 0.30, l))
         } else {
             0.0
         };
@@ -835,7 +835,7 @@ fn red_weight(lin: &[f64; 3]) -> f64 {
     smooth(-10.0, 10.0, h) * (1.0 - smooth(50.0, 65.0, h)) * smooth(0.28, 0.42, c)
 }
 
-/// Weight (0..1) of pale-to-mid yellow-orange / amber tones (golden cloud edges and sky of a low sun): opponent hue 56-66 up / 100-115 down
+/// Weight (0..1) of pale-to-mid yellow-orange / amber tones (golden cloud edges and sky of a low sun): opponent hue 58-68 up / 100-115 down
 /// (skin and warm interiors sit at 40-55, saturated reds below), chroma 0.02-0.04 up / 0.22-0.34 down, linear luma 0.08-0.18 up /
 /// 0.50-0.68 down (not the shadows, not the near-white lights that `highlight_neutral` cleans).
 fn warm_weight(lin: &[f64; 3], l: f64) -> f64 {
@@ -846,7 +846,7 @@ fn warm_weight(lin: &[f64; 3], l: f64) -> f64 {
         return 0.0;
     }
     let h = o2.atan2(o1).to_degrees().rem_euclid(360.0);
-    smooth(56.0, 66.0, h) * (1.0 - smooth(100.0, 115.0, h)) * smooth(0.02, 0.04, c) * (1.0 - smooth(0.22, 0.34, c)) * smooth(0.08, 0.18, l) * (1.0 - smooth(0.50, 0.68, l))
+    smooth(58.0, 68.0, h) * (1.0 - smooth(100.0, 115.0, h)) * smooth(0.02, 0.04, c) * (1.0 - smooth(0.22, 0.34, c)) * smooth(0.08, 0.18, l) * (1.0 - smooth(0.50, 0.68, l))
 }
 
 /// Weight (0..1) of the green hue band (same opponent-axis hue angle as `blue_weight`: yellow 90,
@@ -903,7 +903,7 @@ fn cool_neutral(lin: &[f64; 3], l: f64, k: f64) -> [f64; 3] {
 
 /// Pale, light, warm-hued tones (whites that come out cream / yellow: sunlit rails, walls, clouds) lose the share
 /// `k * weight` of their chroma, luminance kept. Weights: linear luma ramps up 0.38-0.62 (L* ~68-82: mids stay as they are),
-/// chroma 1 below 0.20 and 0 above 0.32 (saturated yellows, skin, oranges untouched), opponent hue 55-70 up / 105-125 down
+/// chroma 1 below 0.20 and 0 above 0.32 (saturated yellows, skin, oranges untouched), opponent hue 62-74 up / 105-125 down
 /// (yellow-orange band only).
 fn pale_light_neutral(lin: &[f64; 3], l: f64, k: f64) -> [f64; 3] {
     let o1 = (lin[0] - lin[1]) * std::f64::consts::FRAC_1_SQRT_2;
@@ -917,7 +917,7 @@ fn pale_light_neutral(lin: &[f64; 3], l: f64, k: f64) -> [f64; 3] {
         t * t * (3.0 - 2.0 * t)
     };
     let h = o2.atan2(o1).to_degrees().rem_euclid(360.0);
-    let w = ss(0.38, 0.62, l) * (1.0 - ss(0.20, 0.32, c)) * ss(55.0, 70.0, h) * (1.0 - ss(105.0, 125.0, h));
+    let w = ss(0.38, 0.62, l) * (1.0 - ss(0.20, 0.32, c)) * ss(62.0, 74.0, h) * (1.0 - ss(105.0, 125.0, h));
     if w <= 0.0 {
         return *lin;
     }
