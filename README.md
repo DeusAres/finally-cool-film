@@ -58,6 +58,10 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   pelle e rossi esclusi, non i quasi-neutri): `warm_hue_shift` 6° verso il rosso + `saturation_warm` 0.2. Nuvola al tramonto
   tinta 71°/80° → 65°/74° (camera 63°/67°); interni caldi anche loro più vicini alla camera. Harness:
   `sf-eval chart --params eval/calib/look_v3.19.json` (carta 95.5 → 96.4).
+- **Alte luci / Bianchi in negativo (v3.20)**: abbassarli ora scurisce le zone chiare *prima della pellicola* (locale, dalla stessa base
+  del recupero luci), come bruciare in camera oscura: il negativo ha il dettaglio, quindi muri e cieli restano con texture e colore
+  invece di diventare grigi piatti (muro al sole, Alte luci −0.6: texture 0.30 → 0.44, croma 10 → 17). In positivo restano sulla
+  curva dello scanner, più delicata. A 0 l'immagine è identica al pixel.
 - **Qualità JPEG** (scheda File, v3.15): 10–100%, scala di jpegli; default 90% = l'export di prima (distance 1.0, identico al byte),
   100% = distance 0.1 (file ~3–4× più grandi). Doppio tap sull'etichetta = 90%. Vale anche per IG.
 - **IG** (solo foto verticali): export per Instagram a 1080 px di larghezza (3:4 → 1080 × 1440 senza bordo; ≈1080 × 1431 con il bordo bianco, attivo di default), senza ritaglio. L'intera pipeline gira a quella dimensione, così la grana nasce alla risoluzione finale: resa a

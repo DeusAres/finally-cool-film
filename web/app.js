@@ -93,7 +93,9 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     scanner: {
       model: 'frontier', black_correction: false, white_correction: false, unsharp_mask: [0, 0],
       frontier: {
-        cmy: frontierCmy(u), contrast: u.contrast, highlight: u.highlight, whites: u.whites, black_lift: u.black,
+        // v3.20: Alte luci / Bianchi below 0 darken the scene before the film (dodge.js, local, the negative keeps the detail); above 0 they
+        // stay on the scanner curve (gentler than pushing the scene into the shoulder). v2 page: scanner only.
+        cmy: frontierCmy(u), contrast: u.contrast, highlight: V3 ? Math.max(u.highlight, 0) : u.highlight, whites: V3 ? Math.max(u.whites, 0) : u.whites, black_lift: u.black,
         auto: photo.auto, ...(V3 ? { debug_contrast_mode: 3 } : {}),
         // v3.16 Gold 200 look (tuned on 3 samples with a Gold 200 reviewer; chart 96.9): saturation_blue lifts cyan / sky hues (215-243 deg in the LUT) only where light (linear luma 0.22-0.36), so the
         // dark chart blues and the skin / greens stay put; Y 0.02 (no C) warms midtones and lights; narrower B / farther R sensors;
@@ -187,7 +189,7 @@ function v3Gain(u, space) {
     photo.dodge = dodgeBase(rgb, w, h, LUMA[space === 'p3' ? 'rec2020' : space]);   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
     log(`v3 dodge base ${w}x${h} median ${photo.dodge.M.toFixed(2)} p99 ${photo.dodge.P.toFixed(2)}`);
   }
-  return dodgeArray(DISPLAY_GAIN_LUT, photo.dodge, { ...dodgeParams(photo.dodge, u.contrast, u.ev - (photo.autoEv ?? u.ev)), dodge: u.v3dodge }, u.hlc, u.shadows);
+  return dodgeArray(DISPLAY_GAIN_LUT, photo.dodge, { ...dodgeParams(photo.dodge, u.contrast, u.ev - (photo.autoEv ?? u.ev)), dodge: u.v3dodge }, u.hlc, u.shadows, Math.min(u.highlight, 0), Math.min(u.whites, 0));
 }
 const q8 = (v) => Math.round(255 * Math.min(1, Math.max(0, v)));
 
