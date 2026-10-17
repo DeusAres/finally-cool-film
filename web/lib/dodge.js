@@ -117,7 +117,11 @@ const SHADOW_KNEE = 1.5, SHADOW_MAX = 1.5, SHADOW_RHO = 0.8, DODGE_DELTA = 1.5, 
 // opened a little (REC_DETAIL), the brightest ones never move. Only the push beyond REC_FREE EV (evOff + REC_PC contrast) counts, and
 // only in areas whose base lies near / above M + REC_K (the level a sunlit wall holds): at Esposizione = Auto and Contrasto <= 0.18
 // nothing happens (bit-identical to v3.16).
-const REC_K = 1.9, REC_RHO = 0.5, REC_FREE = 0.25, REC_PC = 1.4, REC_DETAIL = 1.0, REC_R = 0.012, REC_RANGE = 8.0;
+// v3.24: the ramp of the push ends REC_TOP (rp + 1) above bK (was at bK) and REC_RHO 0.5 -> 0.6: the fine base follows the shading of
+// textured bright areas (bedspread folds, fur), so the push acted as a per-pixel curve of slope up to 0.75 and posterised them at high
+// Contrasto (created edges 0.41 -> 0.05 on the cat at Esposizione +0.5 / Contrasto +83); slope now <= ~0.4.
+const REC_TOP = 0.5;
+const REC_K = 1.9, REC_RHO = 0.6, REC_FREE = 0.25, REC_PC = 1.4, REC_DETAIL = 1.0, REC_R = 0.012, REC_RANGE = 8.0;
 
 // Alte luci / Bianchi (v3.20): local exposure of the bright areas BEFORE the film, from the same fine edge-aware base as the recovery,
 // like burning / dodging at the enlarger: the negative holds the detail, so a darker sky or wall keeps its texture instead of
@@ -198,7 +202,7 @@ fn dodge(c0: vec3<f32>, pos: vec2<f32>) -> vec3<f32> {
   var g = 0.0;
   if (rp > 0.0) {
     let sd = L0 - log2(max(dot(c, p.luma.xyz), 1e-6));   // EV the dodge above already took off here
-    let wg = smoothstep(${arr}[${at0}u + 13u] - rp, ${arr}[${at0}u + 13u], B - sd);
+    let wg = smoothstep(${arr}[${at0}u + 13u] - rp, ${arr}[${at0}u + 13u] + ${REC_TOP} * rp + ${REC_TOP}, B - sd);
     g = -${REC_RHO} * rp * wg + ${REC_DETAIL} * clamp(L0 - B, -1.0, 0.0) * wg;
   }
   let M = ${arr}[${at0}u + 16u];
@@ -254,7 +258,7 @@ export function dodgeCPU(rgb, w, h, x0, y0, fw, fh, expo, arr, at0, luma) {
         }
         const B = sl / sw;
         if (rp > 0) {
-          const wg = sstep(bK - rp, bK, B + g);   // g = the dodge's own change (EV) so far
+          const wg = sstep(bK - rp, bK + REC_TOP * rp + REC_TOP, B + g);   // g = the dodge's own change (EV) so far
           g += -REC_RHO * rp * wg + REC_DETAIL * Math.min(0, Math.max(-1, L0 - B)) * wg;
         }
         if (hl !== 0) g += hl * BURN_W * Math.log1p(Math.exp((B - M - HL_KNEE) / BURN_W));

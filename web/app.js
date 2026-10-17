@@ -44,6 +44,9 @@ let rendering = false, dirty = false, exporting = false, renderCount = 0;
 
 // ---------- params ----------
 
+// Interno's green / yellow balance is a density offset: the scanner's Contrasto multiplies it with the mid slope (x 1 + 1.9 c,
+// frontier.rs SLOPE_UP), so at Contrasto +83 the frame went green. v3.24: the offset beyond daylight's is divided by that factor.
+const internoBalance = (c) => { const k = 1 / (1 + 1.9 * Math.max(c, 0)); return [0, 0.005 - 0.025 * k, 0.02 + 0.02 * k]; };
 const ui = () => ({
   ev: +$('ev').value, contrast: +$('contrast').value, highlight: +$('highlight').value, whites: +$('whites').value,
   mshift: +$('mshift').value, yshift: +$('yshift').value, black: +$('black').value,
@@ -110,7 +113,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
         // warm cream and the contamination goes green, not magenta (teal under + magenta over read as a grading). Daylight keeps v3.16 / v3.17.
         // v3.22: blues closer to Gold skies / seas (references): saturation_blue 1.0 -> 0.15 (pale skies were ~2x the chroma), blue_hue_shift
         // 17 deg towards cyan on mid / deep blues only (deep sky, sea: teal; pale horizon sky keeps its hue).
-        model: { saturation: 1.01, saturation_blue: 0.15, blue_hue_shift: 17, green_hue_shift: 24, saturation_warm: 0.2, warm_hue_shift: 6, cool_neutral_warm: interno() ? 0 : 1.0, highlight_neutral: 0.6, balance_cmy: interno() ? [0, -0.02, 0.04] : [0, 0.005, 0.02], sensor_peak_nm: [650, 540, 450], sensor_fwhm_nm: [40, 50, 40],
+        model: { saturation: 1.01, saturation_blue: 0.15, blue_hue_shift: 17, green_hue_shift: 24, saturation_warm: 0.2, warm_hue_shift: 6, cool_neutral_warm: interno() ? 0 : 1.0, highlight_neutral: 0.6, balance_cmy: interno() ? internoBalance(u.contrast) : [0, 0.005, 0.02], sensor_peak_nm: [650, 540, 450], sensor_fwhm_nm: [40, 50, 40],
                  black_point: 0.012, gradation_a: 6.2, setup_toe_slope: interno() ? [1.9, 0.85] : [0.9, 1.0], setup_neutral_ev: interno() ? 2.0 : 1.5, auto: { k_col: 0.3 } },
       },
     },

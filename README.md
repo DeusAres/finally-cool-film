@@ -75,6 +75,11 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   forti nelle luci (pieghe, pelo) invertivano i toni (posterizzazione, bordi disegnati). Ora la spinta cresce con una rampa morbida
   a pendenza ≤ 0.95 in totale: comprime, non inverte mai. Interno: bilanciamento verso verde / giallo (M −0.02, Y +0.04), i chiari
   restano crema e la contaminazione va al verde invece del velo magenta (gatto, chiari a*/b* +2.7/+1.8 → −0.2/+5.5).
+- **v3.24**: contrasto alto senza contorni / posterizzazione nelle luci. Il recupero luci (v3.17), con Esposizione + Contrasto
+  forti, agiva come una curva per pixel di pendenza fino a 0.75 sulle zone chiare con texture (pieghe, pelo): ora la sua rampa è più
+  morbida (pendenza ≤ ~0.4). Gatto a Esposizione +0.5 / Contrasto +83: bordi creati 0.41 → 0.05; il muro al sole tiene un po' meno
+  recupero ai contrasti estremi. Interno: lo spostamento verde / giallo è diviso per il fattore del Contrasto (a +83 l'immagine
+  diventava verde). Default identici al pixel.
 - **Qualità JPEG** (scheda File, v3.15): 10–100%, scala di jpegli; default 90% = l'export di prima (distance 1.0, identico al byte),
   100% = distance 0.1 (file ~3–4× più grandi). Doppio tap sull'etichetta = 90%. Vale anche per IG.
 - **IG** (solo foto verticali): export per Instagram a 1080 px di larghezza (3:4 → 1080 × 1440 senza bordo; ≈1080 × 1431 con il bordo bianco, attivo di default), senza ritaglio. L'intera pipeline gira a quella dimensione, così la grana nasce alla risoluzione finale: resa a
