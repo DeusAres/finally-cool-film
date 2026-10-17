@@ -520,6 +520,8 @@ impl WgpuBackend {
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width * 4), rows_per_image: Some(rows) },
             wgpu::Extent3d { width, height: rows, depth_or_array_layers: 1 },
         );
+        // Flush per strip: several queued writes to the same texture lost strip 0 on some drivers.
+        self.queue.submit(std::iter::empty());
     }
 
     /// Rows of a half-float frame (`alloc_frame_f16`): 4 × f16 bits per pixel.
@@ -537,6 +539,8 @@ impl WgpuBackend {
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width * 8), rows_per_image: Some(rows) },
             wgpu::Extent3d { width, height: rows, depth_or_array_layers: 1 },
         );
+        // Flush per strip: several queued writes to the same texture lost strip 0 on some drivers.
+        self.queue.submit(std::iter::empty());
     }
 
     /// Fill the next chain input on the GPU with `wgsl` (entry `main`,
