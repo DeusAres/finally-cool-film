@@ -10,6 +10,7 @@ import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, INPUT_WGSL_V3, inputUniform } from './lib/lens-gpu.js';
 import { dodgeBase, dodgeParams, dodgeArray, dodgeCPU } from './lib/dodge.js';
 import { LUMA } from './lib/color.js';
+import { downscale, sharpenForScreen, fitInside } from './lib/igout.js';
 import { dustField, drawDust, compositeDust } from './lib/dust.js';
 import { GRAIN_WGSL, packParams, toP3CPU } from './lib/grain.js';
 
@@ -18,7 +19,9 @@ const FILM_FORMAT_MM = 35;        // engine default; sets the physical pixel siz
 const EXPORT_TILE = 1024;         // export tile core size (px)
 const EXPORT_PAD = 128;           // tile overlap: covers halation / DIR diffusion reach at 12 MP
 const MAX_EXPORT_PIXELS = 12.5e6; // keeps native 12 MP iPhone frames; 48 MP gets downscaled (20 MP crashed the grain exporter)
-const IG_WIDTH = 1080;            // Instagram feed width (3:4 portrait = 1080 × 1440)
+const IG_W = 1080, IG_H = 1440;    // Instagram canvas: 3:4, the profile grid's ratio since 2025 (the whole photo fits inside, mat around)
+const IG_SUPER = 2;                // IG: the film is rendered at this × the posted size, then downscaled + output-sharpened (lib/igout.js)
+const IG_GRAIN_BOOST = 1;          // IG: grain amount × this at the supersampled render, so after the downscale it reads as before
 // Film camera (Contax T3-like compact, handheld, no flash) loaded with Gold 200. Interno (lib/interno.js) takes a fixed
 // INTERNO_EV off the scene exposure before the film: a pure function of the checkbox. The lab scanner's AutoSetup
 // (frontier.auto) decides what it does about the thin negative.
@@ -74,7 +77,8 @@ const sceneGain = (u) => 2 ** (u.ev - underEv() + baselineEv());
 // Everything else is read at render time and goes through `engine.update`.
 // The film model and the Frontier scanner are the engine's (the positive comes out of it);
 // our input pass only conditions the light (display→scene, exposure, lens, Texture, Chiarezza).
-const outP3 = () => !!photo?.preview.p3;
+let forceSRGB = false, grainBoost = 1;   // IG export: sRGB output (P3 dulls saturated reds on Instagram); grain compensation
+const outP3 = () => !forceSRGB && !!photo?.preview.p3;
 
 // `region` {x0, y0, fw, fh}: the rendered region's origin and its frame's size, in px (the engine's grain
 // is a hash of the frame position, so every tile of an export gets the same grain as the whole frame).
@@ -121,7 +125,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
       // Grain is the engine's (rng 'hash': a pure function of seed + frame position, see eval/GRAIN.md).
       // Grana 1× = the old 0.25× (user-preferred); amount 1 = the calibrated Gold 200 grain (GRAIN_UNIT scales between them).
       grain: {
-        active: !noGrain && u.grain > 0, rng: 'hash', amount: u.grain * GRAIN_UNIT * grainFactor(), seed: photo.grainSeed,
+        active: !noGrain && u.grain > 0, rng: 'hash', amount: u.grain * GRAIN_UNIT * grainFactor() * grainBoost, seed: photo.grainSeed,
         origin_px: region ? [region.x0, region.y0] : [0, 0], frame_px: region ? [region.fw, region.fh] : [photo.preview.w, photo.preview.h],
       },
       // v2-calib: strength comes from the profile's antihalation; halation_amount is a multiplier on it (Halation slider).
@@ -478,7 +482,7 @@ async function loadPhoto(file) {
   const my = ++loadSeq, prev = photo;
   status('Decodifica…');
   // Nothing exportable until this photo has loaded and been auto-measured; stays disabled on error.
-  $('export').disabled = $('exportIG').disabled = $('auto').disabled = true; $('exportIG').hidden = true;
+  $('export').disabled = $('exportIG').disabled = $('auto').disabled = true;
   try {
     log(`photo: ${file.name} ${file.type} ${(file.size / 1e6).toFixed(1)} MB`);
     if (await isRaw(file)) {
@@ -516,13 +520,13 @@ async function loadPhoto(file) {
     showPreview();
     await runAuto();
     $('export').disabled = false; $('auto').disabled = false; $('newPhoto').hidden = false;
-    $('exportIG').hidden = !(photo.preview.h > photo.preview.w); $('exportIG').disabled = false;   // IG export: verticals only
+    $('exportIG').hidden = false; $('exportIG').disabled = false;
   } catch (e) {
     log('load error: ' + (e?.stack || e));
     status('Errore: ' + (e?.message || e));
     if (my === loadSeq && photo === prev && prev) {   // failed decode: the previous photo is still shown, keep it usable
       $('export').disabled = $('auto').disabled = false;
-      $('exportIG').hidden = !(prev.preview.h > prev.preview.w); $('exportIG').disabled = false;
+      $('exportIG').disabled = false;
     }
   }
 }
@@ -569,7 +573,6 @@ async function rotate(quarters) {
       Object.assign(photo, { rot, preview, dodge: null });   // dodging base: rebuilt from the turned thumb
       log(`rotate ${rot * 90}°, preview ${preview.w}x${preview.h}`);
       showPreview();
-      $('exportIG').hidden = !(preview.h > preview.w);   // IG export: verticals only
     }
     await render();
   } catch (e) {
@@ -635,9 +638,10 @@ function paperWhite(u) {
   return Array.from(px, q8);
 }
 
-// `ig`: Instagram export (vertical photos): the whole pipeline runs at IG_WIDTH px wide,
-// mat included, no crop, so grain is born at the final size (measured: rendered at
-// 12 MP and downscaled it averages away; at 1080 it survives IG's recompression).
+// `ig`: Instagram export (v3.27, any orientation): an IG_W × IG_H (3:4) sRGB canvas, the whole photo fitted inside it (mat colour
+// around, so Instagram never crops it), rendered at IG_SUPER × the posted size, then Lanczos-downscaled in linear light and
+// output-sharpened for screen (lib/igout.js), like Lightroom's Resize to fit + Sharpen for Screen. Grain is boosted by
+// IG_GRAIN_BOOST at the supersampled render so it keeps its strength after the downscale.
 async function exportFull(ig = false) {
   if (!photo || exporting) return;
   while (internoBusy) await sleep(20);   // a pending Interno toggle / AutoSetup must land before the snapshot
@@ -654,18 +658,12 @@ async function exportFull(ig = false) {
     const rot = photo.rot || 0, turned = rot & 1;
     const fw = rawPv ? rawPv.fullW : turned ? bitmap.height : bitmap.width, fh = rawPv ? rawPv.fullH : turned ? bitmap.width : bitmap.height;
     const bFrac = $('border').checked ? BORDER_FRACTION : 0;
-    // IG: (image + 2 mats) = IG_WIDTH; mat = bFrac of the image's long side (as below).
-    const scale = ig ? Math.min(1, IG_WIDTH / (fw + 2 * bFrac * Math.max(fw, fh)))
+    // IG: the posted image (iw × ih) fits inside the canvas with a bFrac mat; the film renders at IG_SUPER × that.
+    const igFit = ig ? fitInside(fw, fh, IG_W, IG_H, Math.round(bFrac * IG_H)) : null;
+    const scale = ig ? Math.min(1, IG_SUPER * Math.max(igFit.iw, igFit.ih) / Math.max(fw, fh))
       : Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (fw * fh)));
-    let longCap = Math.round(Math.max(fw, fh) * scale);
-    if (ig && bFrac && scale < 1) {
-      // Total width must be exactly IG_WIDTH: pick the long cap whose decoded width is IG_WIDTH - 2 * mat
-      // (decodeRGBA: w = round(fw * longCap / long)); try a few caps around the estimate, else keep it.
-      const long = Math.max(fw, fh), mat = Math.round(longCap * bFrac), want = IG_WIDTH - 2 * mat;
-      for (const d of [0, 1, -1, 2, -2, 3, -3]) {
-        if (Math.round(fw * ((longCap + d) / long)) === want) { longCap += d; break; }
-      }
-    }
+    if (ig) { forceSRGB = true; grainBoost = IG_GRAIN_BOOST; }
+    const longCap = Math.round(Math.max(fw, fh) * scale);
     status('Esporto: decodifica…');
     let frame;   // { data (CPU path only), w, h, p3, raw }
     if (rawPv) {
@@ -686,7 +684,7 @@ async function exportFull(ig = false) {
     }
     const { w, h, p3 } = frame;
     const progressive = w * h > PROGRESSIVE_PIXEL_LIMIT ? 0 : 2;
-    const border = bFrac ? (ig ? (IG_WIDTH - w) >> 1 : Math.round(Math.max(w, h) * bFrac)) : 0;
+    const border = bFrac && !ig ? Math.round(Math.max(w, h) * bFrac) : 0;
     log(`export start ${w}x${h} p3=${p3} progressive=${progressive} border=${border}`);
 
     ensureEngine();
@@ -699,7 +697,8 @@ async function exportFull(ig = false) {
     done.catch(() => {});
     const quality = +$('quality').value, distance = jpegDistance(quality);
     log(`export quality ${quality} (distance ${distance.toFixed(2)})`);
-    encoder.postMessage({ cmd: 'start', width: w, height: h, distance, progressive, yuv444: 1, border, mat: border ? paperWhite(u) : undefined });
+    const igFull = ig ? new Uint8Array(w * h * 3) : null;   // IG: the whole supersampled render, downscaled at the end
+    if (!ig) encoder.postMessage({ cmd: 'start', width: w, height: h, distance, progressive, yuv444: 1, border, mat: border ? paperWhite(u) : undefined });
 
     for (let s = 0; s < strips; s++) {
       const ty = s * EXPORT_TILE, ch = Math.min(EXPORT_TILE, h - ty);
@@ -721,8 +720,24 @@ async function exportFull(ig = false) {
         }
       }
       dustIntoStrip(strip, w, h, ty, ch, dust, marks);
+      if (ig) { igFull.set(strip, ty * w * 3); continue; }
       encoder.postMessage({ cmd: 'rows', rgb: strip.buffer }, [strip.buffer]);
       log(`strip ${s + 1}/${strips} sent`);
+    }
+    if (ig) {
+      status('Esporto IG: ridimensiono e rendo nitido…');
+      const { iw, ih } = igFit, small = downscale(igFull, w, h, iw, ih);
+      sharpenForScreen(small, iw, ih);
+      const canvas = new Uint8Array(IG_W * IG_H * 3), matRGB = paperWhite(u);
+      for (let i = 0; i < IG_W * IG_H * 3; i += 3) canvas.set(matRGB, i);
+      const ox = (IG_W - iw) >> 1, oy = (IG_H - ih) >> 1;
+      for (let y = 0; y < ih; y++) canvas.set(small.subarray(y * iw * 3, (y + 1) * iw * 3), ((oy + y) * IG_W + ox) * 3);
+      log(`IG ${w}x${h} -> ${iw}x${ih} on ${IG_W}x${IG_H}`);
+      encoder.postMessage({ cmd: 'start', width: IG_W, height: IG_H, distance, progressive: 2, yuv444: 1, border: 0 });
+      for (let y = 0; y < IG_H; y += 256) {
+        const rows = canvas.slice(y * IG_W * 3, Math.min(IG_H, y + 256) * IG_W * 3);
+        encoder.postMessage({ cmd: 'rows', rgb: rows.buffer }, [rows.buffer]);
+      }
     }
     status('Esporto: JPEG (jpegli)…');
     encoder.postMessage({ cmd: 'finish' });
@@ -738,12 +753,13 @@ async function exportFull(ig = false) {
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
     log(`export done ${(blob.size / 1e6).toFixed(1)} MB in ${secs} s`);
     status(`Esportata: ${result.width}×${result.height}, ${(blob.size / 1e6).toFixed(1)} MB in ${secs} s`);
-    download(blob, `${base}_gold200${ig ? '_ig' : ''}${border ? '_bordo' : ''}.jpg`);
+    download(blob, `${base}_gold200${ig ? '_ig' : ''}${border || (ig && bFrac) ? '_bordo' : ''}.jpg`);
   } catch (e) {
     encoder.postMessage({ cmd: 'abort' });
     log('export error: ' + (e?.stack || e));
     status('Export fallito: ' + (e?.message || e) + ' (tocca qui per il log)');
   } finally {
+    forceSRGB = false; grainBoost = 1;
     setBusy(null);
     exporting = false;
     if (dustStripCanvas) { dustStripCanvas.width = dustStripCanvas.height = 0; dustStripCanvas = null; }   // release the backing store

@@ -88,6 +88,11 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   Ora è contrasto locale dei mezzitoni come in Lightroom, da −100 a +100, prima della pellicola, a ~0.5 mm del fotogramma, con
   base attenta ai bordi (niente aloni sul profilo roccia / cielo). In negativo ammorbidisce i toni locali senza velo né sfocatura.
   Default 0; il glow è tolto anche dal look di base (differenza al default: ΔE medio 0.2–0.45).
+- **Export IG (v3.27)**: come "Ridimensiona + Nitidezza per schermo" di Lightroom. Tela 1080×1440 (3:4, il formato della griglia
+  dal 2025) in sRGB (il P3 su Instagram spegne i rossi saturi); la foto intera ci sta dentro, il resto è colore carta, così IG non
+  taglia: vale anche per le orizzontali. La pellicola viene renderizzata al doppio, poi ridotta con Lanczos-3 in luce lineare
+  (`web/lib/igout.js`) e resa nitida per schermo (maschera di contrasto sulla luminanza, σ 0.7 px, soglia morbida che non spinge
+  la grana, passi limitati a 14 livelli: niente aloni). Gatto: dettaglio +32 %, grana invariata (0.33 → 0.36).
 - **Qualità JPEG** (scheda File, v3.15): 10–100%, scala di jpegli; default 90% = l'export di prima (distance 1.0, identico al byte),
   100% = distance 0.1 (file ~3–4× più grandi). Doppio tap sull'etichetta = 90%. Vale anche per IG.
 - **IG** (solo foto verticali): export per Instagram a 1080 px di larghezza (3:4 → 1080 × 1440 senza bordo; ≈1080 × 1431 con il bordo bianco, attivo di default), senza ritaglio. L'intera pipeline gira a quella dimensione, così la grana nasce alla risoluzione finale: resa a
