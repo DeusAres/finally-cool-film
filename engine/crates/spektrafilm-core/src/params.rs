@@ -286,6 +286,9 @@ pub struct FrontierModelParams {
     /// Extra saturation of the cyan-blue hues only (opponent-axis hue 190-270 deg, soft edges, see `blue_weight`):
     /// chroma x (1 + saturation_blue * weight). 0 = off; skin, reds, yellows, greens untouched.
     pub saturation_blue: f64,
+    /// Rotation of the same cyan-blue band (see `blue_weight`) towards cyan, degrees, luminance preserved, mid / deep blues only
+    /// (linear luma < 0.15 full, > 0.35 none): Gold's deep skies and seas sit nearer cyan / teal than a neutral scan's blue-violet. 0 = off.
+    pub blue_hue_shift: f64,
     /// Rotation of the green hues towards yellow, degrees (dull low-chroma / darker greens: full; vivid or light ones keep 15 %; opponent-axis hue ~100-190 deg, soft edges, see
     /// `green_weight`; yellows, skin, reds, cyan-blue untouched), luminance preserved. 0 = off. Gold-like
     /// foliage is yellow-olive where a neutral scan gives blue-green.
@@ -333,6 +336,7 @@ impl Default for FrontierModelParams {
             black_lift_max: 0.25,
             saturation: 1.12,
             saturation_blue: 0.0,
+            blue_hue_shift: 0.0,
             green_hue_shift: 0.0,
             saturation_warm: 0.0,
             warm_hue_shift: 0.0,

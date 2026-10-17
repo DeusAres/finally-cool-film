@@ -365,6 +365,7 @@ impl FrontierBase {
             },
             sat: (m.saturation * keys.saturation as f64).max(0.0),
             sat_blue: m.saturation_blue,
+            blue_shift: m.blue_hue_shift,
             green_shift: m.green_hue_shift,
             sat_warm: m.saturation_warm,
             warm_shift: m.warm_hue_shift,
@@ -582,6 +583,8 @@ pub struct Stage {
     sat: f64,
     /// Extra chroma gain on cyan-blue hues (see `FrontierModelParams::saturation_blue`).
     sat_blue: f64,
+    /// Hue rotation of the cyan-blue band towards cyan, degrees (see `FrontierModelParams::blue_hue_shift`).
+    blue_shift: f64,
     /// Hue rotation of the greens towards yellow, degrees (see `FrontierModelParams::green_hue_shift`).
     green_shift: f64,
     /// Extra chroma gain on the yellow-orange band (see `FrontierModelParams::saturation_warm`).
@@ -751,6 +754,13 @@ impl Stage {
             let wv = 1.0 - (1.0 - smooth(0.03, 0.08, opp_chroma(&lin))) * (1.0 - smooth(0.12, 0.30, l));
             lin = rotate_hue(&lin, l, -self.green_shift * gw * (GREEN_VIVID_KEEP + (1.0 - GREEN_VIVID_KEEP) * (1.0 - wv)));
         }
+        if self.blue_shift != 0.0 {
+            // mid / deep blues only (deep sky, sea): pale skies near the horizon keep their hue
+            let bw = blue_weight(&lin) * (1.0 - smooth(BLUE_SHIFT_L.0, BLUE_SHIFT_L.1, l));
+            if bw > 0.0 {
+                lin = rotate_hue(&lin, l, -self.blue_shift * bw);
+            }
+        }
         let ww = if self.sat_warm != 0.0 || self.warm_shift != 0.0 { warm_weight(&lin, l) } else { 0.0 };
         if ww > 0.0 && self.warm_shift != 0.0 {
             lin = rotate_hue(&lin, l, -self.warm_shift * ww);
@@ -776,6 +786,9 @@ impl Stage {
         [srgb_encode(o(&self.out[0])), srgb_encode(o(&self.out[1])), srgb_encode(o(&self.out[2]))]
     }
 }
+
+/// Linear-luma ramp (full below, none above) of the `blue_hue_shift` rotation.
+const BLUE_SHIFT_L: (f64, f64) = (0.15, 0.35);
 
 /// Linear-luma ramp (from, to) of the `saturation_blue` gain.
 const SAT_BLUE_L: (f64, f64) = (0.06, 0.18);

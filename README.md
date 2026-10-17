@@ -44,7 +44,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   `saturation_blue`, solo sopra luminanza ~0.22, così pelle, verdi e i blu scuri della carta non si muovono), dodge del cielo meno
   forte, mezzitoni e luci un po' più caldi, ombre profonde senza dominante blu, vignettatura 0.12 e falloff 0.25 di default, grana
   con meno rumore di colore (accoppiamento tra layer 0.45 → 0.72, colore/luminanza ~2.1 → ~1.1 nei mezzitoni). Override in
-  `web/app.js` renderParams (`model`); per l'harness: `sf-eval chart --params eval/calib/look_v3.19.json`.
+  `web/app.js` renderParams (`model`); per l'harness: `sf-eval chart --params eval/calib/look_v3.22.json`.
 - **Look Gold 200 (v3.17)**: altri 8 giri con il revisore su 10 foto (incluse foto mai viste per verificare che il look
   generalizzi) e un consolidamento per ablazione (tolte le leve senza effetto misurabile). Nello scanner (LUT, costo zero):
   `saturation_blue` esteso ai cieli profondi, `green_hue_shift` solo sui verdi spenti, `saturation_warm` (ambra/pesca, pelle esclusa),
@@ -57,7 +57,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   Gold (nuvole al tramonto gialle invece che arancio). La banda calda dello scanner ora si sceglie per tinta (giallo-arancio,
   pelle e rossi esclusi, non i quasi-neutri): `warm_hue_shift` 6° verso il rosso + `saturation_warm` 0.2. Nuvola al tramonto
   tinta 71°/80° → 65°/74° (camera 63°/67°); interni caldi anche loro più vicini alla camera. Harness:
-  `sf-eval chart --params eval/calib/look_v3.19.json` (carta 95.5 → 96.4).
+  `sf-eval chart --params eval/calib/look_v3.22.json` (carta 95.5 → 96.4).
 - **Alte luci / Bianchi in negativo (v3.20)**: abbassarli ora scurisce le zone chiare *prima della pellicola* (locale, dalla stessa base
   del recupero luci), come bruciare in camera oscura: il negativo ha il dettaglio, quindi muri e cieli restano con texture e colore
   invece di diventare grigi piatti (muro al sole, Alte luci −0.6: texture 0.30 → 0.44, croma 10 → 17). In positivo restano sulla
@@ -66,6 +66,11 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   per le rocce), e così gli interni avevano perso le ombre fredde tipiche di un Gold sottoesposto. Con Interno acceso il piede torna
   quello della pellicola (R 1.5, B 0.85, zona neutralizzata 2 EV, mezzitoni caldi conservati): gatto, ombre profonde a*/b* +6.6/+6.3 →
   −0.6/0.0. Con Interno spento l'immagine è identica al pixel a prima.
+- **Blu e Interno (v3.22)**: confronto con scansioni Gold reali di cielo e mare. I cieli chiari avevano circa il doppio della
+  croma e quelli profondi erano più viola: `saturation_blue` 1.0 → 0.15, nuova `blue_hue_shift` 17° verso il ciano solo sui blu
+  medi / profondi (cielo alto, mare verde-acqua), l'orizzonte chiaro resta com'è. Carta 96.4 → 96.7 (fail 18 → 13). Con Interno il
+  piede della pellicola è più marcato (R 1.9) e `cool_neutral_warm` è spento (scaldava proprio quelle ombre): ombre profonde e
+  mezzitoni scuri teal-verde, niente velo magenta, stanza calda.
 - **Qualità JPEG** (scheda File, v3.15): 10–100%, scala di jpegli; default 90% = l'export di prima (distance 1.0, identico al byte),
   100% = distance 0.1 (file ~3–4× più grandi). Doppio tap sull'etichetta = 90%. Vale anche per IG.
 - **IG** (solo foto verticali): export per Instagram a 1080 px di larghezza (3:4 → 1080 × 1440 senza bordo; ≈1080 × 1431 con il bordo bianco, attivo di default), senza ritaglio. L'intera pipeline gira a quella dimensione, così la grana nasce alla risoluzione finale: resa a
