@@ -750,11 +750,12 @@ impl Stage {
         let gw = if self.green_shift != 0.0 || self.sat_green != 0.0 { green_weight(&lin) } else { 0.0 };
         // greens that are dull (low chroma, low-to-mid luma: woods, shadows) take the full rotation; vivid or light foliage keeps only
         // GREEN_VIVID_KEEP of it and takes the saturation_green gain instead
-        let wv = if gw > 0.0 {
+        let (wv, wg) = if gw > 0.0 {
             let c = opp_chroma(&lin);
-            1.0 - (1.0 - smooth(0.03, 0.08, c)) * (1.0 - smooth(0.12, 0.30, l))
+            // wg: the saturation_green gain fades out again for the very saturated greens (chroma 0.26-0.40: already full)
+            (1.0 - (1.0 - smooth(0.03, 0.08, c)) * (1.0 - smooth(0.12, 0.30, l)), 1.0 - smooth(0.26, 0.40, c))
         } else {
-            0.0
+            (0.0, 0.0)
         };
         if self.green_shift != 0.0 && gw > 0.0 {
             lin = rotate_hue(&lin, l, -self.green_shift * gw * (GREEN_VIVID_KEEP + (1.0 - GREEN_VIVID_KEEP) * (1.0 - wv)));
@@ -774,7 +775,7 @@ impl Stage {
             self.sat * (1.0 + self.sat_blue * blue_weight(&lin) * t * t * (3.0 - 2.0 * t))
         } else {
             self.sat
-        } * (1.0 + self.sat_green * gw * wv) * (1.0 + self.sat_red * rw) * (1.0 + self.sat_warm * ww);
+        } * (1.0 + self.sat_green * gw * wv * wg) * (1.0 + self.sat_red * rw) * (1.0 + self.sat_warm * ww);
         let lin = lin.map(|v| (l + sat * (v - l)).clamp(0.0, 1.0));
         // Working space = sRGB primaries, whatever the output: only this last matrix
         // (and the sRGB transfer) knows the output space.

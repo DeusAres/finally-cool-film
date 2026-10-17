@@ -45,7 +45,8 @@
     "saturation_green": 0,
     "cool_neutral_warm": 1.0,
     "highlight_neutral": 0.6,
-    "saturation_red": 0.08
+    "saturation_red": 0.08,
+    "saturation_warm": 0.3
    },
    "debug_contrast_mode": 3
   }
