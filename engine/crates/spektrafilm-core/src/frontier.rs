@@ -835,9 +835,9 @@ fn red_weight(lin: &[f64; 3]) -> f64 {
     smooth(-10.0, 10.0, h) * (1.0 - smooth(50.0, 65.0, h)) * smooth(0.28, 0.42, c)
 }
 
-/// Weight (0..1) of pale-to-mid warm tones (peach, amber, golden cloud edges of a low sun): opponent hue 25-45 up / 95-115 down,
-/// chroma 0.02-0.04 up / 0.10-0.16 down (skin, 90 % of it above 0.115, and saturated oranges are not touched), linear luma 0.08-0.20 up /
-/// 0.75-0.95 down (not the shadows, not the near-white lights that `highlight_neutral` cleans).
+/// Weight (0..1) of pale-to-mid yellow-orange / amber tones (golden cloud edges and sky of a low sun): opponent hue 56-66 up / 100-115 down
+/// (skin and warm interiors sit at 40-55, saturated reds below), chroma 0.02-0.04 up / 0.22-0.34 down, linear luma 0.08-0.18 up /
+/// 0.50-0.68 down (not the shadows, not the near-white lights that `highlight_neutral` cleans).
 fn warm_weight(lin: &[f64; 3], l: f64) -> f64 {
     let o1 = (lin[0] - lin[1]) * std::f64::consts::FRAC_1_SQRT_2;
     let o2 = (lin[0] + lin[1] - 2.0 * lin[2]) / 6f64.sqrt();
@@ -846,7 +846,7 @@ fn warm_weight(lin: &[f64; 3], l: f64) -> f64 {
         return 0.0;
     }
     let h = o2.atan2(o1).to_degrees().rem_euclid(360.0);
-    smooth(25.0, 45.0, h) * (1.0 - smooth(95.0, 115.0, h)) * smooth(0.02, 0.04, c) * (1.0 - smooth(0.10, 0.16, c)) * smooth(0.08, 0.20, l) * (1.0 - smooth(0.75, 0.95, l))
+    smooth(56.0, 66.0, h) * (1.0 - smooth(100.0, 115.0, h)) * smooth(0.02, 0.04, c) * (1.0 - smooth(0.22, 0.34, c)) * smooth(0.08, 0.18, l) * (1.0 - smooth(0.50, 0.68, l))
 }
 
 /// Weight (0..1) of the green hue band (same opponent-axis hue angle as `blue_weight`: yellow 90,
