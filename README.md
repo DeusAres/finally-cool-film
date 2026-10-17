@@ -71,6 +71,10 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   medi / profondi (cielo alto, mare verde-acqua), l'orizzonte chiaro resta com'è. Carta 96.4 → 96.7 (fail 18 → 13). Con Interno il
   piede della pellicola è più marcato (R 1.9) e `cool_neutral_warm` è spento (scaldava proprio quelle ombre): ombre profonde e
   mezzitoni scuri teal-verde, niente velo magenta, stanza calda.
+- **v3.23**: Alte luci / Bianchi in negativo senza artefatti: la v3.20 usava rampe troppo ripide (pendenza > 1), che su texture
+  forti nelle luci (pieghe, pelo) invertivano i toni (posterizzazione, bordi disegnati). Ora la spinta cresce con una rampa morbida
+  a pendenza ≤ 0.95 in totale: comprime, non inverte mai. Interno: bilanciamento verso verde / giallo (M −0.02, Y +0.04), i chiari
+  restano crema e la contaminazione va al verde invece del velo magenta (gatto, chiari a*/b* +2.7/+1.8 → −0.2/+5.5).
 - **Qualità JPEG** (scheda File, v3.15): 10–100%, scala di jpegli; default 90% = l'export di prima (distance 1.0, identico al byte),
   100% = distance 0.1 (file ~3–4× più grandi). Doppio tap sull'etichetta = 90%. Vale anche per IG.
 - **IG** (solo foto verticali): export per Instagram a 1080 px di larghezza (3:4 → 1080 × 1440 senza bordo; ≈1080 × 1431 con il bordo bianco, attivo di default), senza ritaglio. L'intera pipeline gira a quella dimensione, così la grana nasce alla risoluzione finale: resa a

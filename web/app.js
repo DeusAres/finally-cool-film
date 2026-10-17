@@ -106,10 +106,11 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
         // v3.19: the warm band is now yellow-orange by hue (opponent 48-90 deg, not near-neutrals): warm_hue_shift 6 deg towards red + saturation_warm 0.2 (sunsets and yellow-oranges came out ~5 deg yellower than scene / Gold target).
         // v3.22: with Interno (thin negative: the shadows sit in the film's toe) the toe keeps Gold's own cast, R steeper / B flatter than
         // neutral, neutralised range 2 EV (warm mids kept), and cool_neutral_warm off (it warmed exactly those shadows): deep shadows and
-        // dark mids go teal-green as in an underexposed Gold interior. Daylight keeps v3.16 / v3.17.
+        // dark mids go teal-green as in an underexposed Gold interior; v3.23: balance M -0.02 / Y 0.04 with Interno, so the lights stay
+        // warm cream and the contamination goes green, not magenta (teal under + magenta over read as a grading). Daylight keeps v3.16 / v3.17.
         // v3.22: blues closer to Gold skies / seas (references): saturation_blue 1.0 -> 0.15 (pale skies were ~2x the chroma), blue_hue_shift
         // 17 deg towards cyan on mid / deep blues only (deep sky, sea: teal; pale horizon sky keeps its hue).
-        model: { saturation: 1.01, saturation_blue: 0.15, blue_hue_shift: 17, green_hue_shift: 24, saturation_warm: 0.2, warm_hue_shift: 6, cool_neutral_warm: interno() ? 0 : 1.0, highlight_neutral: 0.6, balance_cmy: [0, 0.005, 0.02], sensor_peak_nm: [650, 540, 450], sensor_fwhm_nm: [40, 50, 40],
+        model: { saturation: 1.01, saturation_blue: 0.15, blue_hue_shift: 17, green_hue_shift: 24, saturation_warm: 0.2, warm_hue_shift: 6, cool_neutral_warm: interno() ? 0 : 1.0, highlight_neutral: 0.6, balance_cmy: interno() ? [0, -0.02, 0.04] : [0, 0.005, 0.02], sensor_peak_nm: [650, 540, 450], sensor_fwhm_nm: [40, 50, 40],
                  black_point: 0.012, gradation_a: 6.2, setup_toe_slope: interno() ? [1.9, 0.85] : [0.9, 1.0], setup_neutral_ev: interno() ? 2.0 : 1.5, auto: { k_col: 0.3 } },
       },
     },

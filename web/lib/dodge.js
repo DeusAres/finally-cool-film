@@ -122,9 +122,11 @@ const REC_K = 1.9, REC_RHO = 0.5, REC_FREE = 0.25, REC_PC = 1.4, REC_DETAIL = 1.
 // Alte luci / Bianchi (v3.20): local exposure of the bright areas BEFORE the film, from the same fine edge-aware base as the recovery,
 // like burning / dodging at the enlarger: the negative holds the detail, so a darker sky or wall keeps its texture instead of
 // turning flat grey (as a curve after the scanner's shoulder did). Zones on the base, relative to the lit median M: Alte luci
-// HL_ZONE above M (bright walls, skies), Bianchi WH_ZONE (the brightest areas); slider x HL_EV / WH_EV EV. The app sends only the
-// negative side (brightening stays on the scanner curve).
-const HL_EV = 1.2, WH_EV = 1.0, HL_ZONE = [0.5, 1.5], WH_ZONE = [1.5, 2.5];
+// from M + HL_KNEE (bright walls, skies), Bianchi from M + WH_KNEE (the brightest areas): shift = slider x slope x softplus(B - knee)
+// (width BURN_W EV), i.e. a ramp whose slope grows smoothly from 0 to HL_SLOPE / WH_SLOPE. Their sum stays <= 0.95, so a textured
+// bright area (folds, fur) whose base follows its texture is compressed, never tone-reversed (v3.20 used 1 EV smoothstep ramps of up
+// to 1.2 EV: slope > 1, posterised folds and outlined edges). The app sends only the negative side.
+const HL_SLOPE = 0.7, WH_SLOPE = 0.25, HL_KNEE = 0.75, WH_KNEE = 1.75, BURN_W = 0.4;
 const HDR = 17;
 
 /** Header + base appended to the input pass's gain array (read by dodgeWGSL from `at0`):
@@ -136,7 +138,7 @@ export function dodgeArray(gainLut, d, prm, hlc = 0, shadows = 0, highlight = 0,
   if (d) {
     const S = d.none ? 0 : SHADOW_MAX * Math.max(0, shadows);
     out.set([prm.dodge && prm.A > 0 ? 1 : 0, d.w, d.h, prm.knee, prm.A, prm.rho, hlcGain(hlc), 0.5 * (prm.knee + d.P),
-      S, d.M + SHADOW_KNEE, SHADOW_RHO, DODGE_DELTA, prm.dodge && prm.rp > 0 ? prm.rp : 0, prm.bK ?? 0, HL_EV * highlight, WH_EV * whites, d.M], at0);
+      S, d.M + SHADOW_KNEE, SHADOW_RHO, DODGE_DELTA, prm.dodge && prm.rp > 0 ? prm.rp : 0, prm.bK ?? 0, HL_SLOPE * highlight, WH_SLOPE * whites, d.M], at0);
     out.set(d.base, at0 + HDR);
     out.set(d.near, at0 + HDR + d.w * d.h);
   }
@@ -200,7 +202,8 @@ fn dodge(c0: vec3<f32>, pos: vec2<f32>) -> vec3<f32> {
     g = -${REC_RHO} * rp * wg + ${REC_DETAIL} * clamp(L0 - B, -1.0, 0.0) * wg;
   }
   let M = ${arr}[${at0}u + 16u];
-  g += hl * smoothstep(M + ${HL_ZONE[0]}, M + ${HL_ZONE[1]}, B) + wh * smoothstep(M + ${WH_ZONE[0]}, M + ${WH_ZONE[1]}, B);
+  if (hl != 0.0) { g += hl * ${BURN_W} * log(1.0 + exp((B - M - ${HL_KNEE}) / ${BURN_W})); }   // hl, wh: slider x slope (< 0)
+  if (wh != 0.0) { g += wh * ${BURN_W} * log(1.0 + exp((B - M - ${WH_KNEE}) / ${BURN_W})); }
   return c * exp2(g);
 }`;
 
@@ -254,7 +257,8 @@ export function dodgeCPU(rgb, w, h, x0, y0, fw, fh, expo, arr, at0, luma) {
           const wg = sstep(bK - rp, bK, B + g);   // g = the dodge's own change (EV) so far
           g += -REC_RHO * rp * wg + REC_DETAIL * Math.min(0, Math.max(-1, L0 - B)) * wg;
         }
-        g += hl * sstep(M + HL_ZONE[0], M + HL_ZONE[1], B) + wh * sstep(M + WH_ZONE[0], M + WH_ZONE[1], B);
+        if (hl !== 0) g += hl * BURN_W * Math.log1p(Math.exp((B - M - HL_KNEE) / BURN_W));
+        if (wh !== 0) g += wh * BURN_W * Math.log1p(Math.exp((B - M - WH_KNEE) / BURN_W));
       }
       if (g !== 0) { const k = 2 ** g; rgb[j] *= k; rgb[j + 1] *= k; rgb[j + 2] *= k; }
     }
