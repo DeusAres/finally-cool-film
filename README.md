@@ -80,6 +80,10 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   morbida (pendenza ≤ ~0.4). Gatto a Esposizione +0.5 / Contrasto +83: bordi creati 0.41 → 0.05; il muro al sole tiene un po' meno
   recupero ai contrasti estremi. Interno: lo spostamento verde / giallo è diviso per il fattore del Contrasto (a +83 l'immagine
   diventava verde). Default identici al pixel.
+- **v3.25**: tasto **Azzera impostazioni** (scheda File): tutti gli slider a 0 / off, anche quelli con default diverso (grana,
+  halation, texture…); Qualità JPEG, interruttori e rotazione restano. **Ombre** va da −100 a +100: in negativo scurisce le zone
+  d'ombra prima della pellicola, che scendono nel piede del Gold (il suo limite naturale) invece di tagliarsi al nero. **Nero** si
+  chiama **Nostalgia** (è il nero sollevato, l'effetto sbiadito).
 - **Qualità JPEG** (scheda File, v3.15): 10–100%, scala di jpegli; default 90% = l'export di prima (distance 1.0, identico al byte),
   100% = distance 0.1 (file ~3–4× più grandi). Doppio tap sull'etichetta = 90%. Vale anche per IG.
 - **IG** (solo foto verticali): export per Instagram a 1080 px di larghezza (3:4 → 1080 × 1440 senza bordo; ≈1080 × 1431 con il bordo bianco, attivo di default), senza ritaglio. L'intera pipeline gira a quella dimensione, così la grana nasce alla risoluzione finale: resa a

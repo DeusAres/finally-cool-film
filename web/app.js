@@ -827,6 +827,15 @@ $('indoor').addEventListener('change', async () => {
   } finally { internoBusy--; }
   render();
 });
+// Azzera impostazioni (File): every slider to its zero / off position, whatever its default (Qualità JPEG, the switches, rotation
+// and the photo's Auto stay as they are).
+$('resetAll').addEventListener('click', () => {
+  const ids = [...Object.keys(FORMAT), ...(V3 ? ['hlc', 'shadows'] : [])];
+  for (const id of ids) $(id).value = 0;
+  syncOutputs();
+  if (V3) for (const id of ['hlc', 'shadows']) $(id).dispatchEvent(new Event('input'));
+  if (photo) { drawDustLayer(); render(); }
+});
 $('export').addEventListener('click', () => exportFull());
 $('exportIG').addEventListener('click', () => exportFull(true));
 $('border').checked = store.get('fcf_border') !== '0';   // on by default
@@ -845,8 +854,8 @@ if (V3) {
   $('contrast').closest('.row').insertAdjacentHTML('afterend',
     '<div class="row"><label for="hlc">Contrasto luci</label><input type="range" id="hlc" min="-1" max="1" step="0.01" value="0"><output for="hlc"></output></div>');
   $('hlc').closest('.row').insertAdjacentHTML('afterend',
-    '<div class="row"><label for="shadows">Ombre</label><input type="range" id="shadows" min="0" max="1" step="0.01" value="0"><output for="shadows"></output></div>');
-  for (const [id, fmt] of [['hlc', signPct], ['shadows', pctOff]]) {
+    '<div class="row"><label for="shadows">Ombre</label><input type="range" id="shadows" min="-1" max="1" step="0.01" value="0"><output for="shadows"></output></div>');
+  for (const [id, fmt] of [['hlc', signPct], ['shadows', signPct]]) {
     const out = () => { $(id).nextElementSibling.textContent = fmt(+$(id).value); };
     $(id).addEventListener('input', () => { out(); render(); });
     $(id).previousElementSibling.addEventListener('dblclick', () => { $(id).value = 0; out(); render(); });
