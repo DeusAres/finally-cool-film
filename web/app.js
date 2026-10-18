@@ -213,7 +213,8 @@ function autoSetup(on, evIn = null) {
   const scale = (k) => { for (let i = 0; i < rgb.length; i++) rgb[i] *= k; };
   scale(2 ** baselineEv());
   // The meter sees the scene as shot: it never compensates Interno's U (the negative stays thin).
-  const ev = evIn !== null ? evIn : Math.max(+$('ev').min, Math.min(+$('ev').max, Math.round(eng.auto_exposure_ev(rgb.slice(), w, h) * 10) / 10));
+  // Auto keeps its own -2..+2.5 range (the slider's before v3.33, when it became -3..+3): a wider slider must not change what Auto picks.
+  const ev = evIn !== null ? evIn : Math.max(AUTO_EV_MIN, Math.min(AUTO_EV_MAX, Math.round(eng.auto_exposure_ev(rgb.slice(), w, h) * 10) / 10));
   scale(2 ** (ev - underEv(on)));
   // Engine.frontier_auto_setup takes linear RGBA f32 (w*h*4), not RGB.
   const rgba = new Float32Array(w * h * 4);
@@ -805,6 +806,25 @@ const FORMAT = {
 };
 // v2-calib: contrast / highlight / black defaults are the lab's standard (0); the old look defaults (Contrasto .35, Alte luci .6, Nero .15) are gone with their stages.
 const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, whites: 0, mshift: 0, yshift: 0, black: 0, grain: 2.5, halation: 1, texture: 0.2, clarity: 0, sharp: 0, ca: 1, vignette: 0.12, falloff: 0.18, dust: 0.27 };
+const AUTO_EV_MIN = -2, AUTO_EV_MAX = 2.5;   // Auto's exposure range, see autoSetup
+// Double tap on a slider's thumb (or its label): back to 0 / off, whatever its default (like Azzera impostazioni for one slider).
+// A tap is a short press that barely moves; the two taps must both land on the thumb, so a double tap on the track never resets.
+function onThumbDoubleTap(input, fn) {
+  let down = null, last = null;
+  const nearThumb = (x) => {
+    const r = input.getBoundingClientRect(), t = 20;   // native thumb ~16-20 px
+    const f = (+input.value - +input.min) / (+input.max - +input.min);
+    return Math.abs(x - (r.left + t / 2 + f * (r.width - t))) <= 22;
+  };
+  input.addEventListener('pointerdown', (e) => { down = nearThumb(e.clientX) ? { x: e.clientX, y: e.clientY, t: e.timeStamp } : null; });
+  input.addEventListener('pointerup', (e) => {
+    const tap = down && e.timeStamp - down.t < 300 && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 8;
+    down = null;
+    if (!tap) { last = null; return; }
+    if (last && e.timeStamp - last < 400) { last = null; fn(); } else last = e.timeStamp;
+  });
+  input.addEventListener('pointercancel', () => { down = null; last = null; });
+}
 const SCATTER_SCALE = 0.5;   // film scatter size multiplier (engine default 1), see renderParams
 // v3.32: dye-cloud blur 0.65 -> 0.45 (reference px, ~12 -> ~8 um): measured on 10 full-frame Gold 200 scans the grain has ~12 % of
 // its power below 40 um wavelength and r50 ~13.5 um; ours had 3 % / 18.6 um (soft). At 0.45
@@ -817,8 +837,9 @@ function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElement
 for (const id of Object.keys(FORMAT)) {
   const update = () => { syncOutputs(); if (OVERLAY_ONLY.has(id)) drawDustLayer(); else render(); };
   $(id).addEventListener('input', update);
-  // Double-tap the label to reset a slider.
-  $(id).previousElementSibling.addEventListener('dblclick', () => { $(id).value = DEFAULTS[id]; update(); });
+  const zero = () => { $(id).value = 0; update(); };
+  $(id).previousElementSibling.addEventListener('dblclick', zero);
+  onThumbDoubleTap($(id), zero);
 }
 $('reseed').addEventListener('click', () => {
   if (!photo) return;
@@ -872,7 +893,9 @@ if (V3) {
   for (const [id, fmt] of [['hlc', signPct], ['shadows', signPct]]) {
     const out = () => { $(id).nextElementSibling.textContent = fmt(+$(id).value); };
     $(id).addEventListener('input', () => { out(); render(); });
-    $(id).previousElementSibling.addEventListener('dblclick', () => { $(id).value = 0; out(); render(); });
+    const zero = () => { $(id).value = 0; out(); render(); };
+    $(id).previousElementSibling.addEventListener('dblclick', zero);
+    onThumbDoubleTap($(id), zero);
     out();
   }
 }

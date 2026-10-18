@@ -28,7 +28,8 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 - Slider: esposizione (guadagno di scena 2^EV prima della pellicola), contrasto (`frontier.contrast`), alte luci
   (`frontier.highlight`), bianchi (`frontier.whites`), filtri colore dello scanner magenta↔verde e giallo↔blu (`frontier.cmy`), nero (`frontier.black_lift`,
   neutro), texture, chiarezza, grana, halation, aberrazione, vignettatura, falloff, polvere (quantità). Auto = esposizione
-  automatica del motore + `frontier_auto_setup`. Doppio tap sull'etichetta = reset.
+  automatica del motore + `frontier_auto_setup`. Doppio tap sul cerchio dello slider (o sull'etichetta) = 0 / off, non il
+  default di apertura. Esposizione −3…+3 EV (v3.33; l'Auto resta nel suo −2…+2.5 di prima).
 - **Interno / luce scarsa** (interruttore nella scheda **Luce**): sottoesposizione fissa di 2 EV prima della pellicola (`INTERNO_EV` in `web/lib/interno.js`), senza dati EXIF. Disattivato a ogni caricamento di foto.
 - **Lens** (portato da grain pro e migliorato, `web/lib/lens.js` + shader WebGPU `lens-gpu.js`): aberrazione cromatica laterale
   (calibrata in µm sul 35 mm, max 60 µm), vignettatura in luce lineare e falloff condiviso, applicati alla luce *prima* della pellicola.
