@@ -57,8 +57,9 @@ const ui = () => ({
 // CA slider is quadratic: realistic (subtle) amounts get most of the travel.
 const lensOf = (u) => ({ ca: u.ca * u.ca, vignette: u.vignette, falloff: u.falloff });
 
-// Magenta ↔ Verde / Giallo ↔ Blu: Frontier C/M/Y keys, 0.01 density per key (eval/frontier_model.json user_controls).
-const FRONTIER_KEY = 0.01;
+// Magenta ↔ Verde / Giallo ↔ Blu: Frontier C/M/Y keys are 0.01 density each (eval/frontier_model.json user_controls); since v3.34
+// one slider step is half a key (a whole key per step was too strong), so ±30 reaches ±15 keys.
+const FRONTIER_KEY = 0.005;
 // v2-calib: sign of frontier.cmy (+ = more filtration, i.e. the opposite colour); the sliders read +m greener, +y bluer.
 const frontierCmy = (u) => [0, -u.mshift * FRONTIER_KEY, -u.yshift * FRONTIER_KEY];
 

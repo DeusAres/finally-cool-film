@@ -26,7 +26,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 - Luci automatiche (v3, `web/lib/dodge.js`, `eval/V3.md`): dodging digitale stile Frontier Hyper Tone, dosato sulla foto e sul
   contrasto; slider Contrasto luci = contrasto locale dentro le luci; Ombre = schiarisce le zone scure grandi senza toccare il cielo. `index.html?v2` = app precedente.
 - Slider: esposizione (guadagno di scena 2^EV prima della pellicola), contrasto (`frontier.contrast`), alte luci
-  (`frontier.highlight`), bianchi (`frontier.whites`), filtri colore dello scanner magenta↔verde e giallo↔blu (`frontier.cmy`), nero (`frontier.black_lift`,
+  (`frontier.highlight`), bianchi (`frontier.whites`), filtri colore dello scanner magenta↔verde e giallo↔blu (`frontier.cmy`, mezzo tasto Frontier per passo da v3.34), nero (`frontier.black_lift`,
   neutro), texture, chiarezza, grana, halation, aberrazione, vignettatura, falloff, polvere (quantità). Auto = esposizione
   automatica del motore + `frontier_auto_setup`. Doppio tap sul cerchio dello slider (o sull'etichetta) = 0 / off, non il
   default di apertura. Esposizione −3…+3 EV (v3.33; l'Auto resta nel suo −2…+2.5 di prima).
