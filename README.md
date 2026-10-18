@@ -127,7 +127,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   dell'export visto alla stessa misura (prima +33 % con blur 0.45, +7 % con 0.65). Default 2.5× ≈ 80 % della Gold. Grana 0 invariata.
 - **Qualità JPEG** (scheda File, v3.15): 10–100%, scala di jpegli; default 90% = l'export di prima (distance 1.0, identico al byte),
   100% = distance 0.1 (file ~3–4× più grandi). Doppio tap sull'etichetta = 90%. Vale anche per IG.
-- **IG** (solo foto verticali): export per Instagram a 1080 px di larghezza (3:4 → 1080 × 1440 senza bordo; ≈1080 × 1431 con il bordo bianco, attivo di default), senza ritaglio. L'intera pipeline gira a quella dimensione, così la grana nasce alla risoluzione finale: resa a
+- **IG** (solo foto verticali): export per Instagram a 1080 px di larghezza (3:4 → 1080 × 1440 senza bordo; 1080 × 1431 con il bordo bianco, attivo di default: stesso bordo di 14 px su tutti i lati, v3.36; orizzontali e quadrate restano su tela 3:4 con più bordo sopra e sotto), senza ritaglio. L'intera pipeline gira a quella dimensione, così la grana nasce alla risoluzione finale: resa a
   12 MP e poi ridotta si media via; a 1080 sopravvive alla ricompressione di Instagram (test interni, compressione simulata).
 - **Pipeline GPU**: la foto va sulla GPU una volta, come texture 8-bit; lens + ingresso (inversa JPEG o matrice DNG) + matrice colore
   girano come primo pass della catena del motore (shader in `lens-gpu.js`, `Engine.process_frame`) e l'uscita torna già RGBA 8-bit

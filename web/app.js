@@ -690,7 +690,11 @@ async function exportFull(ig = false) {
     const fw = rawPv ? rawPv.fullW : turned ? bitmap.height : bitmap.width, fh = rawPv ? rawPv.fullH : turned ? bitmap.width : bitmap.height;
     const bFrac = $('border').checked ? BORDER_FRACTION : 0;
     // IG: the posted image (iw × ih) fits inside the canvas with a bFrac mat; the film renders at IG_SUPER × that.
-    const igFit = ig ? fitInside(fw, fh, IG_W, IG_H, Math.round(bFrac * IG_H)) : null;
+    const igMat = Math.round(bFrac * IG_H), igFit = ig ? fitInside(fw, fh, IG_W, IG_H, igMat) : null;
+    // v3.36: a portrait photo that fills the width (e.g. 3:4 itself) leaves more mat top / bottom than at the sides on a fixed
+    // 3:4 canvas (14 vs ~19 px); the canvas then shrinks to the photo + the same mat on every side (3:4 -> 1080 x 1431).
+    // Landscape / square photos keep the full 3:4 canvas (the extra mat top / bottom is the point: IG never crops them).
+    const igH = ig && igMat && igFit.ih > igFit.iw ? Math.min(IG_H, igFit.ih + 2 * igMat) : IG_H;
     const scale = ig ? Math.min(1, IG_SUPER * Math.max(igFit.iw, igFit.ih) / Math.max(fw, fh))
       : Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (fw * fh)));
     if (ig) { forceSRGB = true; grainBoost = IG_GRAIN_BOOST; }
@@ -759,14 +763,14 @@ async function exportFull(ig = false) {
       status('Esporto IG: ridimensiono e rendo nitido…');
       const { iw, ih } = igFit, small = downscale(igFull, w, h, iw, ih);
       sharpenForScreen(small, iw, ih);
-      const canvas = new Uint8Array(IG_W * IG_H * 3), matRGB = paperWhite(u);
-      for (let i = 0; i < IG_W * IG_H * 3; i += 3) canvas.set(matRGB, i);
-      const ox = (IG_W - iw) >> 1, oy = (IG_H - ih) >> 1;
+      const canvas = new Uint8Array(IG_W * igH * 3), matRGB = paperWhite(u);
+      for (let i = 0; i < IG_W * igH * 3; i += 3) canvas.set(matRGB, i);
+      const ox = (IG_W - iw) >> 1, oy = (igH - ih) >> 1;
       for (let y = 0; y < ih; y++) canvas.set(small.subarray(y * iw * 3, (y + 1) * iw * 3), ((oy + y) * IG_W + ox) * 3);
-      log(`IG ${w}x${h} -> ${iw}x${ih} on ${IG_W}x${IG_H}`);
-      encoder.postMessage({ cmd: 'start', width: IG_W, height: IG_H, distance, progressive: 2, yuv444: 1, border: 0 });
-      for (let y = 0; y < IG_H; y += 256) {
-        const rows = canvas.slice(y * IG_W * 3, Math.min(IG_H, y + 256) * IG_W * 3);
+      log(`IG ${w}x${h} -> ${iw}x${ih} on ${IG_W}x${igH}`);
+      encoder.postMessage({ cmd: 'start', width: IG_W, height: igH, distance, progressive: 2, yuv444: 1, border: 0 });
+      for (let y = 0; y < igH; y += 256) {
+        const rows = canvas.slice(y * IG_W * 3, Math.min(igH, y + 256) * IG_W * 3);
         encoder.postMessage({ cmd: 'rows', rgb: rows.buffer }, [rows.buffer]);
       }
     }
