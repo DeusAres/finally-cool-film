@@ -138,6 +138,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 - **Polvere e graffi** (`web/lib/dust.js`): procedurali, niente texture. Granelli irregolari (alcuni sfocati), fibre a curvatura
   casuale, rari graffi lungo lo scorrimento della pellicola, in µm sul fotogramma 36 mm, quindi identici in anteprima ed export.
   Stanno sul negativo e, dopo l'inversione, appaiono bianchi. Layer separato: slider e **Rimescola** non ri-renderizzano nulla.
+  Tarati su scansioni reali: quasi solo granelli minuscoli (1–3 px a 12 MP, max ~0.2 mm), fibre rare, sottili, corte e
+  arricciate, graffi rari e interrotti (tratti e pause, leggermente ondulati). I segni più vistosi compaiono solo alzando
+  la quantità: al 27 % pochi granelli piccoli e quasi mai una fibra; a 1 un fotogramma maneggiato senza cura.
   Default 0 (off, v3.33); Rimescola a polvere spenta la accende al 27 %.
 - **Nero** (0..1, default 0, mostrato come 0): neri sollevati dallo scanner, neutri nello spazio scanner.
 - Tocca la riga di stato per il **log**; se la scheda muore durante un export, al riavvio il log si apre da solo.
