@@ -49,7 +49,7 @@ let rendering = false, dirty = false, exporting = false, renderCount = 0;
 
 const ui = () => ({
   ev: +$('ev').value, contrast: +$('contrast').value, highlight: +$('highlight').value, whites: +$('whites').value,
-  mshift: +$('mshift').value, yshift: +$('yshift').value, black: +$('black').value,
+  mshift: +$('mshift').value, yshift: +$('yshift').value, vibrance: +$('vibrance').value, black: +$('black').value,
   grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value, sharp: +$('sharp').value,
   ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value,
   ...(V3 ? { hlc: +$('hlc').value, shadows: +$('shadows').value, v3dodge: $('v3dodge').checked } : {}),   // v3: snapshotted with the rest (export tiles)
@@ -73,7 +73,7 @@ const sceneGain = (u) => 2 ** (u.ev - underEv() + baselineEv());
 
 // Everything else is read at render time and goes through `engine.update`.
 // The film model and the Frontier scanner are the engine's (the positive comes out of it);
-// our input pass only conditions the light (display→scene, exposure, lens, Texture, Chiarezza).
+// our input pass only conditions the light (display→scene, exposure, lens, Texture, Chiarezza, Nitidezza, Vividezza).
 let forceSRGB = false, grainBoost = 1;   // IG export: sRGB output (P3 dulls saturated reds on Instagram); grain compensation
 const outP3 = () => !forceSRGB && !!photo?.preview.p3;
 
@@ -173,7 +173,7 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
   const lens = lensOf(u), expo = sceneGain(u), wb = sceneWb();
   if (gpu) {
     const space = frame.raw ? 'rec2020' : frame.p3 ? 'p3' : 'srgb';
-    return engine.process_frame(V3 ? INPUT_WGSL_V3 : INPUT_WGSL, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb, u.sharp),
+    return engine.process_frame(V3 ? INPUT_WGSL_V3 : INPUT_WGSL, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb, u.sharp, u.vibrance / 100, !!interno()),
       V3 ? v3Gain(u, space) : DISPLAY_GAIN_LUT, w, h, PACK_LUT,
       GRAIN_WGSL, packParams(outP3()), target);
   }
@@ -797,14 +797,14 @@ const signPct = (v) => `${sign(v)}${pct(v)}`;
 const FORMAT = {
   ev: (v) => `${sign(v)}${v.toFixed(1)}`,
   contrast: signPct, highlight: signPct, whites: signPct,
-  mshift: (v) => `${sign(v)}${v}`, yshift: (v) => `${sign(v)}${v}`,
+  mshift: (v) => `${sign(v)}${v}`, yshift: (v) => `${sign(v)}${v}`, vibrance: (v) => (v === 0 ? 'off' : `${v}`),
   grain: mult2, halation: mult,
   ca: pctOff, vignette: pctOff,
   falloff: pct,
   texture: signPct, clarity: signPct, sharp: signPct, dust: pctOff, black: pctOff,
 };
 // v2-calib: contrast / highlight / black defaults are the lab's standard (0); the old look defaults (Contrasto .35, Alte luci .6, Nero .15) are gone with their stages.
-const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, whites: 0, mshift: 0, yshift: 0, black: 0, grain: 2.5, halation: 1, texture: 0.2, clarity: 0, sharp: 0, ca: 1, vignette: 0.12, falloff: 0.18, dust: 0.27 };
+const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, whites: 0, mshift: 0, yshift: 0, vibrance: 0, black: 0, grain: 2.5, halation: 1, texture: 0.2, clarity: 0, sharp: 0, ca: 1, vignette: 0.12, falloff: 0.18, dust: 0.27 };
 const SCATTER_SCALE = 0.5;   // film scatter size multiplier (engine default 1), see renderParams
 // v3.32: dye-cloud blur 0.65 -> 0.45 (reference px, ~12 -> ~8 um): measured on 10 full-frame Gold 200 scans the grain has ~12 % of
 // its power below 40 um wavelength and r50 ~13.5 um; ours had 3 % / 18.6 um (soft). At 0.45

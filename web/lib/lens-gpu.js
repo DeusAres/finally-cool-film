@@ -6,9 +6,9 @@
 // every bilinear tap is interpolated in linear light, as in the CPU path.
 // Output: linear Rec.2020 (p3) or linear sRGB floats, interleaved RGB, for the region.
 import { LENS_CONST, lensGeometry } from './lens.js';
-import { P3_TO_REC2020, LUMA, displayGainWGSL, DISPLAY_GAIN_LUT } from './color.js';
+import { P3_TO_REC2020, LUMA, RGB_TO_XYZ, inv3, displayGainWGSL, DISPLAY_GAIN_LUT } from './color.js';
 import { dodgeWGSL } from './dodge.js';
-import { FRAME_UM, wf } from './util.js';
+import { FRAME_UM, wf, wv3 } from './util.js';
 
 const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
 
@@ -29,6 +29,88 @@ const CLAR_UM = 500, CLAR_K = 1.0, CLAR_UP = 1.0, CLAR_DOWN = 0.6, CLAR_CAP = 0.
 //       sharper edges, no halo, flat noisy areas untouched. No Amount / Radius / Detail / Masking to set.
 //  < 0: towards the base (soft lens), d x SHARP_SOFT x slider, no gate.
 const SHARP_UM = 25, SHARP_MAX = 2.2, SHARP_SOFT = 0.8, SHARP_T0 = 0.03, SHARP_TOL = 0.04, SHARP_KPX_REF = 2000 / 36000;
+// Vividezza (manual only: the slider is the only input, 0..100 -> p.vib.x 0..1; 0 skips the stage, bit-identical to the app without
+// it). A vibrance on the scene light BEFORE the film, after the colour matrix and before the per-channel light gains (wb, so it acts
+// on the subject's colours, never on a light colour); the Gold 200 film and the Frontier keep their own look on a more colourful
+// scene. GPU path only (as Texture / Chiarezza / Nitidezza; preview and export share it). In OkLCh of the engine input (linear
+// Rec.2020 or sRGB, scene-referred: mid grey 0.18 -> L 0.57, as on a display), L and hue kept, chroma only:
+//   added = s x VIB_K x C x (1 - C / VIB_CREF)^2                strong on dull colours, ~0 on saturated ones
+//           x smoothstep(N0(h), N1(h), C / L)                   near-greys (and their casts) untouched: grey stays grey. The film's
+//                                                               neutral zone is much wider on the cool side, in the shadows above all
+//                                                               (measured on the check renders: scene C / L up to 0.06-0.12 at hue
+//                                                               250-300, L ~0.2-0.4, comes out grey (sky-lit rock shadows), ~0.015 for
+//                                                               warm / green: the model's grey balance, toe, cool_neutral_warm), so
+//                                                               the ramp is VIB_N (warm / green) and, in VIB_COOL_H, VIB_N_COOL (dark
+//                                                               to mid, L < VIB_COOL_L[0]) easing to VIB_N_COOL_LIGHT (L > [1])
+//           x smoothstep(VIB_D0, VIB_D1, L)                     deep shadows (sensor chroma noise) untouched
+//           x (1 - VIB_SKIN x skin band)                        scene OkLCh hue VIB_SKIN_H (skin of the check DNGs: ~-10..45 deg in
+//                                                               the scene, 25-48 on the output, ~ Lab 20-60), smooth edges (red hair
+//                                                               sits there too: attenuated alike, no hard cut)
+//   then the added part alone is compressed into the room below the Gold 200 ceiling for the hue, in scene terms (VIB_SCENE_CEIL):
+//   C' = C + room x tanh(added / room), room = max(ceil(h) - C, 0): never above the ceiling, never below the original chroma
+//   (a pixel already over the ceiling gets 0). Last, if the result left the gamut (a channel < 0) it is blended back towards the
+//   original in linear light just enough to stay >= 0.
+// VIB_CEIL: OkLCh chroma ceiling per 10 deg hue bin (centres 5, 15, ... 355 deg), p99 of the 20 real Gold 200 scans in samples/kg200,
+// smoothed (scripts/eval/kg200_chroma_ceiling.py). It is a pure limit (it decides no amount) and an approximation: measured on final
+// scans (film + scanner, display sRGB) but applied here to the scene before the film, by scene hue. The film does not keep chroma
+// (Gold 200 + Frontier lift warm / green scene chroma ~1.5-1.9x, blues ~1x), so the scene limit is VIB_CEIL x VIB_FILM x VIB_MARGIN, VIB_FILM = the
+// scene chroma that came out at the ceiling / the ceiling (p25 per scene hue bin, capped at 1, smoothed; measured on the app's renders
+// at Vividezza 0, same script --film). Exposure, scanner sliders and the scene move the real transfer: verified on output with
+// scripts/eval/vibrance_stats.py. The magenta-violet bins (270-340 deg) are low because the scans hold few saturated purples:
+// Vividezza adds little there.
+const VIB_K = 1.5, VIB_CREF = 0.2, VIB_D0 = 0.1, VIB_D1 = 0.25;
+const VIB_N = [0.015, 0.05], VIB_N_COOL = [0.08, 0.16], VIB_N_COOL_LIGHT = [0.05, 0.1], VIB_COOL_L = [0.4, 0.65];   // C / L ramps
+const VIB_COOL_H = [195, 225, 300, 335];   // cool band, hue (deg): ramps in, full, ramps out
+const VIB_SKIN = 0.85, VIB_SKIN_H = [-25, -5, 45, 65];   // hue (deg, -180..180): protection ramps in -25..-5, full -5..45, ramps out 45..65
+export const VIB_CEIL = [0.1679, 0.1802, 0.1863, 0.1858, 0.1688, 0.1437, 0.1256, 0.1158, 0.1125, 0.1204, 0.1370, 0.1472, 0.1415, 0.1231,
+  0.0997, 0.0813, 0.0755, 0.0792, 0.0841, 0.0849, 0.0806, 0.0737, 0.0678, 0.0677, 0.0754, 0.0822, 0.0762, 0.0608, 0.0492, 0.0443, 0.0414,
+  0.0388, 0.0367, 0.0436, 0.0775, 0.1309];
+export const VIB_FILM = [0.659, 0.660, 0.625, 0.599, 0.612, 0.642, 0.650, 0.636, 0.626, 0.623, 0.619, 0.630, 0.677, 0.756, 0.824, 0.831, 0.804, 0.825,
+  0.884, 0.907, 0.886, 0.867, 0.868, 0.893, 0.939, 0.961, 0.923, 0.846, 0.789, 0.768, 0.765, 0.772, 0.762, 0.706, 0.642, 0.632];   // 9 DNG renders (samples/indigo, default sliders)
+const VIB_MARGIN = 0.9;   // the film transfer varies from photo to photo (exposure, scene): aim below the ceiling, not at it
+// Interno (2 EV under, its own toe / balance): the film lifts warm scene chroma more (transfer 0.30-0.45 at hue 20-70 vs 0.60-0.65,
+// measured on cat2_interno with --film): the scene limit x VIB_INTERNO there (p.vib.z), a pure function of the switch.
+const VIB_INTERNO = 0.6;
+const VIB_SCENE_CEIL = VIB_CEIL.map((c, i) => +(c * VIB_FILM[i] * VIB_MARGIN).toFixed(5));
+// Oklab (Ottosson): XYZ (D65) -> LMS, then cube root and LMS' -> Lab. Engine input RGB -> LMS from color.js's primaries.
+const XYZ_TO_LMS = [[0.8189330101, 0.3618667424, -0.1288597137], [0.0329845436, 0.9293118715, 0.0361456387], [0.0482003018, 0.2643662691, 0.6338517070]];
+const mul3 = (A, B) => A.map((r) => B[0].map((_, j) => r.reduce((s, v, k) => s + v * B[k][j], 0)));
+const TO_LMS = { rec2020: mul3(XYZ_TO_LMS, RGB_TO_XYZ.rec2020), srgb: mul3(XYZ_TO_LMS, RGB_TO_XYZ.srgb) };
+const FROM_LMS = { rec2020: inv3(TO_LMS.rec2020), srgb: inv3(TO_LMS.srgb) };
+const rows3 = (m, v) => `vec3<f32>(dot(${wv3(m[0])}, ${v}), dot(${wv3(m[1])}, ${v}), dot(${wv3(m[2])}, ${v}))`;
+const VIB_WGSL = /* wgsl */`
+var<private> VIB_CEIL: array<f32, ${VIB_CEIL.length}> = array<f32, ${VIB_CEIL.length}>(${VIB_SCENE_CEIL.map(wf).join(', ')});   // scene limit
+fn vibrance(c: vec3<f32>) -> vec3<f32> {        // c: linear engine input (p.vib.y = 1: sRGB primaries, else Rec.2020)
+  let srgb = p.vib.y > 0.5;
+  let lms = select(${rows3(TO_LMS.rec2020, 'c')}, ${rows3(TO_LMS.srgb, 'c')}, srgb);
+  let q = sign(lms) * pow(max(abs(lms), vec3<f32>(1e-30)), vec3<f32>(1.0 / 3.0));
+  let L = dot(vec3<f32>(0.2104542553, 0.7936177850, -0.0040720468), q);
+  let a = dot(vec3<f32>(1.9779984951, -2.4285922050, 0.4505937099), q);
+  let b = dot(vec3<f32>(0.0259040371, 0.7827717662, -0.8086757660), q);
+  let C = length(vec2<f32>(a, b));
+  if (C < 1e-6 || L <= 0.0) { return c; }
+  let h = degrees(atan2(b, a)) + select(0.0, 360.0, b < 0.0);   // 0..360
+  let x = h / ${wf(360 / VIB_CEIL.length)} - 0.5;
+  let i0 = (i32(floor(x)) + ${VIB_CEIL.length}) % ${VIB_CEIL.length};
+  let cmax = mix(VIB_CEIL[i0], VIB_CEIL[(i0 + 1) % ${VIB_CEIL.length}], x - floor(x)) * p.vib.z;
+  let room = cmax - C;
+  if (room <= 0.0) { return c; }
+  let hs = select(h, h - 360.0, h > 180.0);
+  let skin = smoothstep(${wf(VIB_SKIN_H[0])}, ${wf(VIB_SKIN_H[1])}, hs) * (1.0 - smoothstep(${wf(VIB_SKIN_H[2])}, ${wf(VIB_SKIN_H[3])}, hs));
+  let cool = smoothstep(${wf(VIB_COOL_H[0])}, ${wf(VIB_COOL_H[1])}, h) * (1.0 - smoothstep(${wf(VIB_COOL_H[2])}, ${wf(VIB_COOL_H[3])}, h));
+  let lit = smoothstep(${wf(VIB_COOL_L[0])}, ${wf(VIB_COOL_L[1])}, L);
+  let dull = 1.0 - min(C / ${wf(VIB_CREF)}, 1.0);
+  let add = p.vib.x * ${wf(VIB_K)} * C * dull * dull
+    * smoothstep(mix(${wf(VIB_N[0])}, mix(${wf(VIB_N_COOL[0])}, ${wf(VIB_N_COOL_LIGHT[0])}, lit), cool), mix(${wf(VIB_N[1])}, mix(${wf(VIB_N_COOL[1])}, ${wf(VIB_N_COOL_LIGHT[1])}, lit), cool), C / L) * smoothstep(${wf(VIB_D0)}, ${wf(VIB_D1)}, L) * (1.0 - ${wf(VIB_SKIN)} * skin);
+  let k = 1.0 + room * tanh(min(add / room, 10.0)) / C;   // min: tanh as (e^2x - 1) / (e^2x + 1) overflows
+  let q2 = vec3<f32>(L + (0.3963377774 * a + 0.2158037573 * b) * k, L - (0.1055613458 * a + 0.0638541728 * b) * k,
+                     L - (0.0894841775 * a + 1.2914855480 * b) * k);
+  let lms2 = q2 * q2 * q2;
+  let o = select(${rows3(FROM_LMS.rec2020, 'lms2')}, ${rows3(FROM_LMS.srgb, 'lms2')}, srgb);
+  var t = 1.0;                                   // gamut: back towards c (>= 0) just enough to keep every channel >= 0
+  for (var j = 0; j < 3; j++) { if (o[j] < 0.0 && c[j] >= 0.0) { t = min(t, c[j] / (c[j] - o[j])); } }
+  return mix(c, o, t);
+}`;
 
 
 export const INPUT_WGSL = /* wgsl */`
@@ -41,6 +123,7 @@ struct P {
   fx: vec4<f32>,                               // micro-contrast radius (px), Texture strength, Nitidezza gain, frame px per µm
   wb: vec4<f32>,                               // per-channel gains in the engine input space (Interno: real light colour); 1 otherwise; w: Chiarezza contrast
   luma: vec4<f32>,                             // luma weights of the frame's primaries; w = 1: JPEG, apply the display→scene inverse
+  vib: vec4<f32>,                              // x: Vividezza 0..1 (0: stage skipped), y = 1: engine input in sRGB primaries (else Rec.2020), z: ceiling scale (Interno)
 };
 @group(0) @binding(0) var tex: texture_2d<f32>;
 @group(0) @binding(1) var smp: sampler;
@@ -48,6 +131,7 @@ struct P {
 @group(0) @binding(3) var<storage, read_write> outBuf: array<f32>;
 @group(0) @binding(4) var<storage, read> inv: array<f32>;   // color.js DISPLAY_GAIN_LUT
 ${displayGainWGSL('inv')}
+${VIB_WGSL}
 
 fn at(pos: vec2<f32>) -> vec4<f32> {           // pos in frame pixel coords (pixel centres at integers)
   return textureSampleLevel(tex, smp, (pos + 0.5) / p.frame, 0.0);
@@ -181,6 +265,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     c.b *= 1.0 - ${WARM_B} * lost;
   }
   c = vec3<f32>(dot(p.m0.xyz, c), dot(p.m1.xyz, c), dot(p.m2.xyz, c));
+  // Vividezza (VIB_*): on the light reaching the film (lens gain included), before the light gains wb.
+  if (p.vib.x > 0.0 && gainOut > 0.0) { c = vibrance(c * gainOut) / gainOut; }
   let i = (id.y * u32(p.regionW) + id.x) * 3u;
   c *= p.wb.xyz;
   outBuf[i] = c.r * gainOut; outBuf[i + 1u] = c.g * gainOut; outBuf[i + 2u] = c.b * gainOut;
@@ -193,15 +279,15 @@ export const INPUT_WGSL_V3 = INPUT_WGSL
   .replace('\n  c *= p.expo;\n', '\n  c = dodge(c, pos);\n  c *= p.expo;\n');
 
 const IDENTITY = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
-const UNIFORM_FLOATS = 40;
+const UNIFORM_FLOATS = 44;
 
 /**
  * Uniforms of INPUT_WGSL for the region (x0, y0, w, h) of a W×H frame, scaled by `scale`
  * (lens gain); same contract as lens.js extractLens. `space`: primaries of the frame,
  * 'srgb' | 'p3' | 'rec2020' (a raw frame, already scene-linear: no display→scene inverse).
- * `expo`: scene exposure gain; `wb`: per-channel gains in the engine input space.
+ * `expo`: scene exposure gain; `wb`: per-channel gains in the engine input space; `vibrance`: Vividezza 0..1; `interno`: the switch.
  */
-export function inputUniform(W, H, space, x0, y0, w, h, scale, lens, expo, clarity = 0, texture = 0, wb = [1, 1, 1], sharp = 0) {
+export function inputUniform(W, H, space, x0, y0, w, h, scale, lens, expo, clarity = 0, texture = 0, wb = [1, 1, 1], sharp = 0, vibrance = 0, interno = false) {
   const kpx = Math.max(W, H) / FRAME_UM;   // frame px per µm
   const geo = lensGeometry(W, H, lens), M = space === 'p3' ? P3_TO_REC2020 : IDENTITY;
   const u = new Float32Array([
@@ -213,6 +299,7 @@ export function inputUniform(W, H, space, x0, y0, w, h, scale, lens, expo, clari
     MICRO_UM * kpx, texture * MICRO_MAX, sharp * (sharp > 0 ? SHARP_MAX : SHARP_SOFT), kpx,
     ...wb, clarity * (clarity > 0 ? CLAR_UP : CLAR_DOWN),
     ...LUMA[space], space === 'rec2020' ? 0 : 1,
+    Math.max(0, Math.min(1, vibrance)), space === 'srgb' ? 1 : 0, interno ? VIB_INTERNO : 1, 0,
   ]);
   if (u.length !== UNIFORM_FLOATS) throw new Error('inputUniform: layout drift');
   return u;
