@@ -53,7 +53,7 @@ function encodePng(w, h, rgba) {
 }
 
 (async () => {
-  let browser;
+  let browser, beat;
   try {
     if (!baseUrl || !dng || !outPng) throw new Error('usage: node app.cjs <baseUrl> <dngPath> <outPng> [slidersJSON]');
     if (!fs.existsSync(dng)) throw new Error('dng not found: ' + dng);
@@ -64,6 +64,22 @@ function encodePng(w, h, rgba) {
     });
     const page = await browser.newPage({ viewport: { width: 1000, height: 1000 }, acceptDownloads: true });
     page.setDefaultTimeout(TIMEOUT);
+    // Watchdog: every BEAT s print the app's #status (progress: "tile 12/20…"); if it has not changed for STALL s the run is
+    // stuck (lost GPU device, hung WebGPU on SwiftShader): close the browser and fail fast instead of waiting for TIMEOUT.
+    const BEAT = +(process.env.FCF_BEAT_S || 15), STALL = +(process.env.FCF_STALL_S || 180), t0 = Date.now();
+    let lastSt = null, lastChange = Date.now();
+    beat = setInterval(async () => {
+      let st = '?';
+      try { st = (await page.textContent('#status', { timeout: 5000 })) || ''; } catch (e) { /* page busy */ }
+      if (st !== lastSt) { lastSt = st; lastChange = Date.now(); }
+      console.error(`[beat ${Math.round((Date.now() - t0) / 1000)}s] ${st}`);
+      if (Date.now() - lastChange > STALL * 1000) {
+        console.log(`ERR stalled: status unchanged for ${STALL} s: ${st}`);
+        clearInterval(beat);
+        try { await browser.close(); } catch (e) { /* gone */ }
+        process.exit(2);
+      }
+    }, BEAT * 1000);
     page.on('console', (m) => { if (m.type() === 'error') console.error('[console.error]', m.text()); });
     page.on('pageerror', (e) => console.error('[pageerror]', e.message));
     await page.addInitScript(() => {
@@ -102,7 +118,7 @@ function encodePng(w, h, rgba) {
     // special keys: _click: [button ids] clicked in order (each settles); _export: path to save the exported JPEG
     const clicks = sliders._click || [], exportTo = sliders._export, exportBtn = sliders._exportBtn || 'export';
     delete sliders._click; delete sliders._export; delete sliders._exportBtn;
-    const wantRender = Object.keys(sliders).some((k) => k !== 'dust');
+    const wantRender = Object.keys(sliders).some((k) => !['dust', 'quality', 'border'].includes(k));   // these never trigger a render: waiting for one hung
     const all = { ...sliders, dust: 0 };   // dust is an overlay layer, never in the canvas; zero it anyway
     await page.evaluate((s) => {
       for (const [id, v] of Object.entries(s)) {
@@ -136,5 +152,5 @@ function encodePng(w, h, rgba) {
   } catch (e) {
     console.log('ERR ' + (e && e.message || e));
     process.exitCode = 1;
-  } finally { if (browser) await browser.close(); }
+  } finally { clearInterval(beat); if (browser) await browser.close(); }
 })();
