@@ -807,7 +807,8 @@ const FORMAT = {
 const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, whites: 0, mshift: 0, yshift: 0, black: 0, grain: 2.5, halation: 1, texture: 0.2, clarity: 0, sharp: 0, ca: 1, vignette: 0.12, falloff: 0.18, dust: 0.27 };
 const SCATTER_SCALE = 0.5;   // film scatter size multiplier (engine default 1), see renderParams
 // v3.32: dye-cloud blur 0.65 -> 0.45 (reference px, ~12 -> ~8 um): measured on 10 full-frame Gold 200 scans the grain has ~12 % of
-// its power below 40 um wavelength and r50 ~13.5 um; ours had 3 % / 18.6 um (soft). At 0.45: 13 % / 13.7 um.
+// its power below 40 um wavelength and r50 ~13.5 um; ours had 3 % / 18.6 um (soft). At 0.45
+// (with the engine's variance-matched kernel, filming.rs): 12 % / 14.8 um, and the preview matches the export seen at its size.
 const GRAIN_BLUR = 0.45;
 const GRAIN_UNIT = 0.65;   // slider 1× -> engine amount (= old slider 0.25 / old default 0.4)
 const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render

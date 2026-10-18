@@ -111,7 +111,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   l'immagine è identica al pixel a prima.
 - **Grana più fine (v3.32)**: lo spettro della grana delle 10 scansioni Gold a frame intero ha ~12 % di potenza sotto i 40 µm
   di lunghezza d'onda e grumi (r50) di ~13.5 µm; la nostra 3 % / 18.6 µm (troppo morbida, non "a celle" mancanti). Nuvola di
-  colorante 0.65 → 0.45 px di riferimento: 13 % / 13.7 µm. A pari Grana il default 2.5× è ora ~85 % della Gold. Grana 0 invariata.
+  colorante 0.65 → 0.45 px di riferimento: 12 % / 14.8 µm. Il motore ora sceglie il kernel discreto che dà la stessa varianza
+  della sfocatura integrata sul pixel (sotto ~1 px il kernel campionato sfocava troppo poco): l'anteprima non è più più granulosa
+  dell'export visto alla stessa misura (prima +33 % con blur 0.45, +7 % con 0.65). Default 2.5× ≈ 80 % della Gold. Grana 0 invariata.
 - **Qualità JPEG** (scheda File, v3.15): 10–100%, scala di jpegli; default 90% = l'export di prima (distance 1.0, identico al byte),
   100% = distance 0.1 (file ~3–4× più grandi). Doppio tap sull'etichetta = 90%. Vale anche per IG.
 - **IG** (solo foto verticali): export per Instagram a 1080 px di larghezza (3:4 → 1080 × 1440 senza bordo; ≈1080 × 1431 con il bordo bianco, attivo di default), senza ritaglio. L'intera pipeline gira a quella dimensione, così la grana nasce alla risoluzione finale: resa a
