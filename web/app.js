@@ -107,14 +107,12 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
         // v3.20: saturation_warm 0.3 (pale-to-mid yellow-orange / amber of low-sun skies and clouds, hue >~60 so skin and tungsten interiors are not touched); green rotation now full only for near-grey greens;
         // v3.17: green_hue_shift 24 (greens towards yellow-olive, luminance kept; full for dull low-chroma greens, vivid / light foliage keeps 15 %, v3.19),
         // saturation_blue 0.85 (paler upper sky), Y 0.0245 (a step of warmth in mids / shadows), saturation_blue band 8 deg towards violet (less cyan sky), cool_neutral_warm 0.8 (grey-blue cast of dark / mid low-chroma tones, e.g. rock; no yellowing of the lights), v3.18: saturation_blue ramps from linear luma 0.06 (deep blue skies, L* ~45, got no gain), highlight_neutral 0.6 from linear luma 0.38 (cream / yellow-green taken out of pale whites and light tones), Y back to 0.02 (rocks are warmed by cool_neutral_warm 1.0 instead), AutoSetup k_col 0.3 (a lab corrects part of a tungsten cast; daylight frames barely move).
-        // v3.28: Interno = balance M -0.02 / Y +0.04 (lights warm cream / yellow, no magenta on white fur) and cool_neutral_warm off; the
-        // teal toe of v3.21-3.22 is gone (neutral-warm shadows, matched on a user-preferred older Gold render of IDG_20261008_160856_907),
-        // and so is the v3.24 Contrasto scaling of the balance (it let the magenta back at Contrasto > 0). warm_hue_shift / saturation_warm
-        // off (v3.19's sunset tuning turned yellow-orange fur pink).
-        // v3.22: blues closer to Gold skies / seas (references): saturation_blue 1.0 -> 0.15 (pale skies were ~2x the chroma), blue_hue_shift
-        // 17 deg towards cyan on mid / deep blues only (deep sky, sea: teal; pale horizon sky keeps its hue).
-        model: { saturation: 1.01, saturation_blue: 0.15, blue_hue_shift: 17, green_hue_shift: 24, saturation_warm: 0, warm_hue_shift: 0, cool_neutral_warm: interno() ? 0 : 1.0, highlight_neutral: 0.6, balance_cmy: interno() ? [0, -0.02, 0.04] : [0, 0.005, 0.02], sensor_peak_nm: [650, 540, 450], sensor_fwhm_nm: [40, 50, 40],
-                 black_point: 0.012, gradation_a: 6.2, setup_toe_slope: [0.9, 1.0], setup_neutral_ev: 1.5, auto: { k_col: 0.3 } },
+        // Interno (v3.29): the toe keeps Gold's own cast (R 1.9 / B 0.85, neutralised range 2 EV: teal-green deep shadows and dark mids,
+        // warm mids kept), cool_neutral_warm off (it warmed those shadows), balance M -0.02 / Y +0.04 so the lights stay cream / yellow, and
+        // the magenta key goes greener with Contrasto (-0.03 per unit): Contrasto amplifies the scene's red-magenta in the light mids (white
+        // fur turned pink). warm_hue_shift / saturation_warm off for every photo (v3.19's sunset tuning turned yellow-orange fur pink).
+        model: { saturation: 1.01, saturation_blue: 0.15, blue_hue_shift: 17, green_hue_shift: 24, saturation_warm: 0, warm_hue_shift: 0, cool_neutral_warm: interno() ? 0 : 1.0, highlight_neutral: 0.6, balance_cmy: interno() ? [0, -0.02 - 0.03 * Math.max(u.contrast, 0), 0.04] : [0, 0.005, 0.02], sensor_peak_nm: [650, 540, 450], sensor_fwhm_nm: [40, 50, 40],
+                 black_point: 0.012, gradation_a: 6.2, setup_toe_slope: interno() ? [1.9, 0.85] : [0.9, 1.0], setup_neutral_ev: interno() ? 2.0 : 1.5, auto: { k_col: 0.3 } },
       },
     },
     film_render: {

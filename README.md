@@ -93,10 +93,11 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   taglia: vale anche per le orizzontali. La pellicola viene renderizzata al doppio, poi ridotta con Lanczos-3 in luce lineare
   (`web/lib/igout.js`) e resa nitida per schermo (maschera di contrasto sulla luminanza, σ 0.7 px, soglia morbida che non spinge
   la grana, passi limitati a 14 livelli: niente aloni). Gatto: dettaglio +32 %, grana invariata (0.33 → 0.36).
-- **Interno (v3.28)**: tarato su una versione vecchia preferita del gatto (IDG_20261008_160856_907): chiari crema / gialli, ombre
-  neutre-calde, niente magenta sul pelo bianco. Tolti il piede teal (v3.21–3.22), la scala del bilanciamento col Contrasto (v3.24,
-  faceva tornare il magenta) e la rotazione dei caldi della v3.19 (nata per un tramonto particolare, rendeva rosa il pelo
-  giallo-arancio). Pelo (L* 60–80) a*/b* +6.4/+27.5 → +2.6/+27.3, riferimento +1.6/+32.9.
+- **Interno (v3.29)**: ombre profonde e mezzitoni scuri teal-verdi (piede della pellicola), chiari crema / gialli senza magenta.
+  Il pelo bianco del gatto (IDG_20261008_160856_907) diventava rosa per due cause, tolte: la scala del bilanciamento col Contrasto
+  della v3.24 (ora è il contrario: col Contrasto il tasto magenta va più verso il verde) e la rotazione dei caldi della v3.19 (nata
+  per un tramonto particolare, tolta per tutte le foto). Pelo (L* 60–80) a*/b* a Contrasto 0 / +50 / +83: +3.2/+25 · +6.2/+36 ·
+  +4.0/+39 (prima +12/+35, riferimento preferito +1.6/+33); ombre profonde a* −7…−10.
 - **Qualità JPEG** (scheda File, v3.15): 10–100%, scala di jpegli; default 90% = l'export di prima (distance 1.0, identico al byte),
   100% = distance 0.1 (file ~3–4× più grandi). Doppio tap sull'etichetta = 90%. Vale anche per IG.
 - **IG** (solo foto verticali): export per Instagram a 1080 px di larghezza (3:4 → 1080 × 1440 senza bordo; ≈1080 × 1431 con il bordo bianco, attivo di default), senza ritaglio. L'intera pipeline gira a quella dimensione, così la grana nasce alla risoluzione finale: resa a
