@@ -37,14 +37,16 @@ pub const FAST_COUNT_FRAC: f32 = 0.002;
 /// Inter-layer light scatter / DIR coupling: fraction of each layer's grain
 /// deviation replaced by the mean deviation of all three layers (correlated
 /// density noise shared across the dye layers).
-pub const LAYER_COUPLING: f32 = 0.72;
+/// v3.31: 0.72 -> 0.97 (and _HI 0.90 -> 0.97): measured on 15 real Gold 200 scans (samples/kg200) the grain is mostly luma,
+/// chroma / luma ~0.5 at the preview pitch; ours was ~1.0-1.2 (digital colour speckle). Now 0.35-0.45 at Grana 3x.
+pub const LAYER_COUPLING: f32 = 0.97;
 /// Coupling in the lights: from mean developed fraction `COUPLING_P0` (just above mid grey) to
 /// `COUPLING_P1` the coupling rises smoothly to `LAYER_COUPLING_HI`. There the scanner's shoulder
 /// squeezes the luma grain (mid -> +2 EV: luma std /2.4) but the chroma-preserving highlight stage
 /// does not squeeze the inter-channel differences, so chroma/luma noise doubled (1.1 -> 2.0 at
 /// +1/+2 EV, blotchy coloured grain in skies). Only the differential part is reduced; the
 /// common-mode (luma) deviation `mean` is untouched.
-pub const LAYER_COUPLING_HI: f32 = 0.90;
+pub const LAYER_COUPLING_HI: f32 = 0.97;
 pub const COUPLING_P0: f32 = 0.5;
 pub const COUPLING_P1: f32 = 0.6;
 /// Saturated colours (deep blue sky: layers at p 0.37 / 0.49 / 0.57) keep a coloured, blotchy grain because the scanner's
@@ -527,7 +529,7 @@ mod tests {
         for k in [
             "747796405u", "2891336453u", "277803737u", "0x68e31da4u", "0x9e3779b9u", "0x7f4a7c15u",
             "0x9e3779b1u", "0x85ebca6bu", "0x27d4eb2fu", "6.2831855", "EXACT_MAX_MEAN: f32 = 30.0",
-            "MAX_STEPS: u32 = 120u", "LAYER_COUPLING: f32 = 0.72", "LAYER_COUPLING_HI: f32 = 0.9", "COUPLING_P0: f32 = 0.5", "COUPLING_P1: f32 = 0.6", "COUPLING_S0: f32 = 0.12", "COUPLING_S1: f32 = 0.22", "FAST_OD_SHARE: f32 = 0.3", "FAST_K: f32 = 3.3", "FAST_COUNT_FRAC: f32 = 0.002", "1000u + layer", "layer + sl * 10u",
+            "MAX_STEPS: u32 = 120u", "LAYER_COUPLING: f32 = 0.97", "LAYER_COUPLING_HI: f32 = 0.97", "COUPLING_P0: f32 = 0.5", "COUPLING_P1: f32 = 0.6", "COUPLING_S0: f32 = 0.12", "COUPLING_S1: f32 = 0.22", "FAST_OD_SHARE: f32 = 0.3", "FAST_K: f32 = 3.3", "FAST_COUNT_FRAC: f32 = 0.002", "1000u + layer", "layer + sl * 10u",
         ] {
             assert!(src.contains(k), "WGSL missing {k}");
         }

@@ -104,6 +104,11 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   fini dell'export); risultato tenuto dentro min / max dei vicini (niente aloni). In negativo ammorbidisce (obiettivo morbido).
   A +100: acutanza dei bordi +12 % muro, +30 % roccia, +12 % gatto; rumore nelle zone piatte +2 %; nessun bordo creato in più.
   Solo GPU (come Texture e Chiarezza). Default 0: immagine identica al pixel.
+- **Grana (v3.31)**: tarata su 20 scansioni Gold 200 vere (`samples/kg200`, misure con `scripts/eval/grainstats.py` sulle zone
+  piatte). La nostra era 3–4× più debole e, in proporzione, 3–4× più colorata (puntinato digitale, "strato appiccicato").
+  Ora la grana è quasi tutta di luminanza (accoppiamento tra strati 0.72 → 0.97: colore/luma ~1.0 → ~0.45, Gold ~0.5) e il
+  default è Grana 2.5× (~60–70 % della Gold misurata; 4× ≈ Gold). Interno: grana ×1.41 invece di ×2. Con la grana a 0
+  l'immagine è identica al pixel a prima.
 - **Qualità JPEG** (scheda File, v3.15): 10–100%, scala di jpegli; default 90% = l'export di prima (distance 1.0, identico al byte),
   100% = distance 0.1 (file ~3–4× più grandi). Doppio tap sull'etichetta = 90%. Vale anche per IG.
 - **IG** (solo foto verticali): export per Instagram a 1080 px di larghezza (3:4 → 1080 × 1440 senza bordo; ≈1080 × 1431 con il bordo bianco, attivo di default), senza ritaglio. L'intera pipeline gira a quella dimensione, così la grana nasce alla risoluzione finale: resa a

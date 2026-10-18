@@ -804,7 +804,7 @@ const FORMAT = {
   texture: signPct, clarity: signPct, sharp: signPct, dust: pctOff, black: pctOff,
 };
 // v2-calib: contrast / highlight / black defaults are the lab's standard (0); the old look defaults (Contrasto .35, Alte luci .6, Nero .15) are gone with their stages.
-const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, whites: 0, mshift: 0, yshift: 0, black: 0, grain: 1, halation: 1, texture: 0.2, clarity: 0, sharp: 0, ca: 1, vignette: 0.12, falloff: 0.18, dust: 0.27 };
+const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, whites: 0, mshift: 0, yshift: 0, black: 0, grain: 2.5, halation: 1, texture: 0.2, clarity: 0, sharp: 0, ca: 1, vignette: 0.12, falloff: 0.18, dust: 0.27 };
 const SCATTER_SCALE = 0.5;   // film scatter size multiplier (engine default 1), see renderParams
 const GRAIN_UNIT = 0.65;   // slider 1× -> engine amount (= old slider 0.25 / old default 0.4)
 const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render

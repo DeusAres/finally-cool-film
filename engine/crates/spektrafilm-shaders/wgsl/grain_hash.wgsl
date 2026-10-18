@@ -126,10 +126,10 @@ fn binomial(n: f32, p: f32, q: f32, st: ptr<function, u32>) -> f32 {
 const FAST_OD_SHARE: f32 = 0.3;
 const FAST_K: f32 = 3.3;
 const FAST_COUNT_FRAC: f32 = 0.002;
-const LAYER_COUPLING: f32 = 0.72;
+const LAYER_COUPLING: f32 = 0.97;
 // coupling rises to LAYER_COUPLING_HI between mean developed fraction COUPLING_P0 and COUPLING_P1
 // (lights: less coloured grain where the shoulder squeezes luma only); see grain_hash.rs
-const LAYER_COUPLING_HI: f32 = 0.9;
+const LAYER_COUPLING_HI: f32 = 0.97;
 const COUPLING_P0: f32 = 0.5;
 const COUPLING_P1: f32 = 0.6;
 // ... and also with the spread (max - min) of the three developed fractions between COUPLING_S0 and COUPLING_S1 (saturated colours)
