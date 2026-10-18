@@ -100,8 +100,10 @@ function sample(data, W, H, c, x, y) {
  * scene light (color.js displayToScene); without it they are used as-is. Linear Rec.2020 when `p3`,
  * else linear sRGB — same contract as
  * common.js `extractLinear`, which this replaces when a lens is active.
+ * `map` (tilt.js tiltMap, Raddrizza): every tap at output position (x, y) reads the source at map(x, y); the lens stays on the output frame.
  */
-export function extractLens(data, W, H, p3, x0, y0, w, h, scale, geo, inverse = false) {
+export function extractLens(data, W, H, p3, x0, y0, w, h, scale, geo, inverse = false, map = null) {
+  if (map) return extractLensMapped(data, W, H, p3, x0, y0, w, h, scale, geo, inverse, map);
   const { cx, cy, rMax, cov, dR, dB, blur, depth } = geo;
   const M = P3_TO_REC2020;
   const rgb = new Float32Array(w * h * 3);
@@ -142,6 +144,62 @@ export function extractLens(data, W, H, p3, x0, y0, w, h, scale, geo, inverse = 
       let k = scale;
       if (depth > 0) {
         const lost = depth * g;           // fraction of light the lens loses here
+        k *= 1 - lost;
+        R *= 1 + WARM_R * lost;
+        B *= 1 - WARM_B * lost;
+      }
+      if (p3) {
+        rgb[j] = (M[0][0] * R + M[0][1] * G + M[0][2] * B) * k;
+        rgb[j + 1] = (M[1][0] * R + M[1][1] * G + M[1][2] * B) * k;
+        rgb[j + 2] = (M[2][0] * R + M[2][1] * G + M[2][2] * B) * k;
+      } else {
+        rgb[j] = R * k; rgb[j + 1] = G * k; rgb[j + 2] = B * k;
+      }
+    }
+  }
+  return rgb;
+}
+
+/** extractLens with the Raddrizza transform: the same code with every tap bilinear at its mapped source position. */
+function extractLensMapped(data, W, H, p3, x0, y0, w, h, scale, geo, inverse, map) {
+  const { cx, cy, rMax, cov, dR, dB, blur, depth } = geo;
+  const M = P3_TO_REC2020, T = new Float64Array(2);
+  const at = (c, x, y) => { map(x, y, T); return sample(data, W, H, c, T[0], T[1]); };
+  const rgb = new Float32Array(w * h * 3);
+  const caOn = dR > 0;
+  let j = 0;
+  for (let y = y0; y < y0 + h; y++) {
+    const dy = y - cy;
+    for (let x = x0; x < x0 + w; x++, j += 3) {
+      const dx = x - cx, r = Math.sqrt(dx * dx + dy * dy);
+      const fi = (r / rMax) * LUT_N, f0 = fi | 0;
+      const g = f0 >= LUT_N ? cov[LUT_N] : cov[f0] + (cov[f0 + 1] - cov[f0]) * (fi - f0);
+      let R, G, B;
+      if (caOn && r > 0.5) {
+        const ux = dx / r, uy = (dy / r) * ANISO_Y;
+        const oR = dR * g, oB = dB * g, L = blur * g;
+        if (L < 0.5) {
+          R = at(0, x + ux * oR, y + uy * oR); G = at(1, x, y); B = at(2, x + ux * oB, y + uy * oB);
+        } else {
+          const taps = Math.min(CA_TAPS, Math.max(3, Math.ceil(L) + 1));
+          const step = L / (taps - 1), half = L / 2;
+          R = G = B = 0;
+          for (let t = 0; t < taps; t++) {
+            const o = t * step - half;
+            R += at(0, x + ux * (oR + o), y + uy * (oR + o));
+            G += at(1, x + ux * o, y + uy * o);
+            B += at(2, x + ux * (oB + o), y + uy * (oB + o));
+          }
+          R /= taps; G /= taps; B /= taps;
+        }
+      } else {
+        map(x, y, T);
+        R = sample(data, W, H, 0, T[0], T[1]); G = sample(data, W, H, 1, T[0], T[1]); B = sample(data, W, H, 2, T[0], T[1]);
+      }
+      if (inverse) { const k = displayGain(Math.max(R, G, B)); R *= k; G *= k; B *= k; }
+      let k = scale;
+      if (depth > 0) {
+        const lost = depth * g;
         k *= 1 - lost;
         R *= 1 + WARM_R * lost;
         B *= 1 - WARM_B * lost;

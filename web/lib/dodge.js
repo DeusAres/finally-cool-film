@@ -155,7 +155,7 @@ export function dodgeArray(gainLut, d, prm, hlc = 0, shadows = 0, highlight = 0,
 export const dodgeWGSL = (arr, at0) => /* wgsl */`
 fn dodgeBaseAt(pos: vec2<f32>, map: u32) -> f32 {
   let bw = ${arr}[${at0}u + 1u]; let bh = ${arr}[${at0}u + 2u];
-  let q = clamp((pos + 0.5) / p.frame * vec2<f32>(bw, bh) - 0.5, vec2<f32>(0.0), vec2<f32>(bw - 1.0, bh - 1.0));
+  let q = clamp((src(pos) + 0.5) / p.frame * vec2<f32>(bw, bh) - 0.5, vec2<f32>(0.0), vec2<f32>(bw - 1.0, bh - 1.0));   // src: Raddrizza (lens-gpu.js)
   let i0 = vec2<u32>(floor(q)); let i1 = min(i0 + 1u, vec2<u32>(u32(bw) - 1u, u32(bh) - 1u)); let f = q - floor(q);
   let W = u32(bw); let o = ${at0}u + ${HDR}u + map * W * u32(bh);
   let a = mix(${arr}[o + i0.y * W + i0.x], ${arr}[o + i0.y * W + i1.x], f.x);
@@ -214,8 +214,9 @@ fn dodge(c0: vec3<f32>, pos: vec2<f32>) -> vec3<f32> {
 }`;
 
 /** CPU fallback (no WebGPU): dodgeWGSL on a linear RGB region `rgb` (w×h×3, already × `expo`) at
- * (x0, y0) of an fw×fh frame, with the array from dodgeArray (header at `at0`). In place. */
-export function dodgeCPU(rgb, w, h, x0, y0, fw, fh, expo, arr, at0, luma) {
+ * (x0, y0) of an fw×fh frame, with the array from dodgeArray (header at `at0`). In place. `map` (tilt.js tiltMap, Raddrizza): the
+ * base maps are read at the pixel's source position (as dodgeBaseAt on the GPU). */
+export function dodgeCPU(rgb, w, h, x0, y0, fw, fh, expo, arr, at0, luma, map = null) {
   const on = arr[at0], bw = arr[at0 + 1], bh = arr[at0 + 2];
   if (!bw) return;
   const knee = arr[at0 + 3], A = arr[at0 + 4], rho = arr[at0 + 5], hk = arr[at0 + 6];
@@ -237,10 +238,16 @@ export function dodgeCPU(rgb, w, h, x0, y0, fw, fh, expo, arr, at0, luma) {
     }
   }
   const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  const T = new Float64Array(2);
   for (let y = 0, j = 0; y < h; y++) {
-    const qy = Math.min(bh - 1, Math.max(0, (y0 + y + 0.5) / fh * bh - 0.5)), iy = Math.floor(qy), iy1 = Math.min(iy + 1, bh - 1), fy = qy - iy;
+    let qy = Math.min(bh - 1, Math.max(0, (y0 + y + 0.5) / fh * bh - 0.5)), iy = Math.floor(qy), iy1 = Math.min(iy + 1, bh - 1), fy = qy - iy;
     for (let x = 0; x < w; x++, j += 3) {
-      const qx = Math.min(bw - 1, Math.max(0, (x0 + x + 0.5) / fw * bw - 0.5)), ix = Math.floor(qx), ix1 = Math.min(ix + 1, bw - 1), fx = qx - ix;
+      let px = x0 + x;
+      if (map) {
+        map(x0 + x, y0 + y, T); px = T[0];
+        qy = Math.min(bh - 1, Math.max(0, (T[1] + 0.5) / fh * bh - 0.5)); iy = Math.floor(qy); iy1 = Math.min(iy + 1, bh - 1); fy = qy - iy;
+      }
+      const qx = Math.min(bw - 1, Math.max(0, (px + 0.5) / fw * bw - 0.5)), ix = Math.floor(qx), ix1 = Math.min(ix + 1, bw - 1), fx = qx - ix;
       const a = arr[o + iy * bw + ix] + (arr[o + iy * bw + ix1] - arr[o + iy * bw + ix]) * fx;
       const b = arr[o + iy1 * bw + ix] + (arr[o + iy1 * bw + ix1] - arr[o + iy1 * bw + ix]) * fx;
       const B = a + (b - a) * fy;

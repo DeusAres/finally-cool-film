@@ -13,6 +13,8 @@ import { LUMA } from './lib/color.js';
 import { downscale, sharpenForScreen, fitInside } from './lib/igout.js';
 import { dustField, drawDust, compositeDust } from './lib/dust.js';
 import { GRAIN_WGSL, packParams, toP3CPU } from './lib/grain.js';
+import { tiltMap, tiltRGBA } from './lib/tilt.js';
+import { tiltRuler } from './lib/ruler.js';
 
 const PREVIEW_LONG_SIDE = 2000;   // display canvas cap (bigger canvases make iOS compositing crash when zoomed)
 const FILM_FORMAT_MM = 35;        // engine default; sets the physical pixel size
@@ -36,7 +38,7 @@ const matBase = (b, k) => [0, -1, 1, -2, 2, -3, 3].map((d) => Math.max(1, b + d)
   .reduce((best, c) => (Math.abs(c * k - Math.round(c * k)) < Math.abs(best * k - Math.round(best * k)) - 1e-9 ? c : best));
 
 const $ = (id) => document.getElementById(id);
-const stage = $('stage'), view = $('view');
+const stage = $('stage'), view = $('view'), tiltGrid = $('tiltGrid');
 const ctx = view.getContext('2d', { colorSpace: 'display-p3' });
 
 let gpu = false;
@@ -54,7 +56,7 @@ const ui = () => ({
   ev: +$('ev').value, contrast: +$('contrast').value, highlight: +$('highlight').value, whites: +$('whites').value,
   mshift: +$('mshift').value, yshift: +$('yshift').value, vibrance: +$('vibrance').value, temp: +$('temp').value, black: +$('black').value,
   grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value, sharp: +$('sharp').value,
-  ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value,
+  ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value, tilt: +$('tilt').value,
   ...(V3 ? { hlc: +$('hlc').value, shadows: +$('shadows').value, v3dodge: $('v3dodge').checked } : {}),   // v3: snapshotted with the rest (export tiles)
 });
 // CA slider is quadratic: realistic (subtle) amounts get most of the travel.
@@ -203,18 +205,19 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
   const lens = lensOf(u), expo = sceneGain(u);
   if (gpu) {
     const space = frame.raw ? 'rec2020' : frame.p3 ? 'p3' : 'srgb', wb = sceneWb(undefined, space === 'srgb' ? 'srgb' : 'rec2020', u.temp);
-    return engine.process_frame(V3 ? INPUT_WGSL_V3 : INPUT_WGSL, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb, u.sharp, u.vibrance / 100, !!interno()),
+    return engine.process_frame(V3 ? INPUT_WGSL_V3 : INPUT_WGSL, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb, u.sharp, u.vibrance / 100, !!interno(), u.tilt),
       V3 ? v3Gain(u, space) : DISPLAY_GAIN_LUT, w, h, PACK_LUT,
       GRAIN_WGSL, packParams(outP3()), target);
   }
-  const rgb = lensActive(lens)
-    ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, expo, lensGeometry(frame.w, frame.h, lens), true)
+  const map = tiltMap(frame.w, frame.h, u.tilt);   // Raddrizza (tilt.js); null at 0
+  const rgb = lensActive(lens) || map
+    ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, expo, lensGeometry(frame.w, frame.h, lens), true, map)
     : extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, expo, true);
   if (u.temp) {   // Temperatura luce (the GPU applies it as the input pass's wb gains)
     const g = lightGains(u.temp, frame.p3 ? 'rec2020' : 'srgb');
     for (let i = 0; i < rgb.length; i += 3) { rgb[i] *= g[0]; rgb[i + 1] *= g[1]; rgb[i + 2] *= g[2]; }
   }
-  if (V3) dodgeCPU(rgb, w, h, x0, y0, frame.w, frame.h, expo, v3Gain(u, frame.p3 ? 'p3' : 'srgb'), DISPLAY_GAIN_LUT.length, LUMA[frame.p3 ? 'rec2020' : 'srgb']);
+  if (V3) dodgeCPU(rgb, w, h, x0, y0, frame.w, frame.h, expo, v3Gain(u, frame.p3 ? 'p3' : 'srgb'), DISPLAY_GAIN_LUT.length, LUMA[frame.p3 ? 'rec2020' : 'srgb'], map);
   const out = engine.process(rgb, w, h), d32 = new Uint32Array(target.buffer, target.byteOffset, w * h);
   const px = new Float32Array(3), p3 = outP3();
   for (let p = 0, j = 0; p < w * h; p++, j += 3) {
@@ -369,12 +372,21 @@ function dustIntoStrip(strip, w, h, y0, rows, a, marks) {
 let dustStripCanvas = null;
 
 let showingBefore = false;
+/** The 'before' view (A/B, a fresh preview): the source as decoded, turned and cropped like the render when Raddrizza is set. */
+function beforeImage() {
+  const pv = photo.preview, deg = +$('tilt').value;
+  if (!deg) return pv.before;
+  if (photo.beforeTilt?.pv !== pv || photo.beforeTilt.deg !== deg) {
+    photo.beforeTilt = { pv, deg, img: new ImageData(tiltRGBA(pv.before.data, pv.w, pv.h, deg), pv.w, pv.h, pv.p3 ? { colorSpace: 'display-p3' } : undefined) };
+  }
+  return photo.beforeTilt.img;
+}
 function showBefore(on) {
   if (!photo?.after) return;
   if (on === showingBefore) return;
   showingBefore = on;
   drawDustLayer();
-  const img = on ? photo.preview.before : photo.after;
+  const img = on ? beforeImage() : photo.after;
   ctx.putImageData(img, 0, 0);
   drawHistogram(img);
   $('badge').style.display = on ? 'block' : 'none';
@@ -391,6 +403,7 @@ let zoom = 1, panX = 0, panY = 0, fitted = true;
 
 function applyTransform() {
   view.style.transform = dustLayer.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+  if (tiltGrid && !tiltGrid.hidden) placeGrid();
   // 100% = one image pixel per device pixel.
   $('zoomLabel').textContent = photo ? `${Math.round(zoom * devicePixelRatio * 100)}%` : '';
 }
@@ -529,7 +542,7 @@ async function loadPhoto(file) {
       preview.before = new ImageData(preview.data, preview.w, preview.h, { colorSpace: 'display-p3' });
       log(`raw ${raw.fullW}x${raw.fullH}, preview ${raw.w}x${raw.h}, orientation ${raw.orientation}, baseline ${raw.baseline} EV, ${Math.round(performance.now() - t)} ms`);
       photo?.bitmap?.close();
-      $('indoor').checked = false; rotPending = 0;
+      $('indoor').checked = false; rotPending = 0; resetTilt();
       photo = { file, bitmap: null, preview, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file), rot: 0 };
       uploadRaw(sf, raw);
     } else {
@@ -544,7 +557,7 @@ async function loadPhoto(file) {
       } catch (e) { bitmap.close(); throw e; }
       log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
       photo?.bitmap?.close();   // full-resolution decode of the previous photo
-      $('indoor').checked = false; rotPending = 0;
+      $('indoor').checked = false; rotPending = 0; resetTilt();
       photo = { file, bitmap, preview, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file), rot: 0 };
       if (gpu) {
         uploadFrame(preview.data, preview.w, preview.h);
@@ -572,8 +585,9 @@ function showPreview() {
   view.style.width = preview.w + 'px'; view.style.height = preview.h + 'px';
   view.style.display = 'block'; $('empty').style.display = 'none'; $('tools').hidden = false;
   drawDustLayer();
-  ctx.putImageData(preview.before, 0, 0);
-  drawHistogram(preview.before);
+  const before = beforeImage();
+  ctx.putImageData(before, 0, 0);
+  drawHistogram(before);
   fitToScreen();
 }
 
@@ -623,6 +637,28 @@ $('rotL').addEventListener('click', () => rotate(-1));
   out();
 }
 $('rotR').addEventListener('click', () => rotate(1));
+
+// ---------- transform: Raddrizza (tilt) ----------
+// Tape-measure dial (lib/ruler.js) over the hidden #tilt range input: the angle goes into the input pass (lib/tilt.js) of the
+// preview and the export. It is relative to the displayed frame, so it stays across the quarter turns (rotations about the same
+// centre commute); a new photo and Azzera impostazioni set it to 0. While it is dragged, a thirds grid lies over the photo.
+function placeGrid() {
+  const s = stage.getBoundingClientRect(), v = view.getBoundingClientRect();
+  Object.assign(tiltGrid.style, { left: `${v.left - s.left}px`, top: `${v.top - s.top}px`, width: `${v.width}px`, height: `${v.height}px` });
+}
+let gridOn = false;
+const tiltDial = tiltRuler($('tiltRuler'), $('tilt'), $('tiltOut'), {
+  onDrag: (on) => {
+    gridOn = on && !!photo;
+    if (gridOn) { tiltGrid.hidden = false; placeGrid(); requestAnimationFrame(() => tiltGrid.classList.toggle('on', gridOn)); }
+    else tiltGrid.classList.remove('on');
+  },
+});
+tiltGrid.addEventListener('transitionend', () => { if (!gridOn) tiltGrid.hidden = true; });
+$('tilt').addEventListener('input', () => { if (photo) render(); });
+$('tiltLabel').addEventListener('dblclick', () => tiltDial.set(0));
+/** Back to 0 without a render (new photo: its own first render follows). */
+function resetTilt() { $('tilt').value = 0; tiltDial.sync(); }
 
 async function runAuto() {
   // render() returns early while another render / export is in flight: wait first (the engine is shared).
@@ -927,6 +963,7 @@ $('resetAll').addEventListener('click', () => {
   for (const id of ids) $(id).value = 0;
   syncOutputs();
   if (V3) for (const id of ['hlc', 'shadows']) $(id).dispatchEvent(new Event('input'));
+  resetTilt();
   if (photo) { drawDustLayer(); render(); }
 });
 $('export').addEventListener('click', () => exportFull());

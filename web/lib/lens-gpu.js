@@ -9,6 +9,7 @@ import { LENS_CONST, lensGeometry } from './lens.js';
 import { P3_TO_REC2020, LUMA, RGB_TO_XYZ, inv3, displayGainWGSL, DISPLAY_GAIN_LUT } from './color.js';
 import { dodgeWGSL } from './dodge.js';
 import { FRAME_UM, wf, wv3 } from './util.js';
+import { tiltCoef } from './tilt.js';
 
 const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
 
@@ -124,6 +125,7 @@ struct P {
   wb: vec4<f32>,                               // per-channel gains in the engine input space (Interno: real light colour); 1 otherwise; w: Chiarezza contrast
   luma: vec4<f32>,                             // luma weights of the frame's primaries; w = 1: JPEG, apply the display→scene inverse
   vib: vec4<f32>,                              // x: Vividezza 0..1 (0: stage skipped), y = 1: engine input in sRGB primaries (else Rec.2020), z: ceiling scale (Interno)
+  tilt: vec4<f32>,                             // Raddrizza (tilt.js): x = k cos, y = k sin, z = 1 on (0: no transform at all)
 };
 @group(0) @binding(0) var tex: texture_2d<f32>;
 @group(0) @binding(1) var smp: sampler;
@@ -133,8 +135,13 @@ struct P {
 ${displayGainWGSL('inv')}
 ${VIB_WGSL}
 
-fn at(pos: vec2<f32>) -> vec4<f32> {           // pos in frame pixel coords (pixel centres at integers)
-  return textureSampleLevel(tex, smp, (pos + 0.5) / p.frame, 0.0);
+fn src(pos: vec2<f32>) -> vec2<f32> {          // Raddrizza: output frame px -> source frame px (tilt.js); identity when off
+  if (p.tilt.z == 0.0) { return pos; }
+  let c = (p.frame - 1.0) * 0.5; let d = pos - c;
+  return c + vec2<f32>(p.tilt.x * d.x + p.tilt.y * d.y, p.tilt.x * d.y - p.tilt.y * d.x);
+}
+fn at(pos: vec2<f32>) -> vec4<f32> {           // pos in (output) frame pixel coords (pixel centres at integers)
+  return textureSampleLevel(tex, smp, (src(pos) + 0.5) / p.frame, 0.0);
 }
 fn box4(q: vec2<f32>, o: f32) -> vec3<f32> {   // four diagonal bilinear taps at ±o, averaged
   return 0.25 * (at(q + vec2<f32>(o, o)).rgb + at(q + vec2<f32>(-o, o)).rgb
@@ -279,17 +286,18 @@ export const INPUT_WGSL_V3 = INPUT_WGSL
   .replace('\n  c *= p.expo;\n', '\n  c = dodge(c, pos);\n  c *= p.expo;\n');
 
 const IDENTITY = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
-const UNIFORM_FLOATS = 44;
+const UNIFORM_FLOATS = 48;
 
 /**
  * Uniforms of INPUT_WGSL for the region (x0, y0, w, h) of a W×H frame, scaled by `scale`
  * (lens gain); same contract as lens.js extractLens. `space`: primaries of the frame,
  * 'srgb' | 'p3' | 'rec2020' (a raw frame, already scene-linear: no display→scene inverse).
- * `expo`: scene exposure gain; `wb`: per-channel gains in the engine input space; `vibrance`: Vividezza 0..1; `interno`: the switch.
+ * `expo`: scene exposure gain; `wb`: per-channel gains in the engine input space; `vibrance`: Vividezza 0..1; `interno`: the switch;
+ * `tilt`: Raddrizza angle in degrees (tilt.js; 0: no transform).
  */
-export function inputUniform(W, H, space, x0, y0, w, h, scale, lens, expo, clarity = 0, texture = 0, wb = [1, 1, 1], sharp = 0, vibrance = 0, interno = false) {
+export function inputUniform(W, H, space, x0, y0, w, h, scale, lens, expo, clarity = 0, texture = 0, wb = [1, 1, 1], sharp = 0, vibrance = 0, interno = false, tilt = 0) {
   const kpx = Math.max(W, H) / FRAME_UM;   // frame px per µm
-  const geo = lensGeometry(W, H, lens), M = space === 'p3' ? P3_TO_REC2020 : IDENTITY;
+  const geo = lensGeometry(W, H, lens), M = space === 'p3' ? P3_TO_REC2020 : IDENTITY, ab = tiltCoef(W, H, tilt);
   const u = new Float32Array([
     W, H, x0, y0,
     geo.cx, geo.cy, geo.rMax, geo.falloff,
@@ -300,6 +308,7 @@ export function inputUniform(W, H, space, x0, y0, w, h, scale, lens, expo, clari
     ...wb, clarity * (clarity > 0 ? CLAR_UP : CLAR_DOWN),
     ...LUMA[space], space === 'rec2020' ? 0 : 1,
     Math.max(0, Math.min(1, vibrance)), space === 'srgb' ? 1 : 0, interno ? VIB_INTERNO : 1, 0,
+    ...(ab ? [ab[0], ab[1], 1, 0] : [0, 0, 0, 0]),
   ]);
   if (u.length !== UNIFORM_FLOATS) throw new Error('inputUniform: layout drift');
   return u;

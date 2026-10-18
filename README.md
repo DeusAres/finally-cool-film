@@ -49,6 +49,13 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 - **Trasforma** (v3.14): rotazione di 90° a sinistra / destra, per JPEG, HEIC, DNG e ORF, in anteprima e in export. Applicata alla
   sorgente (canvas per le immagini, mappatura degli indici dopo l'orientamento EXIF per i raw): dodge, AutoSetup, grana ed export
   vedono un fotogramma già dritto; slider ed esposizione restano.
+- **Raddrizza** (Trasforma): righello a scorrimento stile iPhone (tacca ogni 1°, numero ogni 5°, ±45° al decimo di grado; trascina,
+  rotella, frecce; scatta su 0 vicino allo zero; doppio tocco = 0; griglia dei terzi sulla foto mentre trascini). La foto ruota
+  attorno al centro e viene ingrandita quanto basta perché non resti nessun angolo vuoto (stesso formato e stessa dimensione in
+  uscita). È una trasformazione del campionamento nel passo d'ingresso (lib/tilt.js, GPU e CPU): vignettatura / caduta / aberrazione,
+  grana, polvere e bordo restano sul fotogramma d'uscita; anteprima ed export usano le coordinate del fotogramma intero. L'angolo
+  resta con la rotazione di 90°, torna a 0 con una nuova foto o con Azzera impostazioni. Esposizione Auto / AutoSetup / mappa del
+  dodge sono misurate sul fotogramma intero (raddrizzare non cambia i toni). A 0° nessuna trasformazione (identico a prima).
 - **Esporta**: piena risoluzione (max 12.5 MP) a tile 1024 px, una striscia alla volta passata in streaming a jpegli
   (worker, distance 1.0, 4:4:4, baseline sopra 6 MP perché il progressive tiene tutti i coefficienti DCT in heap),
   EXIF dell'originale preservati, download diretto.
