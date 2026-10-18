@@ -2,3 +2,4 @@ engine/target/
 web/pkg/
 node_modules/
 eval/out/
+__pycache__/
