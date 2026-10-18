@@ -41,9 +41,23 @@ def free_port():
         return s.getsockname()[1]
 
 
+def pinned(photo):
+    """A copy of the photo with a fixed mtime: the app's grain seed hashes name | size | lastModified, so a fresh checkout (other
+    mtimes) would otherwise render a different grain and no two runs could be compared pixel for pixel."""
+    d = os.path.join(CACHE, 'photos')
+    os.makedirs(d, exist_ok=True)
+    dst = os.path.join(d, os.path.basename(photo))
+    src = os.path.join(ROOT, photo)
+    if not os.path.exists(dst) or os.path.getsize(dst) != os.path.getsize(src):
+        with open(src, 'rb') as f, open(dst, 'wb') as g:
+            g.write(f.read())
+    os.utime(dst, (1_700_000_000, 1_700_000_000))
+    return dst
+
+
 def render(port, photo, ui, out_png):
     r = subprocess.run(['node', os.path.join(ROOT, 'scripts', 'eval', 'render.cjs'), f'http://127.0.0.1:{port}/index.html',
-                        os.path.join(ROOT, photo), out_png, json.dumps(ui)], capture_output=True, text=True)
+                        pinned(photo), out_png, json.dumps(ui)], capture_output=True, text=True)
     line = next((l for l in (r.stdout + r.stderr).splitlines() if l.startswith(('OK', 'ERR'))), 'ERR no output')
     return line
 

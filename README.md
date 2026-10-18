@@ -98,6 +98,12 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   della v3.24 (ora è il contrario: col Contrasto il tasto magenta va più verso il verde) e la rotazione dei caldi della v3.19 (nata
   per un tramonto particolare, tolta per tutte le foto). Pelo (L* 60–80) a*/b* a Contrasto 0 / +50 / +83: +3.2/+25 · +6.2/+36 ·
   +4.0/+39 (prima +12/+35, riferimento preferito +1.6/+33); ombre profonde a* −7…−10.
+- **Nitidezza (v3.30)**: un solo slider (−100…+100) al posto di Quantità / Raggio / Dettaglio / Maschera. Agisce sulla luce della
+  scena *prima della pellicola*, quindi la grana (che nasce dopo, nel negativo) non viene mai resa più nitida; raggio fisso sul
+  fotogramma (25 µm: uguale in anteprima ed export); soglia automatica sul rumore del sensore (più alta nelle ombre e sui pixel più
+  fini dell'export); risultato tenuto dentro min / max dei vicini (niente aloni). In negativo ammorbidisce (obiettivo morbido).
+  A +100: acutanza dei bordi +12 % muro, +30 % roccia, +12 % gatto; rumore nelle zone piatte +2 %; nessun bordo creato in più.
+  Solo GPU (come Texture e Chiarezza). Default 0: immagine identica al pixel.
 - **Qualità JPEG** (scheda File, v3.15): 10–100%, scala di jpegli; default 90% = l'export di prima (distance 1.0, identico al byte),
   100% = distance 0.1 (file ~3–4× più grandi). Doppio tap sull'etichetta = 90%. Vale anche per IG.
 - **IG** (solo foto verticali): export per Instagram a 1080 px di larghezza (3:4 → 1080 × 1440 senza bordo; ≈1080 × 1431 con il bordo bianco, attivo di default), senza ritaglio. L'intera pipeline gira a quella dimensione, così la grana nasce alla risoluzione finale: resa a

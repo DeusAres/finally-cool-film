@@ -22,6 +22,13 @@ const MICRO_UM = 60, MICRO_K = 0.4, MICRO_MID_STOPS = 2.5, MICRO_MAX = 0.8;
 // before the film, so the film's own curve rolls the result off. Below 0 it flattens the local tones towards their base (softer,
 // no veil, no blur of the edges).
 const CLAR_UM = 500, CLAR_K = 1.0, CLAR_UP = 1.0, CLAR_DOWN = 0.6, CLAR_CAP = 0.7, CLAR_MID_STOPS = 3.5;
+// Nitidezza (v3.30, one slider, -1..+1): edge acutance in scene light BEFORE the film, so the film's grain (added in the negative,
+// later) is never sharpened. Base = Gaussian-like 17 taps at SHARP_UM (1 + 2 rings), detail d = log luma - base.
+//  > 0: d x SHARP_MAX x slider, gated by a sensor-noise threshold (SHARP_T0 log2 at the preview pitch, x2 per 2 stops below mid
+//       grey up to x4, x the pixel pitch vs preview: finer export pixels are noisier), result clamped to the local min / max (+-SHARP_TOL):
+//       sharper edges, no halo, flat noisy areas untouched. No Amount / Radius / Detail / Masking to set.
+//  < 0: towards the base (soft lens), d x SHARP_SOFT x slider, no gate.
+const SHARP_UM = 25, SHARP_MAX = 2.2, SHARP_SOFT = 0.8, SHARP_T0 = 0.03, SHARP_TOL = 0.04, SHARP_KPX_REF = 2000 / 36000;
 
 
 export const INPUT_WGSL = /* wgsl */`
@@ -31,7 +38,7 @@ struct P {
   dR: f32, dB: f32, blur: f32, depth: f32,
   scale: f32, expo: f32, regionW: f32, regionH: f32,   // lens gain; scene exposure gain (Esposizione, Interno, DNG baseline)
   m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, // frame primaries → engine input primaries, rows (xyz)
-  fx: vec4<f32>,                               // micro-contrast radius (px), Texture strength, (unused), frame px per µm
+  fx: vec4<f32>,                               // micro-contrast radius (px), Texture strength, Nitidezza gain, frame px per µm
   wb: vec4<f32>,                               // per-channel gains in the engine input space (Interno: real light colour); 1 otherwise; w: Chiarezza contrast
   luma: vec4<f32>,                             // luma weights of the frame's primaries; w = 1: JPEG, apply the display→scene inverse
 };
@@ -102,6 +109,26 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
       acc += w * q / yq; wt += w;
     }
     c = y0 * acc / wt;
+  }
+  // Nitidezza (SHARP_UM): see the constants. p.fx.z = gain (+ SHARP_MAX x slider / - SHARP_SOFT x slider).
+  if (p.fx.z != 0.0) {
+    let R = max(${wf(SHARP_UM)} * p.fx.w, 0.7);
+    let lc = log2(max(dot(at(pos).rgb, p.luma.xyz), 1e-5));
+    var s1 = 0.0; var s2 = 0.0; var lo = lc; var hi = lc;
+    for (var t = 0; t < 8; t++) {
+      let a1 = f32(t) * 0.7853982;
+      let q1 = log2(max(dot(at(pos + vec2<f32>(cos(a1), sin(a1)) * R).rgb, p.luma.xyz), 1e-5));
+      let q2 = log2(max(dot(at(pos + vec2<f32>(cos(a1 + 0.3926991), sin(a1 + 0.3926991)) * 2.0 * R).rgb, p.luma.xyz), 1e-5));
+      s1 += q1; s2 += q2; lo = min(lo, q1); hi = max(hi, q1);
+    }
+    let d = lc - (lc + 0.6 * s1 + 0.25 * s2) / (1.0 + 0.6 * 8.0 + 0.25 * 8.0);
+    var dl = p.fx.z * d;
+    if (p.fx.z > 0.0) {
+      let thr = ${wf(SHARP_T0)} * clamp(exp2(0.5 * (-2.47 - lc)), 1.0, 4.0) * max(p.fx.w / ${wf(SHARP_KPX_REF)}, 0.5);
+      let gate = smoothstep(thr, 3.0 * thr, abs(d));
+      dl = clamp(lc + dl * gate, lo - ${wf(SHARP_TOL)}, hi + ${wf(SHARP_TOL)}) - lc;
+    }
+    c *= exp2(dl);
   }
   // Texture = micro-contrast (MICRO_UM): local contrast in log luminance at the
   // scale of film adjacency (developer / DIR inhibitor diffusion at edges).
@@ -174,7 +201,7 @@ const UNIFORM_FLOATS = 40;
  * 'srgb' | 'p3' | 'rec2020' (a raw frame, already scene-linear: no display→scene inverse).
  * `expo`: scene exposure gain; `wb`: per-channel gains in the engine input space.
  */
-export function inputUniform(W, H, space, x0, y0, w, h, scale, lens, expo, clarity = 0, texture = 0, wb = [1, 1, 1]) {
+export function inputUniform(W, H, space, x0, y0, w, h, scale, lens, expo, clarity = 0, texture = 0, wb = [1, 1, 1], sharp = 0) {
   const kpx = Math.max(W, H) / FRAME_UM;   // frame px per µm
   const geo = lensGeometry(W, H, lens), M = space === 'p3' ? P3_TO_REC2020 : IDENTITY;
   const u = new Float32Array([
@@ -183,7 +210,7 @@ export function inputUniform(W, H, space, x0, y0, w, h, scale, lens, expo, clari
     geo.dR, geo.dB, geo.blur, geo.depth,
     scale, expo, w, h,
     ...M[0], 0, ...M[1], 0, ...M[2], 0,
-    MICRO_UM * kpx, texture * MICRO_MAX, 0, kpx,
+    MICRO_UM * kpx, texture * MICRO_MAX, sharp * (sharp > 0 ? SHARP_MAX : SHARP_SOFT), kpx,
     ...wb, clarity * (clarity > 0 ? CLAR_UP : CLAR_DOWN),
     ...LUMA[space], space === 'rec2020' ? 0 : 1,
   ]);
