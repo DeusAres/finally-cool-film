@@ -49,7 +49,7 @@ let rendering = false, dirty = false, exporting = false, renderCount = 0;
 
 const ui = () => ({
   ev: +$('ev').value, contrast: +$('contrast').value, highlight: +$('highlight').value, whites: +$('whites').value,
-  mshift: +$('mshift').value, yshift: +$('yshift').value, vibrance: +$('vibrance').value, black: +$('black').value,
+  mshift: +$('mshift').value, yshift: +$('yshift').value, vibrance: +$('vibrance').value, temp: +$('temp').value, black: +$('black').value,
   grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value, sharp: +$('sharp').value,
   ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value,
   ...(V3 ? { hlc: +$('hlc').value, shadows: +$('shadows').value, v3dodge: $('v3dodge').checked } : {}),   // v3: snapshotted with the rest (export tiles)
@@ -66,7 +66,33 @@ const frontierCmy = (u) => [0, -u.mshift * FRONTIER_KEY, -u.yshift * FRONTIER_KE
 /** Interno (lib/interno.js, one source of truth): a pure function of the checkbox (or of `on`); null when off. */
 const interno = (on = $('indoor')?.checked) => (photo && on ? internoParams() : null);
 const underEv = (on) => interno(on)?.under ?? 0;
-const sceneWb = (on) => interno(on)?.gains ?? [1, 1, 1];
+// Temperatura luce: colour of the light on the scene, before the film (Gold 200 is daylight film). Slider v (K): the light is
+// LIGHT_REF - v kelvin (right = warmer light); gains = Planckian white at that temperature / at LIGHT_REF, in the engine input
+// space, normalised to luma 1 (no exposure change). v = 0 -> exactly [1, 1, 1] (identical to before).
+const LIGHT_REF = 5500;
+const XYZ_TO = {
+  srgb: [[3.2404542, -1.5371385, -0.4985314], [-0.9692660, 1.8760108, 0.0415560], [0.0556434, -0.2040259, 1.0572252]],
+  rec2020: [[1.7166512, -0.3556708, -0.2533663], [-0.6666844, 1.6164812, 0.0157685], [0.0176399, -0.0427706, 0.9421031]],
+};
+function planckRgb(T, space) {   // Kim et al. 2002 cubic fit of the Planckian locus (1667-25000 K), Y = 1
+  const t = 1e3 / T, x = T < 4000 ? -0.2661239 * t ** 3 - 0.2343589 * t ** 2 + 0.8776956 * t + 0.179910
+    : -3.0258469 * t ** 3 + 2.1070379 * t ** 2 + 0.2226347 * t + 0.240390;
+  const y = T < 2222 ? -1.1063814 * x ** 3 - 1.34811020 * x ** 2 + 2.18555832 * x - 0.20219683
+    : T < 4000 ? -0.9549476 * x ** 3 - 1.37418593 * x ** 2 + 2.09137015 * x - 0.16748867
+      : 3.0817580 * x ** 3 - 5.87338670 * x ** 2 + 3.75112997 * x - 0.37001483;
+  const XYZ = [x / y, 1, (1 - x - y) / y];
+  return XYZ_TO[space].map((r) => r[0] * XYZ[0] + r[1] * XYZ[1] + r[2] * XYZ[2]);
+}
+function lightGains(v, space) {
+  if (!v) return [1, 1, 1];
+  const a = planckRgb(LIGHT_REF - v, space), b = planckRgb(LIGHT_REF, space), g = a.map((c, i) => c / b[i]);
+  const L = LUMA[space], n = L[0] * g[0] + L[1] * g[1] + L[2] * g[2];
+  return g.map((c) => c / n);
+}
+const sceneWb = (on, space, temp) => {
+  const g = interno(on)?.gains ?? [1, 1, 1], t = lightGains(temp, space);
+  return [g[0] * t[0], g[1] * t[1], g[2] * t[2]];
+};
 const grainFactor = () => interno()?.grain ?? 1;
 const baselineEv = () => photo?.preview.raw?.baseline ?? 0;
 /** Scene exposure gain of the input pass: Esposizione, minus Interno's underexposure, plus the DNG baseline (physical, before the film). */
@@ -171,9 +197,9 @@ function uploadFrame(data, w, h) {
 
 /** 8-bit render of a region of `frame` into `target` (RGBA, w×h×4 bytes). */
 async function renderRegion(frame, x0, y0, w, h, target, u) {
-  const lens = lensOf(u), expo = sceneGain(u), wb = sceneWb();
+  const lens = lensOf(u), expo = sceneGain(u);
   if (gpu) {
-    const space = frame.raw ? 'rec2020' : frame.p3 ? 'p3' : 'srgb';
+    const space = frame.raw ? 'rec2020' : frame.p3 ? 'p3' : 'srgb', wb = sceneWb(undefined, space === 'srgb' ? 'srgb' : 'rec2020', u.temp);
     return engine.process_frame(V3 ? INPUT_WGSL_V3 : INPUT_WGSL, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb, u.sharp, u.vibrance / 100, !!interno()),
       V3 ? v3Gain(u, space) : DISPLAY_GAIN_LUT, w, h, PACK_LUT,
       GRAIN_WGSL, packParams(outP3()), target);
@@ -181,6 +207,10 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
   const rgb = lensActive(lens)
     ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, expo, lensGeometry(frame.w, frame.h, lens), true)
     : extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, expo, true);
+  if (u.temp) {   // Temperatura luce (the GPU applies it as the input pass's wb gains)
+    const g = lightGains(u.temp, frame.p3 ? 'rec2020' : 'srgb');
+    for (let i = 0; i < rgb.length; i += 3) { rgb[i] *= g[0]; rgb[i + 1] *= g[1]; rgb[i + 2] *= g[2]; }
+  }
   if (V3) dodgeCPU(rgb, w, h, x0, y0, frame.w, frame.h, expo, v3Gain(u, frame.p3 ? 'p3' : 'srgb'), DISPLAY_GAIN_LUT.length, LUMA[frame.p3 ? 'rec2020' : 'srgb']);
   const out = engine.process(rgb, w, h), d32 = new Uint32Array(target.buffer, target.byteOffset, w * h);
   const px = new Float32Array(3), p3 = outP3();
@@ -804,14 +834,14 @@ const signPct = (v) => `${sign(v)}${pct(v)}`;
 const FORMAT = {
   ev: (v) => `${sign(v)}${v.toFixed(1)}`,
   contrast: signPct, highlight: signPct, whites: signPct,
-  mshift: (v) => `${sign(v)}${v}`, yshift: (v) => `${sign(v)}${v}`, vibrance: (v) => (v === 0 ? 'off' : `${v}`),
+  mshift: (v) => `${sign(v)}${v}`, yshift: (v) => `${sign(v)}${v}`, vibrance: (v) => (v === 0 ? 'off' : `${v}`), temp: (v) => `${LIGHT_REF - v} K`,
   grain: mult2, halation: mult,
   ca: pctOff, vignette: pctOff,
   falloff: pct,
   texture: signPct, clarity: signPct, sharp: signPct, dust: pctOff, black: pctOff,
 };
 // v2-calib: contrast / highlight / black defaults are the lab's standard (0); the old look defaults (Contrasto .35, Alte luci .6, Nero .15) are gone with their stages.
-const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, whites: 0, mshift: 0, yshift: 0, vibrance: 0, black: 0, grain: 2.5, halation: 1, texture: 0.2, clarity: 0, sharp: 0, ca: 1, vignette: 0.12, falloff: 0.18, dust: 0 };
+const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, whites: 0, mshift: 0, yshift: 0, vibrance: 0, temp: 0, black: 0, grain: 2.5, halation: 1, texture: 0.2, clarity: 0, sharp: 0, ca: 1, vignette: 0.12, falloff: 0.18, dust: 0 };
 const DUST_RESEED = 0.27;   // Rimescola with Polvere off turns it on at this amount (the default before v3.33)
 const AUTO_EV_MIN = -2, AUTO_EV_MAX = 2.5;   // Auto's exposure range, see autoSetup
 // Double tap on a slider's thumb (or its label): back to 0 / off, whatever its default (like Azzera impostazioni for one slider).
@@ -855,6 +885,20 @@ $('reseed').addEventListener('click', () => {
   drawDustLayer();
 });
 $('pick').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadPhoto(f); });
+// Drag & drop a photo anywhere on the page (desktop): same path as Scegli foto. Only file drags are taken.
+{
+  const isFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files');
+  let depth = 0;
+  addEventListener('dragenter', (e) => { if (!isFiles(e)) return; e.preventDefault(); depth++; document.body.classList.add('dropping'); });
+  addEventListener('dragover', (e) => { if (!isFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+  addEventListener('dragleave', (e) => { if (!isFiles(e)) return; if (--depth <= 0) { depth = 0; document.body.classList.remove('dropping'); } });
+  addEventListener('drop', (e) => {
+    if (!isFiles(e)) return;
+    e.preventDefault(); depth = 0; document.body.classList.remove('dropping');
+    const f = e.dataTransfer.files[0];
+    if (f) loadPhoto(f);
+  });
+}
 $('newPhoto').addEventListener('click', () => $('pick').click());
 $('auto').addEventListener('click', () => runAuto());
 let internoBusy = 0;

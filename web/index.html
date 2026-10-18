@@ -35,6 +35,7 @@
 
   /* Stage: canvas centred, zoom/pan purely via CSS transform (the stage never scrolls). */
   #stage { flex: 1; min-height: 0; position: relative; overflow: hidden; touch-action: none; }
+  body.dropping #stage { outline: 2px dashed var(--accent); outline-offset: -8px; }
   #wrap { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
   #view { display: none; flex: none; transform-origin: center center; will-change: transform; }
   /* Dust layer: same size and transform as #view; an abs-pos flex child is centred like it. */
@@ -175,6 +176,7 @@
   <div class="row toggle"><label for="indoor">Interno / luce scarsa</label><input type="checkbox" id="indoor" role="switch"></div>
   </div>
   <div class="pane" data-pane="color" role="tabpanel" hidden>
+  <div class="row"><label for="temp">Temperatura luce</label><input type="range" id="temp" min="-2000" max="2000" step="50" value="0"><output for="temp"></output></div>
   <div class="row"><label for="mshift">Magenta ↔ Verde</label><input type="range" id="mshift" min="-30" max="30" step="1" value="0"><output for="mshift"></output></div>
   <div class="row"><label for="yshift">Giallo ↔ Blu</label><input type="range" id="yshift" min="-30" max="30" step="1" value="0"><output for="yshift"></output></div>
   <div class="row"><label for="vibrance">Vividezza</label><input type="range" id="vibrance" min="0" max="100" step="1" value="0"><output for="vibrance"></output></div>

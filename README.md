@@ -30,6 +30,13 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   neutro), texture, chiarezza, grana, halation, aberrazione, vignettatura, falloff, polvere (quantità). Auto = esposizione
   automatica del motore + `frontier_auto_setup`. Doppio tap sul cerchio dello slider (o sull'etichetta) = 0 / off, non il
   default di apertura. Esposizione −3…+3 EV (v3.33; l'Auto resta nel suo −2…+2.5 di prima).
+- **Vividezza** (Colore, v3.33): solo manuale, 0 = off (stadio saltato, output identico). Croma in OkLab sulla scena prima della
+  pellicola: forte sui colori spenti, quasi nulla sui saturi, zero sui grigi, pelle −85 %; mai oltre il tetto di croma per tinta
+  misurato sulle scansioni Gold (`scripts/eval/kg200_chroma_ceiling.py`, diviso per il guadagno di croma della pellicola).
+- **Temperatura luce** (Colore, v3.35): colore della luce sulla scena, prima della pellicola (la Gold è da luce diurna).
+  3500–7500 K (destra = luce più calda), guadagni = bianco di Planck a quella temperatura / a 5500 K, a luminanza costante.
+  Diverso da Giallo ↔ Blu (filtro dello scanner, dopo): qui la pellicola reagisce alla luce. A 5500 K guadagni esattamente 1.
+- **Drag & drop** (v3.35): trascina una foto in qualsiasi punto della pagina, come Scegli foto.
 - **Interno / luce scarsa** (interruttore nella scheda **Luce**): sottoesposizione fissa di 2 EV prima della pellicola (`INTERNO_EV` in `web/lib/interno.js`), senza dati EXIF. Disattivato a ogni caricamento di foto.
 - **Lens** (portato da grain pro e migliorato, `web/lib/lens.js` + shader WebGPU `lens-gpu.js`): aberrazione cromatica laterale
   (calibrata in µm sul 35 mm, max 60 µm), vignettatura in luce lineare e falloff condiviso, applicati alla luce *prima* della pellicola.
