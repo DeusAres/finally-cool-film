@@ -1,0 +1,13 @@
+{
+  "_doc": "Regression cases for scripts/eval/check.py: photo (repo-relative) + app sliders (render.cjs keys). Keep it small: each case is one headless render (~30-60 s on SwiftShader).",
+  "cases": {
+    "wall_default":      { "photo": "samples/indigo/IDG_20261016_100312_440", "ui": {} },
+    "wall_burn":         { "photo": "samples/indigo/IDG_20261016_100312_440", "ui": { "ev": 1.4, "highlight": -1 } },
+    "rock_default":      { "photo": "samples/indigo/IDG_20261011_134131_210", "ui": {} },
+    "sea_default":       { "photo": "samples/indigo/IDG_20261011_135459_749", "ui": {} },
+    "cat_contrast":      { "photo": "samples/indigo/IDG_20261008_154915_529", "ui": { "ev": 0.5, "contrast": 0.83 } },
+    "cat2_interno":      { "photo": "samples/indigo/IDG_20261008_160856_907", "ui": { "indoor": true } },
+    "cat2_interno_c50":  { "photo": "samples/indigo/IDG_20261008_160856_907", "ui": { "indoor": true, "contrast": 0.5 } },
+    "orf_landscape":     { "photo": "samples/olympus/P6090399.ORF", "ui": {} }
+  }
+}

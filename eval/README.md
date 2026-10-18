@@ -1,5 +1,16 @@
 # eval: measurement harness
 
+## Regression check (run before every push that touches the look or the pipeline)
+
+    python3 scripts/eval/check.py            # build web, render eval/check/cases.json in headless Chromium, compare
+    python3 scripts/eval/check.py --update   # accept the current look as the new baseline (eval/check/baseline.json)
+
+Eight real-app renders (~4 min on SwiftShader): colour by tone band (a*/b* for L* 3-20 … 80-101), mean L*, created edges
+(posterisation / halos vs the scene-linear source), highlight texture; `--chart` adds the ColorChecker score (builds sf-eval
+via `scripts/eval/build-sf-eval.sh`, which also works around the OpenBLAS download behind the proxy); `--compare DIR` checks
+pixel identity against an earlier run (for refactors). Exit 1 on any drift beyond the tolerances in check.py.
+
+
 `sf-eval` renders the SCHEMA.md chart (or a real photo) through the engine on the CPU
 backend, with the web app's settings, and measures what the pipeline returns (no inversion).
 
