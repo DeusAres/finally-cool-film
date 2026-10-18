@@ -521,7 +521,7 @@ async function loadPhoto(file) {
     log(`photo: ${file.name} ${file.type} ${(file.size / 1e6).toFixed(1)} MB`);
     if (await isRaw(file)) {
       // DNG (raw.js): scene-linear Rec.2020, half-float frame; output in Display P3.
-      if (!gpu) throw new Error('I file DNG richiedono WebGPU');
+      if (!gpu) throw new Error('I file RAW (DNG / ORF) richiedono WebGPU');
       const t = performance.now(), raw = await loadRaw(file, PREVIEW_LONG_SIDE);
       while (rendering || exporting) await sleep(20);
       if (my !== loadSeq) return;
