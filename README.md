@@ -34,6 +34,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 - **Lens** (portato da grain pro e migliorato, `web/lib/lens.js` + shader WebGPU `lens-gpu.js`): aberrazione cromatica laterale
   (calibrata in µm sul 35 mm, max 60 µm), vignettatura in luce lineare e falloff condiviso, applicati alla luce *prima* della pellicola.
 - Zoom/pan: pizzica, trascina, doppio tap (adatta ↔ 100%). Tieni premuto **A/B** = originale.
+- Layout: su telefono (e tablet in verticale) le impostazioni stanno sotto la foto, in un pannello ridimensionabile con la
+  maniglia. Su PC / tablet in orizzontale (finestra orizzontale ≥ 900 × 500 px) foto a sinistra e impostazioni in una
+  colonna a destra (schede in alto); su PC: rotella = zoom, trascina = sposta, doppio clic = adatta ↔ 100%.
 - **Trasforma** (v3.14): rotazione di 90° a sinistra / destra, per JPEG, HEIC, DNG e ORF, in anteprima e in export. Applicata alla
   sorgente (canvas per le immagini, mappatura degli indici dopo l'orientamento EXIF per i raw): dodge, AutoSetup, grana ed export
   vedono un fotogramma già dritto; slider ed esposizione restano.
