@@ -97,6 +97,27 @@
          word-break: break-word; background: var(--card); padding: 8px; border-radius: 8px; }
   #logPanel .bar { display: flex; gap: 8px; }
   #logPanel .bar .btn { flex: 1; }
+
+  /* Desktop / tablet landscape: photo on the left, settings in a full-height sidebar on the right (tab bar on top).
+     Phones (portrait and landscape: height < 500) and tablets in portrait keep the bottom-sheet layout above.
+     Same query as `desk` in app.js. The grip and the saved sheet height (fcf_panel, inline height) do not apply here. */
+  @media (orientation: landscape) and (min-width: 900px) and (min-height: 500px) {
+    body { display: grid; grid-template-columns: minmax(0, 1fr) clamp(340px, 26vw, 400px);
+           grid-template-rows: auto auto minmax(0, 1fr) auto;
+           grid-template-areas: "head head" "stage tabs" "stage ctl" "status status"; }
+    header { grid-area: head; }
+    #stage { grid-area: stage; }
+    #grip { display: none; }
+    #tabs { grid-area: tabs; border-top: 0; border-left: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 2px 4px; }
+    #tabs button { padding: 8px 0 6px; }
+    #controls { grid-area: ctl; height: auto !important; border-left: 1px solid var(--line); padding: 6px 16px 16px; }
+    .row { grid-template-columns: 104px 1fr 44px; min-height: 38px; }
+    #status { grid-area: status; border-top: 1px solid var(--line); }
+    @media (hover: hover) {
+      #tabs button:hover { color: var(--fg); }
+      #tabs button[aria-selected=true]:hover { color: var(--accent); }
+    }
+  }
 </style>
 </head>
 <body>

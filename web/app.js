@@ -432,7 +432,12 @@ const setPanel = (px) => {
   controls.style.height = h + 'px';
   return h;
 };
-{ const saved = +store.get('fcf_panel'); if (saved > 0) setPanel(saved); }
+const applySavedPanel = () => { const saved = +store.get('fcf_panel'); if (saved > 0) setPanel(saved); };
+applySavedPanel();
+// Desktop / tablet landscape (same query as the CSS): sidebar layout, no grip, the CSS ignores the inline height.
+// Back to the bottom sheet: re-apply the saved height, clamped to the current window.
+const desk = matchMedia('(orientation: landscape) and (min-width: 900px) and (min-height: 500px)');
+desk.addEventListener('change', () => { if (!desk.matches) applySavedPanel(); });
 let gripY = 0, gripH = 0;
 grip.addEventListener('pointerdown', (e) => {
   gripY = e.clientY; gripH = controls.getBoundingClientRect().height;
@@ -465,7 +470,7 @@ grip.addEventListener('dblclick', () => {
   if (tabBtns.some((b) => b.dataset.tab === savedTab)) showTab(savedTab);
   tabBtns.forEach((b) => b.addEventListener('click', () => {
     showTab(b.dataset.tab); store.set('fcf_tab', b.dataset.tab);
-    if (controls.getBoundingClientRect().height <= 8) store.set('fcf_panel', String(setPanel(innerHeight * 0.18) || 1));
+    if (!desk.matches && controls.getBoundingClientRect().height <= 8) store.set('fcf_panel', String(setPanel(innerHeight * 0.18) || 1));
   }));
 }
 
