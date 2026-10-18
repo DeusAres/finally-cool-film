@@ -74,6 +74,8 @@
   .row.act .btn { min-width: 96px; }
   .row label { font-size: 14px; color: var(--muted); }
   .row output { font: 12px ui-monospace, Menlo, monospace; text-align: right; color: var(--muted); }
+  .mouse-hint { display: none; }
+  @media (hover: hover) and (pointer: fine) { .touch-hint { display: none; } .mouse-hint { display: inline; } }
   input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; }
   .filebtns { display: grid; grid-template-columns: 1fr; gap: 8px; padding: 4px 0 6px; }
   .filebtns .btn { border-radius: 14px; padding: 10px 8px; font-size: 16px; min-height: 46px; }
@@ -130,7 +132,7 @@
   <div id="wrap"><canvas id="view"></canvas><canvas id="dustLayer"></canvas></div>
   <div id="empty">
     <label class="btn">Scegli foto<input type="file" id="pick" accept="image/*,.dng,image/x-adobe-dng,.orf,image/x-olympus-orf"></label>
-    <div>Pizzica per zoomare · trascina per spostarti<br>tieni premuto “A/B” per l’originale</div>
+    <div><span class="touch-hint">Pizzica per zoomare · trascina per spostarti</span><span class="mouse-hint">Rotellina per zoomare · trascina per spostarti</span><br>tieni premuto “A/B” per l’originale</div>
   </div>
   <div class="overlay" id="tools" hidden>
     <span class="chip" id="compare">A/B</span>
