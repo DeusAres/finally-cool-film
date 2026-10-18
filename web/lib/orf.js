@@ -51,9 +51,20 @@ const ADOBE = {
   'E-M5': [8380, -2630, -639, -2887, 10725, 2496, -627, 1427, 5438],
   'E-M5MarkII': [9422, -3258, -711, -2655, 10898, 2015, -512, 1354, 5512],
   'E-M5MarkIII': [11896, -5110, -1076, -3181, 11378, 2048, -519, 1224, 5166],
+  'E-M10': [8380, -2630, -639, -2887, 10725, 2496, -627, 1427, 5438],
+  'E-M10MarkII': [8380, -2630, -639, -2887, 10725, 2496, -627, 1427, 5438],
+  'E-M10MarkIII': [8380, -2630, -639, -2887, 10725, 2496, -627, 1427, 5438],
+  'E-M10MarkIIIS': [8380, -2630, -639, -2887, 10725, 2496, -627, 1427, 5438],
   'E-M10MarkIV': [9476, -3182, -765, -2613, 10958, 1893, -449, 1315, 5268],
+  'OM-5': [11896, -5110, -1076, -3181, 11378, 2048, -519, 1224, 5166],
   'PEN-F': [9476, -3182, -765, -2613, 10958, 1893, -449, 1315, 5268],
+  'SH-2': [10156, -3425, -1077, -2611, 11177, 1624, -385, 1592, 5080],
+  'STYLUS1': [8360, -2420, -880, -3928, 12353, 1739, -1381, 2416, 5173],
+  'STYLUS1,1s': [8360, -2420, -880, -3928, 12353, 1739, -1381, 2416, 5173],
   'TG-4': [11426, -4159, -1126, -2066, 10678, 1593, -120, 1327, 4998],
+  'TG-5': [10899, -3833, -1082, -2112, 10736, 1575, -267, 1452, 5269],
+  'TG-6': [10899, -3833, -1082, -2112, 10736, 1575, -267, 1452, 5269],
+  'TG-7': [10899, -3833, -1082, -2112, 10736, 1575, -267, 1452, 5269],
   'XZ-1': [10901, -4095, -1074, -1141, 9208, 2293, -62, 1417, 5158],
   'XZ-2': [9777, -3483, -925, -2886, 11297, 1800, -602, 1663, 5134],
   'XZ-10': [9777, -3483, -925, -2886, 11297, 1800, -602, 1663, 5134],
@@ -150,6 +161,27 @@ function olympusDecompress(u8, off, end, W, H) {
   return { out, errors };
 }
 
+/**
+ * Raw level where the sensor saturates. Olympus sensors clip below the 12-bit maximum (XZ-1 at ISO 100: 3971 of
+ * 4095), seen as a pile of pixels at the top of the histogram, far denser than the bins just below it. Returns the
+ * bottom of that pile, or `white` when there is none (nothing clipped). Without it a blown highlight stops at ~0.97
+ * of the per-channel sensor white, the highlight recovery (dng.js satLift) only half engages and the raw R/B WB
+ * gains turn it magenta.
+ */
+function clipLevel(raw, white) {
+  const h = new Uint32Array(white + 1);
+  for (let i = 0; i < raw.length; i++) h[raw[i]]++;   // decoder output is <= white
+  let top = white;
+  while (top > 0 && !h[top]) top--;
+  if (top < 0.75 * white) return white;
+  let ref = 0;
+  for (let v = top - 24; v < top - 8; v++) ref += h[v];
+  const thr = ref / 2 + 4;   // 8x the mean density of the 16 bins below
+  let lo = top, pile = 0;
+  while (lo > top - 8 && h[lo] > thr) pile += h[lo--];
+  return pile >= 64 ? lo + 1 : white;
+}
+
 export async function decodeORF(arrayBuffer, { maxLongSide } = {}) {
   const buf = ArrayBuffer.isView(arrayBuffer)
     ? arrayBuffer.buffer.slice(arrayBuffer.byteOffset, arrayBuffer.byteOffset + arrayBuffer.byteLength)
@@ -162,6 +194,8 @@ export async function decodeORF(arrayBuffer, { maxLongSide } = {}) {
   // dcraw: Olympus-compressed when the strip is far smaller than 16 bit/px
   // Olympus-compressed (dcraw: 16 bps tag, strip far smaller than 12-bit packed); packed/unpacked ORF not handled
   if (comp !== 1 || cnts[0] * 2 >= W * H * 3) throw new Error(`ORF: formato non supportato (${model})`);
+  // a cut-short file (interrupted copy / download) would decode its missing rows from zero bytes, without errors
+  if (offs[0] + cnts[0] > u8.length) throw new Error('ORF: file incompleto (troncato)');
   const exifOff = P.one(ifd0, 34665, 0), exif = exifOff ? P.readIFD(exifOff) : null;
   const ip = exif && imageProcessing(P, exif);
   if (!ip) throw new Error('ORF: MakerNote Olympus mancante');
@@ -192,18 +226,21 @@ export async function decodeORF(arrayBuffer, { maxLongSide } = {}) {
 
   // linearize into the padded CFA, as dng.js put(): (v - black) * wb[c] / wbMax, sensor white = 65535
   const PW = W + 2 * PAD, PH = H + 2 * PAD, cfa = new Uint16Array(PW * PH);
+  // clipped photosites (>= the measured clip level) go to exactly the channel's sensor white, the level the
+  // highlight recovery expects; the scale of everything below is unchanged (white = 2^bits - 1)
   const scale = [0, 1, 2].map((c) => (wb[c] / wbMax) * 65535 / (white - black[c]));
+  const clip = clipLevel(raw, white), sat = wb.map((g) => Math.ceil((g / wbMax) * 65535));
   for (let y = 0; y < H; y++) {
     const po = (y + PAD) * PW + PAD, ro = y * W;
     for (let x = 0; x < W; x++) {
-      const c = colorAt(y, x), f = (raw[ro + x] - black[c]) * scale[c];
-      cfa[po + x] = f <= 0 ? 0 : f >= 65535 ? 65535 : f + 0.5;
+      const v = raw[ro + x], c = colorAt(y, x), f = (v - black[c]) * scale[c];
+      cfa[po + x] = v >= clip ? sat[c] : f <= 0 ? 0 : f >= 65535 ? 65535 : f + 0.5;
     }
   }
 
   const col = cameraColour({ cm1: adobe.map((v) => v / 10000) }, neutral);
   const meta = {
-    make, model, orientation: P.one(ifd0, 274, 1), asShotNeutral: neutral, blackLevel: bl, whiteLevel: white,
+    make, model, orientation: P.one(ifd0, 274, 1), asShotNeutral: neutral, blackLevel: bl, whiteLevel: white, clipLevel: clip,
     cfaPattern: cfaPat, rawW: W, rawH: H, crop: [cx, cy, cw, ch], cct: col.cct, whiteXY: col.whiteXY,
     cameraToRec2020: col.M, gainMaps: 0, decodeErrors: errors,
   };
