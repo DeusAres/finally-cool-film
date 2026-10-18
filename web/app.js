@@ -805,7 +805,8 @@ const FORMAT = {
   texture: signPct, clarity: signPct, sharp: signPct, dust: pctOff, black: pctOff,
 };
 // v2-calib: contrast / highlight / black defaults are the lab's standard (0); the old look defaults (Contrasto .35, Alte luci .6, Nero .15) are gone with their stages.
-const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, whites: 0, mshift: 0, yshift: 0, black: 0, grain: 2.5, halation: 1, texture: 0.2, clarity: 0, sharp: 0, ca: 1, vignette: 0.12, falloff: 0.18, dust: 0.27 };
+const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, whites: 0, mshift: 0, yshift: 0, black: 0, grain: 2.5, halation: 1, texture: 0.2, clarity: 0, sharp: 0, ca: 1, vignette: 0.12, falloff: 0.18, dust: 0 };
+const DUST_RESEED = 0.27;   // Rimescola with Polvere off turns it on at this amount (the default before v3.33)
 const AUTO_EV_MIN = -2, AUTO_EV_MAX = 2.5;   // Auto's exposure range, see autoSetup
 // Double tap on a slider's thumb (or its label): back to 0 / off, whatever its default (like Azzera impostazioni for one slider).
 // A tap is a short press that barely moves; the two taps must both land on the thumb, so a double tap on the track never resets.
@@ -844,7 +845,7 @@ for (const id of Object.keys(FORMAT)) {
 $('reseed').addEventListener('click', () => {
   if (!photo) return;
   photo.dustSeed = newDustSeed();
-  if (!dustAmount()) { $('dust').value = DEFAULTS.dust; syncOutputs(); }
+  if (!dustAmount()) { $('dust').value = DUST_RESEED; syncOutputs(); }
   drawDustLayer();
 });
 $('pick').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadPhoto(f); });
