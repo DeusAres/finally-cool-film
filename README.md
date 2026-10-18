@@ -37,6 +37,8 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   3500–7500 K (destra = luce più calda), guadagni = bianco di Planck a quella temperatura / a 5500 K, a luminanza costante.
   Diverso da Giallo ↔ Blu (filtro dello scanner, dopo): qui la pellicola reagisce alla luce. A 5500 K guadagni esattamente 1.
 - **Drag & drop** (v3.35): trascina una foto in qualsiasi punto della pagina, come Scegli foto.
+- **ORF (v3.37)**: livello di saturazione del sensore misurato dall'istogramma (XZ-1: 3971, non 4095): le alte luci bruciate
+  tornano neutre invece che magenta; file troncato → errore chiaro; aggiunti E-M10 (I–IIIS), OM-5, TG-5/6/7, Stylus 1, SH-2.
 - **Interno / luce scarsa** (interruttore nella scheda **Luce**): sottoesposizione fissa di 2 EV prima della pellicola (`INTERNO_EV` in `web/lib/interno.js`), senza dati EXIF. Disattivato a ogni caricamento di foto.
 - **Lens** (portato da grain pro e migliorato, `web/lib/lens.js` + shader WebGPU `lens-gpu.js`): aberrazione cromatica laterale
   (calibrata in µm sul 35 mm, max 60 µm), vignettatura in luce lineare e falloff condiviso, applicati alla luce *prima* della pellicola.
