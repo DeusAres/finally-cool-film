@@ -561,18 +561,45 @@ pub fn hash_grain_setup(
     // render resolution.
     let blur_um = g.blur as f64 * GRAIN_REF_PIXEL_UM;
     let blur_um = (blur_um * blur_um + (g.blur_dye_clouds_um as f64).powi(2)).sqrt();
-    let mut blur_px = blur_um / pix_um;
-    // Pixels coarser than the 2000 px reference integrate the film over their
-    // own area (the discrete blur of independent per-pixel counts smooths
-    // less than blur-then-box), so the blur falls off as s^0.47 there instead
-    // of linearly (fitted so a native 1000 px render matches a box-downscaled
-    // 2000 px one). Identity at and above the reference resolution.
-    let s_ref = g.blur as f64;
-    if s_ref > 0.0 && blur_px < s_ref {
-        blur_px = s_ref * (blur_px / s_ref).powf(0.47);
+    let blur_px = blur_um / pix_um;
+    // Each pixel's counts integrate the film over the pixel's own area, so the
+    // grain the pixel grid should show is (white noise * gaussian) box-averaged
+    // per pixel. A sampled gaussian of the same sigma smooths that much less
+    // when sigma is under ~1 px (sigma 0.45 px: grain std x1.19 too high, the
+    // preview looked ~30 % grainier than the export seen at the same size), so
+    // the kernel sigma is the one whose noise-variance gain matches the
+    // pixel-integrated one. Converges to blur_px above ~1.5 px (export sizes).
+    // (Replaces the earlier s^0.47 fit for pixels coarser than 18 um, same effect.)
+    let blur_px = if g.blur > 0.0 { discrete_matched_sigma(blur_px) } else { blur_px };
+    (hg, blur_px as f32)
+}
+
+/// Variance gain (per axis) of a pixel-box-integrated white noise blurred by a
+/// continuous gaussian of `s` px: the box autocorrelation (triangle) weighted
+/// by the gaussian autocorrelation (sigma s*sqrt 2).
+fn pixel_integrated_gain(s: f64) -> f64 {
+    libm::erf(0.5 / s) - 2.0 * s / std::f64::consts::PI.sqrt() * (1.0 - (-0.25 / (s * s)).exp())
+}
+
+/// Variance gain (per axis) of white noise through the normalised sampled
+/// gaussian the backends build (radius ceil(3 sigma)).
+fn sampled_gain(s: f64) -> f64 {
+    let r = (3.0 * s).ceil().max(1.0) as i32;
+    let w: Vec<f64> = (-r..=r).map(|k| (-(k * k) as f64 / (2.0 * s * s)).exp()).collect();
+    let sum: f64 = w.iter().sum();
+    w.iter().map(|v| (v / sum) * (v / sum)).sum()
+}
+
+/// Sampled-kernel sigma with the same noise-variance gain as the
+/// pixel-integrated continuous blur of `s` px (bisection; gain falls with sigma).
+fn discrete_matched_sigma(s: f64) -> f64 {
+    let target = pixel_integrated_gain(s.max(1e-3));
+    let (mut lo, mut hi) = (0.01_f64, s.max(0.01) + 2.0);
+    for _ in 0..50 {
+        let m = 0.5 * (lo + hi);
+        if sampled_gain(m) > target { lo = m } else { hi = m }
     }
-    let blur_px = blur_px as f32;
-    (hg, blur_px)
+    0.5 * (lo + hi)
 }
 
 /// Full filming stage: expose + develop.
