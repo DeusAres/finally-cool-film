@@ -11,17 +11,22 @@
 // The field is a list of vector primitives generated from a seed, in µm on a
 // 36 mm-long-side frame (the engine's own physical scale), so the preview and
 // every export tile draw exactly the same marks at any resolution:
-//   - specks: irregular clusters of 2–4 ellipses, heavy-tailed sizes (lots of
-//     tiny grit, a few big flakes); some out of focus (dust on the base side,
-//     ~0.1 mm from the emulsion) drawn as soft radial falloffs;
-//   - fibres / hairs: smooth random walks (curvature is itself a random walk,
-//     so they bend and occasionally curl), thin, sometimes soft;
-//   - scratches: rare, long, along the film's travel (the frame's long side),
-//     heading wandering as a mean-reverting random walk with rare kinks, width and
-//     intensity varying along the line, tapering ends, faint parallel companions,
-//     white or tinted (top dye layers only); plus short thin handling hairlines.
-// Each primitive has a rank in [0, 1): the amount slider draws those with
-// rank < amount, so raising it only ADDS marks; reseeding gives a new roll.
+//   - specks: irregular clusters of 1–3 ellipses, mostly tiny grit (a few µm to
+//     ~30 µm, i.e. 1–3 px on a 12 MP scan), a light tail of bigger flakes up to
+//     ~0.2 mm across; some out of focus (dust on the base side, ~0.1 mm from the
+//     emulsion) drawn as faint soft radial falloffs;
+//   - fibres / hairs: rare, thin (4–9 µm), mostly short (median ~0.3 mm, at most
+//     2.5 mm) and curly: smooth random walks whose curvature is itself a random walk;
+//   - scratches: rare (most frames at the default amount have none), along the
+//     film's travel (the frame's long side), heading wandering slightly with
+//     rare kinks, width and intensity varying along the line so it breaks into
+//     dashes with gaps, tapering ends, the odd faint parallel companion, white
+//     or tinted (top dye layers only); plus a few short broken handling hairlines.
+// Each primitive has a rank in [0, 1) (scratches up to 2.5, so not all appear
+// even at amount 1): the amount slider draws those with rank < amount, so
+// raising it only ADDS marks; reseeding gives a new roll. Ranks of the more
+// conspicuous marks (bigger specks, longer fibres / hairlines) are skewed up, so
+// low amounts show mostly small grit and big marks only turn up near 1.
 // Marks thinner than ~0.8 px are drawn 0.8 px wide with proportionally lower
 // opacity (same light blocked), so they read the same at preview and 12 MP.
 
@@ -30,7 +35,7 @@ import { FRAME_UM } from './util.js';
 const PAPER = [252, 250, 246];       // white of the marks after inversion (scanner white)
 
 // Counts at amount 1 (a frame that has been handled carelessly).
-const N_SPECKS = 320, N_FIBRES = 18, N_SCRATCHES = 4, N_HAIRLINES = 10;
+const N_SPECKS = 450, N_FIBRES = 8, N_SCRATCHES = 3, N_HAIRLINES = 5;
 
 function rng(seed) {                 // mulberry32
   let a = seed >>> 0;
@@ -48,33 +53,40 @@ export function dustField(seed, aspect) {
   const R = rng(seed), L = FRAME_UM, S = FRAME_UM / aspect;
   const between = (a, b) => a + (b - a) * R();
   const pareto = (min, alpha, max) => Math.min(max, min / Math.pow(1 - R(), 1 / alpha));
+  // Rank skewed towards 1 for conspicuous marks (size ≫ ref): they only turn
+  // up as the amount rises; small ones keep a uniform rank and come first.
+  // `k` > 1 makes a whole class rarer at low amounts (P(rank < a) = a^k for small marks).
+  const rankFor = (size, ref, k = 1) => Math.pow(R(), 1 / (k + Math.pow(size / ref, 1.3)));
   const marks = [];
 
   for (let i = 0; i < N_SPECKS; i++) {
-    const r = pareto(5, 1.5, 260);                  // µm radius
-    const soft = R() < 0.3;
+    const r = pareto(4, 1.6, 75);                   // µm radius: median ~6, 17 % above 12, 2 % above 50
+    const soft = R() < 0.25;
     const parts = [];
-    for (let k = 0, n = 2 + ((R() * 3) | 0); k < n; k++) {
-      parts.push({ dx: between(-0.8, 0.8) * r, dy: between(-0.8, 0.8) * r,
-        rx: r * between(0.35, 0.9), ry: r * between(0.25, 0.8), rot: R() * Math.PI });
+    for (let k = 0, n = 1 + ((R() * 3) | 0); k < n; k++) {
+      parts.push({ dx: between(-0.6, 0.6) * r, dy: between(-0.6, 0.6) * r,
+        rx: r * between(0.4, 0.9), ry: r * between(0.3, 0.8), rot: R() * Math.PI });
     }
-    marks.push({ kind: 'speck', rank: R(), x: R() * L, y: R() * S, parts, soft,
-      alpha: soft ? between(0.25, 0.6) : between(0.55, 0.95), blur: soft ? r * between(0.8, 1.6) : 0 });
+    marks.push({ kind: 'speck', rank: rankFor(r, 22), x: R() * L, y: R() * S, parts, soft,
+      alpha: soft ? between(0.15, 0.32) : between(0.5, 0.9), blur: soft ? r * between(0.5, 1.1) : 0 });
   }
 
   for (let i = 0; i < N_FIBRES; i++) {
-    const len = pareto(400, 1.3, 6000), step = 25, n = Math.max(4, Math.ceil(len / step));
-    let x = R() * L, y = R() * S, a = R() * Math.PI * 2, curv = between(-0.02, 0.02);
+    // Lint: mostly short and curly, thin. Curvature (rad/µm) is a mean-reverting
+    // random walk with the odd tight curl; the step scales with the length so
+    // short fibres bend as much as long ones.
+    const len = pareto(200, 1.5, 2500), step = Math.min(20, Math.max(5, len / 40)), n = Math.ceil(len / step);
+    let x = R() * L, y = R() * S, a = R() * Math.PI * 2, curv = between(-0.006, 0.006);
     const pts = [[x, y]];
     for (let k = 0; k < n; k++) {
-      curv += between(-0.012, 0.012); curv *= 0.97; // curvature random walk, mean-reverting
-      if (R() < 0.01) curv += between(-0.15, 0.15); // the odd curl
-      a += curv; x += Math.cos(a) * step; y += Math.sin(a) * step;
+      curv += (R() - 0.5) * 0.004; curv *= 0.96;
+      if (R() < 0.03) curv += between(-0.02, 0.02);
+      a += curv * step; x += Math.cos(a) * step; y += Math.sin(a) * step;
       pts.push([x, y]);
     }
     const soft = R() < 0.35;
-    marks.push({ kind: 'fibre', rank: R(), pts, width: between(5, 14), soft,
-      alpha: soft ? between(0.25, 0.5) : between(0.5, 0.85) });
+    marks.push({ kind: 'fibre', rank: rankFor(len, 500, 2.5), pts, width: between(4, 9), soft,
+      alpha: soft ? between(0.2, 0.4) : between(0.35, 0.7) });
   }
 
   // 1D smooth noise for profiles along a path: random knots every `k` steps, cosine-interpolated.
@@ -89,41 +101,45 @@ export function dustField(seed, aspect) {
 
   // A drawn line: heading wanders (mean-reverting random walk, rare kinks),
   // width and intensity follow their own slow profiles, ends taper, and
-  // intensity below a threshold leaves gaps (pressure lifted).
+  // intensity below a threshold leaves gaps (pressure lifted), so the line
+  // breaks into dashes of varying strength instead of running continuous.
   const line = (x, y, heading, len, step, wander, width, alpha, gapLevel, color, rank) => {
     const n = Math.max(3, Math.round(len / step)), pts = [], w = [], a = [];
-    const pw = profile(n, between(8, 30)), pa = profile(n, between(6, 40)), pf = profile(n, between(2, 6));
+    const pw = profile(n, between(8, 30)), pa = profile(n, between(6, 30)), pf = profile(n, between(2, 5));
     let h = heading;
     for (let i = 0; i <= n; i++) {
-      h += (R() - 0.5) * wander; h = heading + (h - heading) * 0.995;
-      if (R() < 0.004) h += (R() - 0.5) * wander * 25;          // grit jumps: a small kink
+      h += (R() - 0.5) * wander; h = heading + (h - heading) * 0.99;
+      if (R() < 0.004) h += (R() - 0.5) * wander * 20;          // grit jumps: a small kink
       x += Math.cos(h) * step; y += Math.sin(h) * step;
-      const t = i / n, taper = Math.min(1, t / 0.04, (1 - t) / 0.04);
-      const lvl = 0.55 * pa(i) + 0.45 * pf(i);                // slow pressure + faster flicker
+      const t = i / n, taper = Math.min(1, t / 0.08, (1 - t) / 0.08);
+      const lvl = 0.5 * pa(i) + 0.5 * pf(i);                  // slow pressure + faster flicker
       pts.push([x, y]);
-      w.push(width * (0.55 + 0.7 * pw(i)) * Math.max(0.2, taper));
-      a.push(alpha * Math.max(0, Math.min(1, (lvl - gapLevel) / 0.25)) * Math.max(0, taper));
+      w.push(width * (0.5 + 0.7 * pw(i)) * Math.max(0.2, taper));
+      a.push(alpha * Math.max(0, Math.min(1, (lvl - gapLevel) / 0.2)) * Math.max(0, taper));
     }
     return { kind: 'scratch', rank, pts, w, a, color };
   };
 
   for (let i = 0; i < N_SCRATCHES; i++) {
     // Along the film's travel (x = the frame's long side), a little off axis.
-    const x0 = between(-0.15, 0.5) * L, len = between(0.35, 1.2) * L, y0 = R() * S;
-    const heading = between(-0.012, 0.012), rank = R() * 1.4, color = tint();
-    const width = between(3, 8), alpha = between(0.5, 0.85), gap = between(0.1, 0.4);
-    marks.push(line(x0, y0, heading, len, 60, 0.004, width, alpha, gap, color, rank));
-    // The same grit often drags companions: close, parallel, shorter, fainter.
-    for (let k = 0, nk = R() < 0.55 ? 1 + ((R() * 2) | 0) : 0; k < nk; k++) {
+    // Rank up to 2.5: about one scratch per frame at amount 1, none on most
+    // frames at the default amount.
+    const len = between(0.12, 0.65) * L, x0 = between(-0.1, 1) * (L - len * 0.8), y0 = R() * S;
+    const heading = between(-0.015, 0.015), rank = R() * 2.5, color = tint();
+    const width = between(2.5, 6), alpha = between(0.3, 0.6), gap = between(0.4, 0.55);
+    marks.push(line(x0, y0, heading, len, 50, 0.008, width, alpha, gap, color, rank));
+    // The same grit sometimes drags a companion: close, parallel, shorter, fainter.
+    if (R() < 0.35) {
       const off = between(40, 220) * (R() < 0.5 ? -1 : 1), start = between(0, 0.5) * len;
-      marks.push(line(x0 + start, y0 + off, heading + between(-0.002, 0.002), len * between(0.2, 0.7), 60, 0.004,
-        width * between(0.4, 0.8), alpha * between(0.4, 0.8), gap + 0.1, color, rank));
+      marks.push(line(x0 + start, y0 + off, heading + between(-0.002, 0.002), len * between(0.2, 0.5), 50, 0.008,
+        width * between(0.4, 0.8), alpha * between(0.4, 0.7), gap + 0.05, color, rank));
     }
   }
   for (let i = 0; i < N_HAIRLINES; i++) {
-    // Handling scratches: short, any direction, very thin, gently curved.
-    marks.push(line(R() * L, R() * S, R() * Math.PI * 2, pareto(400, 1.4, 5000), 30, 0.02,
-      between(1.5, 4), between(0.3, 0.6), between(0, 0.25), tint(), R()));
+    // Handling scratches: short, any direction, very thin, gently curved, broken.
+    const len = pareto(150, 1.6, 1500);
+    marks.push(line(R() * L, R() * S, R() * Math.PI * 2, len, 15, 0.03,
+      between(2, 5), between(0.3, 0.55), between(0.2, 0.4), tint(), rankFor(len, 400, 2)));
   }
   return marks;
 }
@@ -190,8 +206,9 @@ export function drawDust(ctx, marks, amount, W, H, x0 = 0, y0 = 0) {
         for (let i = 1; i < m.pts.length; i++) ctx.lineTo(m.pts[i][0], m.pts[i][1]);
         ctx.stroke();
       };
-      if (m.soft) { stroke(w * 3.5, a * 0.18); stroke(w * 1.8, a * 0.3); }
-      stroke(w, m.soft ? a * 0.5 : a);
+      // Out of focus: a slightly wider, faint core with a soft halo (not a thick rope).
+      if (m.soft) { stroke(w * 2.2, a * 0.22); stroke(w, a * 0.45); }
+      else stroke(w, a);
     }
   }
   ctx.restore();
