@@ -30,7 +30,10 @@ const JPEG_QUALITY_DEFAULT = 90;   // export slider default: jpegli quality 90 =
 /** jpegli's quality -> butteraugli distance (jpegli_quality_to_distance): 90 -> 1.0, 100 -> 0.1 (largest files). */
 const jpegDistance = (q) => (q >= 30 ? 0.1 + (100 - q) * 0.09 : 53 / 3000 * q * q - 23 / 20 * q + 25);
 const PROGRESSIVE_PIXEL_LIMIT = 6e6; // progressive keeps all DCT coeffs in the wasm heap (~29 B/px): baseline above
-const BORDER_FRACTION = 0.01;     // mat (the image's paper white), fraction of the long side, all four sides (as in grain pro)
+const BORDER_FRACTION = 0.01;     // mat (the image's paper white), fraction of the long side; normal export: thicker across the short side so the aspect is kept
+/** Base mat width near `b` (±3 px, closest first) whose scaled side b·k is closest to a whole number (k = long / short side). */
+const matBase = (b, k) => [0, -1, 1, -2, 2, -3, 3].map((d) => Math.max(1, b + d))
+  .reduce((best, c) => (Math.abs(c * k - Math.round(c * k)) < Math.abs(best * k - Math.round(best * k)) - 1e-9 ? c : best));
 
 const $ = (id) => document.getElementById(id);
 const stage = $('stage'), view = $('view');
@@ -715,8 +718,12 @@ async function exportFull(ig = false) {
     }
     const { w, h, p3 } = frame;
     const progressive = w * h > PROGRESSIVE_PIXEL_LIMIT ? 0 : 2;
-    const border = bFrac && !ig ? Math.round(Math.max(w, h) * bFrac) : 0;
-    log(`export start ${w}x${h} p3=${p3} progressive=${progressive} border=${border}`);
+    // v3.36: the mat keeps the photo's aspect (a 3:4 photo exports at exactly 3:4): bFrac of the long side on the long edges,
+    // scaled by long / short across the short ones (portrait 2736x3648: 36 px left / right, 48 px top / bottom -> 2808x3744).
+    // The base width moves by up to ±3 px to the value that makes the thick side a whole number (3:4 -> a multiple of 3: exact).
+    const border = bFrac && !ig ? matBase(Math.round(Math.max(w, h) * bFrac), Math.max(w, h) / Math.min(w, h)) : 0;
+    const borderX = w <= h ? border : Math.round(border * w / h), borderY = w <= h ? Math.round(border * h / w) : border;
+    log(`export start ${w}x${h} p3=${p3} progressive=${progressive} border=${borderX}x${borderY}`);
 
     ensureEngine();
     const longSide = Math.max(w, h);
@@ -729,7 +736,7 @@ async function exportFull(ig = false) {
     const quality = +$('quality').value, distance = jpegDistance(quality);
     log(`export quality ${quality} (distance ${distance.toFixed(2)})`);
     const igFull = ig ? new Uint8Array(w * h * 3) : null;   // IG: the whole supersampled render, downscaled at the end
-    if (!ig) encoder.postMessage({ cmd: 'start', width: w, height: h, distance, progressive, yuv444: 1, border, mat: border ? paperWhite(u) : undefined });
+    if (!ig) encoder.postMessage({ cmd: 'start', width: w, height: h, distance, progressive, yuv444: 1, border: borderX, borderY, mat: border ? paperWhite(u) : undefined });
 
     for (let s = 0; s < strips; s++) {
       const ty = s * EXPORT_TILE, ch = Math.min(EXPORT_TILE, h - ty);
