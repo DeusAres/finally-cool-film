@@ -36,9 +36,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 - **Temperatura luce** (Colore, v3.35): colore della luce sulla scena, prima della pellicola (la Gold è da luce diurna).
   3500–7500 K (destra = luce più calda), guadagni = bianco di Planck a quella temperatura / a 5500 K, a luminanza costante.
   Diverso da Giallo ↔ Blu (filtro dello scanner, dopo): qui la pellicola reagisce alla luce. A 5500 K guadagni esattamente 1.
-- **Interno più morbido (v3.39)**: piede della pellicola R/B 1.9/0.85 → 1.65/0.9 e tasto giallo 0.04 → 0.02 (= senza Interno):
-  ombre profonde ancora teal-verdi ma meno (gatto a*/b* −9.8/+0.1 → −8.3/+0.1), chiari meno caldi (b* +25 → +23); la grana non
-  cambia più con Interno (era ×1.41).
+- **Interno più morbido (v3.39)**: piede della pellicola R/B 1.9/0.85 → 1.4/0.92, tasti scanner M −0.02 → −0.03 e Y 0.04 → 0:
+  ombre profonde ancora teal-verdi ma circa un terzo in meno (gatto a*/b* −9.8/+0.1 → −6.3/+0.1), chiari meno caldi
+  (b* +25 → +21, a Contrasto +50 +37 → +32, pelo non rosa: a* +3.5 → +4.0), +1.3 L*. La grana non cambia più con Interno (era ×1.41).
 - **Drag & drop** (v3.35): trascina una foto in qualsiasi punto della pagina, come Scegli foto.
 - **ORF (v3.37)**: livello di saturazione del sensore misurato dall'istogramma (XZ-1: 3971, non 4095): le alte luci bruciate
   tornano neutre invece che magenta; file troncato → errore chiaro; aggiunti E-M10 (I–IIIS), OM-5, TG-5/6/7, Stylus 1, SH-2.

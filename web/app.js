@@ -143,8 +143,8 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
         // warm mids kept), cool_neutral_warm off (it warmed those shadows), balance M -0.02 / Y +0.04 so the lights stay cream / yellow, and
         // the magenta key goes greener with Contrasto (-0.03 per unit): Contrasto amplifies the scene's red-magenta in the light mids (white
         // fur turned pink). warm_hue_shift / saturation_warm off for every photo (v3.19's sunset tuning turned yellow-orange fur pink).
-        model: { saturation: 1.01, saturation_blue: 0.15, blue_hue_shift: 17, green_hue_shift: 24, saturation_warm: 0, warm_hue_shift: 0, cool_neutral_warm: interno() ? 0 : 1.0, highlight_neutral: 0.6, balance_cmy: interno() ? [0, -0.02 - 0.03 * Math.max(u.contrast, 0), 0.02] : [0, 0.005, 0.02], sensor_peak_nm: [650, 540, 450], sensor_fwhm_nm: [40, 50, 40],
-                 black_point: 0.012, gradation_a: 6.2, setup_toe_slope: interno() ? [1.65, 0.9] : [0.9, 1.0], setup_neutral_ev: interno() ? 2.0 : 1.5, auto: { k_col: 0.3 } },
+        model: { saturation: 1.01, saturation_blue: 0.15, blue_hue_shift: 17, green_hue_shift: 24, saturation_warm: 0, warm_hue_shift: 0, cool_neutral_warm: interno() ? 0 : 1.0, highlight_neutral: 0.6, balance_cmy: interno() ? [0, -0.03 - 0.03 * Math.max(u.contrast, 0), 0.0] : [0, 0.005, 0.02], sensor_peak_nm: [650, 540, 450], sensor_fwhm_nm: [40, 50, 40],
+                 black_point: 0.012, gradation_a: 6.2, setup_toe_slope: interno() ? [1.4, 0.92] : [0.9, 1.0], setup_neutral_ev: interno() ? 2.0 : 1.5, auto: { k_col: 0.3 } },
       },
     },
     film_render: {
