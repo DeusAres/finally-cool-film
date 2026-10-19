@@ -5,6 +5,7 @@
 
 import { wf, wv3 } from './util.js';
 import { SRGB_WGSL, REC2020_TO_P3, srgbToLinear, linearToSrgb } from './color.js';
+import { INVERT_WGSL, INVERT_LEN } from './invert.js';
 
 // ACES-style soft gamut compression (rgc): threshold, the distance that maps to the edge, power.
 const RGC = { thr: 0.9, lim: 1.3, pw: 1.2 };
@@ -17,9 +18,11 @@ export const GRAIN_WGSL = /* wgsl */`
 // P[] layout (the engine prepends 4 slots, so packParams' first value is P[4]):
 //   P[4] = 1: the engine output is Rec.2020 -> convert to Display P3 here, with
 //        ACES-style per-channel soft gamut compression (see toP3)
+//   P[5] = 1: v4, the engine output is the negative's scan -> invert it first (invert.js), uniforms at P[6..14]
 fn q(v: f32) -> f32 { return f32(lut[u32(clamp(v * 4095.0 + 0.5, 0.0, 4095.0))]) / 255.0; }
 
 ${SRGB_WGSL}
+${INVERT_WGSL}
 // One channel's distance from the achromatic axis compressed beyond THR so that
 // LIM (the farthest a film colour lands outside P3) maps exactly to the gamut edge.
 fn rgc(d: f32) -> f32 {
@@ -46,7 +49,8 @@ fn toP3(e: vec3<f32>) -> vec3<f32> {
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = id.x + id.y * u32(P[1]);
   if (i >= u32(P[0])) { return; }
-  var c = vec3<f32>(src[3u * i], src[3u * i + 1u], src[3u * i + 2u]);   // the engine's positive, sRGB-encoded
+  var c = vec3<f32>(src[3u * i], src[3u * i + 1u], src[3u * i + 2u]);   // the engine's positive (v4: negative), sRGB-encoded
+  if (P[5] > 0.5) { c = srgbEnc(invertNeg(c, 6u)); }
   if (P[4] > 0.5) { c = toP3(c); }
   c = vec3<f32>(q(c.x), q(c.y), q(c.z));
   // Soft floor at black: unchanged a few levels above it, approaching it below (softplus),
@@ -60,11 +64,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 }`;
 
 /** Number of f32 slots GRAIN_WGSL reads after the engine's own 4 (P[4]). */
-const PACK_PARAMS_LEN = 1;
+const PACK_PARAMS_LEN = 2 + INVERT_LEN;
 
-/** Params for GRAIN_WGSL (P[4]): `rec2020ToP3`: the engine output is Rec.2020 and the photo is Display P3. */
-export function packParams(rec2020ToP3 = false) {
-  const p = new Float32Array([rec2020ToP3 ? 1 : 0]);
+/** Params for GRAIN_WGSL (P[4..]): `rec2020ToP3`: the engine output is Rec.2020 and the photo is Display P3; `inv`: v4
+ * inversion uniforms (invert.js invertUniform), or null for the engine's positive. */
+export function packParams(rec2020ToP3 = false, inv = null) {
+  const p = new Float32Array([rec2020ToP3 ? 1 : 0, inv ? 1 : 0, ...(inv ?? new Array(INVERT_LEN).fill(0))]);
   if (p.length !== PACK_PARAMS_LEN) throw new Error('GRAIN_WGSL uniform layout mismatch');
   return p;
 }

@@ -5,8 +5,7 @@ import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debug
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
 import { isRaw, loadRaw, uploadRaw, rawThumb, rawPreviewRGBA, withRotation } from './lib/raw.js';
 import { internoParams } from './lib/interno.js';
-import { filmExposureEv } from './lib/conversion.js';
-import { labFilters } from './lib/lab.js';
+import { invertAnchors, invertUniform, invertCPU } from './lib/invert.js';
 import { iccSegment } from './lib/icc.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, INPUT_WGSL_V3, inputUniform } from './lib/lens-gpu.js';
@@ -49,8 +48,8 @@ let engineParams = '';      // JSON last given to `engine.update` (re-sending it
 // v3 (default; index.html?v2 = the previous app): Luce has Esposizione, Contrasto, Contrasto luci,
 // automatic highlight dodging (lib/dodge.js, eval/V3.md) and the free contrast curve.
 const V3 = !new URLSearchParams(location.search).has('v2');
-// v4 (index.html?v4, in progress, eval/V4.md): the light is automatic. Film conversion from the shot data (lib/conversion.js),
-// optical print on paper instead of the Frontier scan, the printer's colour analyser (lib/lab.js); no Luce tab.
+// v4 (index.html?v4, in progress, eval/V4.md): what the DNG impresses on Gold 200, shown with a neutral inversion of the negative
+// (lib/invert.js), no scanner look and no Luce tab: exposure is the phone's (metered as v3 Auto).
 const V4 = V3 && new URLSearchParams(location.search).has('v4');
 let photo = null;           // { file, bitmap, preview, after, auto: scanner AutoSetup [d, c, m, y], rot: quarter turns clockwise, ... }
 let rendering = false, dirty = false, exporting = false, renderCount = 0;
@@ -72,11 +71,6 @@ const lensOf = (u) => ({ ca: u.ca * u.ca, vignette: u.vignette, falloff: u.fallo
 const FRONTIER_KEY = 0.005;
 // v2-calib: sign of frontier.cmy (+ = more filtration, i.e. the opposite colour); the sliders read +m greener, +y bluer.
 const frontierCmy = (u) => [0, -u.mshift * FRONTIER_KEY, -u.yshift * FRONTIER_KEY];
-// v4: the same sliders move the enlarger's filters on top of the lab's (the printer's colour keys), half a filter unit per
-// step: +1 M -> a* -0.9, +1 Y -> b* -1.2 (sf-eval, cat DNG), so ±30 reaches about ±13 a* / ±18 b*.
-const PRINT_KEY = 0.5;
-const NO_FILTERS = { y: 0, m: 0 };
-const printFilters = (u, lab = photo.lab ?? NO_FILTERS) => ({ y_filter_shift: lab.y + u.yshift * PRINT_KEY, m_filter_shift: lab.m + u.mshift * PRINT_KEY });
 
 /** Interno (lib/interno.js, one source of truth): a pure function of the checkbox (or of `on`); null when off. */
 const interno = (on = $('indoor')?.checked) => (photo && on ? internoParams() : null);
@@ -131,11 +125,12 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     // to P3 with a soft gamut compression (grain.js toP3); plain P3 output
     // hard-clipped dark warm browns (B = 0, hue swung red).
     // v2-calib: the engine now returns a positive, so its own gamut compression could be back on for sRGB.
-    io: { output_color_space: outP3() ? 'ITU-R BT.2020' : 'sRGB', output_gamut_compress: { algorithm: 'off' }, scan_film: !V4 },
+    io: { output_color_space: outP3() ? 'ITU-R BT.2020' : 'sRGB', output_gamut_compress: { algorithm: 'off' }, scan_film: true },
     // The engine's scanner unsharp mask works in pixels (0.7 px: crisper at
     // preview size than on a 12 MP export) and inflated pixel-level detail
     // ×1.3–1.6 (measured): a phone's crunch, not film. Texture comes from the
     // film-adjacency clarity in the input pass instead (lens-gpu.js), in µm.
+    // v4: no scanner model, the engine returns the negative's scan (inverted in the output pass, lib/invert.js).
     scanner: V4 ? { model: null, unsharp_mask: [0, 0] } : {
       model: 'frontier', black_correction: false, white_correction: false, unsharp_mask: [0, 0],
       frontier: {
@@ -178,25 +173,14 @@ function renderParamsJson(u, noGrain = false, tileMm = 0, region = null) {
 }
 
 // One engine per photo (the input colour space is fixed at construction); the film and the scanner are all updates.
-// Calibration inputs: baked when the engine is built (spektrafilm-wasm Engine.update ignores them). v4: the film
-// conversion's camera EV (the print stage gives it back: enlarger.print_exposure_compensation, on by default), the paper
-// print instead of the scan, and the enlarger filters (lab + colour keys). `lab`: filters to use instead of the photo's
-// (v4 lab probes).
-const engineCalib = (u, lab) => (V4 ? {
-  camera: { exposure_compensation_ev: photo.filmEv ?? 0 },
-  io: { scan_film: false }, scanner: { model: null },
-  enlarger: printFilters(u, lab),
-} : {});
-let engineCalibKey = '';
-
-/** The engine set up for `u`: rebuilt when a calibration input changed, then updated with the render params (the parse /
- * merge / rebuild is skipped when they did not change: most sliders are ours, exposure, lens, grain, texture). */
-function syncEngine(u, { noGrain = false, tileMm = 0, region = null, lab } = {}) {
-  const calib = engineCalib(u, lab), key = JSON.stringify(calib);
-  if (!engine || key !== engineCalibKey) {
-    engine?.free();
-    engine = new sf.Engine(FILM, PAPER, JSON.stringify(deepMerge(BASE_PARAMS, inputParams(photo.preview.p3), calib)));
-    engineParams = ''; engineCalibKey = key;
+/** The engine set up for `u` (built once per photo: the input colour space is fixed at construction), updated with the
+ * render params; the parse / merge / rebuild is skipped when they did not change (most sliders are ours: exposure, lens,
+ * grain, texture). Calibration inputs (camera EV, enlarger filters, ... see spektrafilm-wasm Engine.update) are ignored by
+ * update: none of ours change after the build. */
+function syncEngine(u, { noGrain = false, tileMm = 0, region = null } = {}) {
+  if (!engine) {
+    engine = new sf.Engine(FILM, PAPER, JSON.stringify(deepMerge(BASE_PARAMS, inputParams(photo.preview.p3))));
+    engineParams = '';
   }
   const json = renderParamsJson(u, noGrain, tileMm, region);
   if (json !== engineParams) { engine.update(json); engineParams = json; }
@@ -226,7 +210,7 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
     const space = frame.raw ? 'rec2020' : frame.p3 ? 'p3' : 'srgb', wb = sceneWb(undefined, space === 'srgb' ? 'srgb' : 'rec2020', u.temp);
     return engine.process_frame(V3 ? INPUT_WGSL_V3 : INPUT_WGSL, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb, u.sharp, u.vibrance / 100, !!interno(), u.tilt),
       V3 ? v3Gain(u, space) : DISPLAY_GAIN_LUT, w, h, PACK_LUT,
-      GRAIN_WGSL, packParams(outP3()), target);
+      GRAIN_WGSL, packParams(outP3(), invUniform(u)), target);
   }
   const map = tiltMap(frame.w, frame.h, u.tilt);   // Raddrizza (tilt.js); null at 0
   const rgb = lensActive(lens) || map
@@ -238,9 +222,10 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
   }
   if (V3) dodgeCPU(rgb, w, h, x0, y0, frame.w, frame.h, expo, v3Gain(u, frame.p3 ? 'p3' : 'srgb'), DISPLAY_GAIN_LUT.length, LUMA[frame.p3 ? 'rec2020' : 'srgb'], map);
   const out = engine.process(rgb, w, h), d32 = new Uint32Array(target.buffer, target.byteOffset, w * h);
-  const px = new Float32Array(3), p3 = outP3();
+  const px = new Float32Array(3), p3 = outP3(), inv = invUniform(u);
   for (let p = 0, j = 0; p < w * h; p++, j += 3) {
     px[0] = out[j]; px[1] = out[j + 1]; px[2] = out[j + 2];
+    if (inv) invertCPU(px, inv);   // v4: negative -> positive, as the GPU output pass
     if (p3) toP3CPU(px);   // Rec.2020 → P3, as the GPU output pass
     d32[p] = (q8(px[0]) | (q8(px[1]) << 8) | (q8(px[2]) << 16) | 0xff000000) >>> 0;
   }
@@ -279,16 +264,16 @@ function autoSetup(on, evIn = null) {
   return { ev, auto };
 }
 
-/** v4: the lab's enlarger filters for this frame (lib/lab.js), from small prints of the metered thumb (no grain, lens or dodge,
- * Temperatura not applied: the lab corrects the scene's light, the slider is the user's on top). */
-function v4Lab(ev) {
+/** v4: the inversion anchors of this frame (lib/invert.js), from the engine's negative scan of the metered thumb (no grain,
+ * lens, dodge or Temperatura: the frame's own range, the sliders act on top). */
+function v4Anchors(ev) {
   const { preview } = photo, raw = preview.raw;
   const { rgb, w, h } = raw ? rawThumb(raw, THUMB_PX) : jpegThumb(preview);
   const g = 2 ** (ev + baselineEv());
   for (let i = 0; i < rgb.length; i++) rgb[i] *= g;
-  const u = { ...ui(), mshift: 0, yshift: 0 };
-  return labFilters((y, m) => syncEngine(u, { noGrain: true, lab: { y, m } }).process(rgb.slice(), w, h));
+  return invertAnchors(syncEngine(ui(), { noGrain: true }).process(rgb, w, h));
 }
+const invUniform = (u) => (V4 ? invertUniform(photo.inv, u.mshift, u.yshift) : null);
 
 // ---------- preview ----------
 
@@ -698,9 +683,9 @@ async function runAuto() {
   $('ev').value = a.ev; photo.auto = a.auto;
   syncOutputs();
   if (V4) {
-    photo.filmEv = filmExposureEv(photo.preview.raw?.shot);   // before v4Lab: the lab prints the negative as exposed
-    photo.lab = v4Lab(a.ev);
-    log(`auto v4: meter ${a.ev}, film ${photo.filmEv.toFixed(2)} EV, lab Y ${photo.lab.y.toFixed(1)} M ${photo.lab.m.toFixed(1)}`);
+    photo.inv = v4Anchors(a.ev);
+    const f = (v) => v.map((x) => x.toFixed(2)).join('/');
+    log(`auto v4: ev ${a.ev}, density black ${f(photo.inv.lo)} white ${f(photo.inv.hi)} mid ${photo.inv.xm.toFixed(2)}`);
   } else log(`auto: ev ${a.ev}, scanner ${a.auto.map((v) => v.toFixed(3)).join(' ')}`);
   await render();
 }
@@ -736,7 +721,8 @@ function download(blob, name) {
 const MAT_PATCH = 8, MAT_SCENE = 64;
 function paperWhite(u) {
   const out = syncEngine(u, { noGrain: true }).process(new Float32Array(MAT_PATCH * MAT_PATCH * 3).fill(MAT_SCENE), MAT_PATCH, MAT_PATCH);
-  const px = Float32Array.from(out.subarray(0, 3));
+  const px = Float32Array.from(out.subarray(0, 3)), inv = invUniform(u);
+  if (inv) invertCPU(px, inv);
   if (outP3()) toP3CPU(px);
   return Array.from(px, q8);
 }
