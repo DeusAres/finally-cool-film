@@ -22,7 +22,8 @@ export async function isRaw(file) {
     || isORFHeader(h);
 }
 
-/** Decode (optionally downscaled); returns { w, h, rgb, baseline, orientation, fullW, fullH }, sizes AFTER orientation.
+/** Decode (optionally downscaled); returns { w, h, rgb, baseline, orientation, fullW, fullH, shot }, sizes AFTER orientation;
+ * `shot` = { exposureTime, fNumber, iso, baseline } for the film conversion (lib/conversion.js).
  * `rot`: the user's extra quarter turns clockwise (withRotation). */
 export async function loadRaw(file, maxLongSide, rot = 0) {
   const buf = await file.arrayBuffer(), opt = maxLongSide ? { maxLongSide } : {};
@@ -30,7 +31,9 @@ export async function loadRaw(file, maxLongSide, rot = 0) {
   const o = d.meta?.orientation || 1, swap = o >= 5;
   const [cw, ch] = (d.meta?.crop || [0, 0, d.w, d.h]).slice(2);   // full (cropped) sensor size
   const ow = swap ? d.h : d.w, oh = swap ? d.w : d.h, ofw = swap ? ch : cw, ofh = swap ? cw : ch;
-  return withRotation({ sw: d.w, sh: d.h, ow, oh, ofw, ofh, rgb: d.rgb, baseline: d.exposure || 0, orientation: o }, rot);
+  const m = d.meta || {}, baseline = d.exposure || 0;
+  const shot = { exposureTime: m.exposureTime, fNumber: m.fNumber, iso: m.iso, baseline };
+  return withRotation({ sw: d.w, sh: d.h, ow, oh, ofw, ofh, rgb: d.rgb, baseline, orientation: o, shot }, rot);
 }
 
 /** The same decoded raw turned by `rot` quarter turns clockwise after its EXIF orientation (no pixel copy:

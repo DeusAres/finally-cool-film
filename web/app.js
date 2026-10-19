@@ -5,6 +5,8 @@ import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debug
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
 import { isRaw, loadRaw, uploadRaw, rawThumb, rawPreviewRGBA, withRotation } from './lib/raw.js';
 import { internoParams } from './lib/interno.js';
+import { filmExposureEv } from './lib/conversion.js';
+import { labFilters } from './lib/lab.js';
 import { iccSegment } from './lib/icc.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, INPUT_WGSL_V3, inputUniform } from './lib/lens-gpu.js';
@@ -47,6 +49,9 @@ let engineParams = '';      // JSON last given to `engine.update` (re-sending it
 // v3 (default; index.html?v2 = the previous app): Luce has Esposizione, Contrasto, Contrasto luci,
 // automatic highlight dodging (lib/dodge.js, eval/V3.md) and the free contrast curve.
 const V3 = !new URLSearchParams(location.search).has('v2');
+// v4 (index.html?v4, in progress, eval/V4.md): the light is automatic. Film conversion from the shot data (lib/conversion.js),
+// optical print on paper instead of the Frontier scan, the printer's colour analyser (lib/lab.js); no Luce tab.
+const V4 = V3 && new URLSearchParams(location.search).has('v4');
 let photo = null;           // { file, bitmap, preview, after, auto: scanner AutoSetup [d, c, m, y], rot: quarter turns clockwise, ... }
 let rendering = false, dirty = false, exporting = false, renderCount = 0;
 
@@ -67,6 +72,11 @@ const lensOf = (u) => ({ ca: u.ca * u.ca, vignette: u.vignette, falloff: u.fallo
 const FRONTIER_KEY = 0.005;
 // v2-calib: sign of frontier.cmy (+ = more filtration, i.e. the opposite colour); the sliders read +m greener, +y bluer.
 const frontierCmy = (u) => [0, -u.mshift * FRONTIER_KEY, -u.yshift * FRONTIER_KEY];
+// v4: the same sliders move the enlarger's filters on top of the lab's (the printer's colour keys), half a filter unit per
+// step: +1 M -> a* -0.9, +1 Y -> b* -1.2 (sf-eval, cat DNG), so ±30 reaches about ±13 a* / ±18 b*.
+const PRINT_KEY = 0.5;
+const NO_FILTERS = { y: 0, m: 0 };
+const printFilters = (u, lab = photo.lab ?? NO_FILTERS) => ({ y_filter_shift: lab.y + u.yshift * PRINT_KEY, m_filter_shift: lab.m + u.mshift * PRINT_KEY });
 
 /** Interno (lib/interno.js, one source of truth): a pure function of the checkbox (or of `on`); null when off. */
 const interno = (on = $('indoor')?.checked) => (photo && on ? internoParams() : null);
@@ -121,12 +131,12 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     // to P3 with a soft gamut compression (grain.js toP3); plain P3 output
     // hard-clipped dark warm browns (B = 0, hue swung red).
     // v2-calib: the engine now returns a positive, so its own gamut compression could be back on for sRGB.
-    io: { output_color_space: outP3() ? 'ITU-R BT.2020' : 'sRGB', output_gamut_compress: { algorithm: 'off' }, scan_film: true },
+    io: { output_color_space: outP3() ? 'ITU-R BT.2020' : 'sRGB', output_gamut_compress: { algorithm: 'off' }, scan_film: !V4 },
     // The engine's scanner unsharp mask works in pixels (0.7 px: crisper at
     // preview size than on a 12 MP export) and inflated pixel-level detail
     // ×1.3–1.6 (measured): a phone's crunch, not film. Texture comes from the
     // film-adjacency clarity in the input pass instead (lens-gpu.js), in µm.
-    scanner: {
+    scanner: V4 ? { model: null, unsharp_mask: [0, 0] } : {
       model: 'frontier', black_correction: false, white_correction: false, unsharp_mask: [0, 0],
       frontier: {
         // v3.20: Alte luci / Bianchi below 0 darken the scene before the film (dodge.js, local, the negative keeps the detail); above 0 they
@@ -168,20 +178,29 @@ function renderParamsJson(u, noGrain = false, tileMm = 0, region = null) {
 }
 
 // One engine per photo (the input colour space is fixed at construction); the film and the scanner are all updates.
-function ensureEngine() {
-  if (!engine) {
-    engine = new sf.Engine(FILM, PAPER, JSON.stringify(deepMerge(BASE_PARAMS, inputParams(photo.preview.p3))));
-    engineParams = '';
-  }
-  return engine;
-}
+// Calibration inputs: baked when the engine is built (spektrafilm-wasm Engine.update ignores them). v4: the film
+// conversion's camera EV (the print stage gives it back: enlarger.print_exposure_compensation, on by default), the paper
+// print instead of the scan, and the enlarger filters (lab + colour keys). `lab`: filters to use instead of the photo's
+// (v4 lab probes).
+const engineCalib = (u, lab) => (V4 ? {
+  camera: { exposure_compensation_ev: photo.filmEv ?? 0 },
+  io: { scan_film: false }, scanner: { model: null },
+  enlarger: printFilters(u, lab),
+} : {});
+let engineCalibKey = '';
 
-// Skips the parse / merge / rebuild in the engine when the params did not
-// change (most sliders are ours: exposure, lens, grain, texture).
-function updateEngine(json) {
-  if (json === engineParams) return;
-  engine.update(json);
-  engineParams = json;
+/** The engine set up for `u`: rebuilt when a calibration input changed, then updated with the render params (the parse /
+ * merge / rebuild is skipped when they did not change: most sliders are ours, exposure, lens, grain, texture). */
+function syncEngine(u, { noGrain = false, tileMm = 0, region = null, lab } = {}) {
+  const calib = engineCalib(u, lab), key = JSON.stringify(calib);
+  if (!engine || key !== engineCalibKey) {
+    engine?.free();
+    engine = new sf.Engine(FILM, PAPER, JSON.stringify(deepMerge(BASE_PARAMS, inputParams(photo.preview.p3), calib)));
+    engineParams = ''; engineCalibKey = key;
+  }
+  const json = renderParamsJson(u, noGrain, tileMm, region);
+  if (json !== engineParams) { engine.update(json); engineParams = json; }
+  return engine;
 }
 
 // The frame goes to the GPU a strip at a time: the wasm heap (which never
@@ -244,20 +263,31 @@ const q8 = (v) => Math.round(255 * Math.min(1, Math.max(0, v)));
 // cached per photo, never touches the sliders, so toggling Interno off restores the exact previous result.
 
 function autoSetup(on, evIn = null) {
-  const eng = ensureEngine(), { preview } = photo, raw = preview.raw;
-  updateEngine(renderParamsJson(ui()));   // a fresh engine still has the library defaults (camera auto-exposure on, no scanner model)
+  const eng = syncEngine(ui()), { preview } = photo, raw = preview.raw;   // a fresh engine has the library defaults (camera auto-exposure on, no scanner model)
   const { rgb, w, h } = raw ? rawThumb(raw, THUMB_PX) : jpegThumb(preview);
   const scale = (k) => { for (let i = 0; i < rgb.length; i++) rgb[i] *= k; };
   scale(2 ** baselineEv());
   // The meter sees the scene as shot: it never compensates Interno's U (the negative stays thin).
   // Auto keeps its own -2..+2.5 range (the slider's before v3.33, when it became -3..+3): a wider slider must not change what Auto picks.
   const ev = evIn !== null ? evIn : Math.max(AUTO_EV_MIN, Math.min(AUTO_EV_MAX, Math.round(eng.auto_exposure_ev(rgb.slice(), w, h) * 10) / 10));
+  if (V4) return { ev, auto: null };   // v4: no scanner AutoSetup (the lab is v4Lab)
   scale(2 ** (ev - underEv(on)));
   // Engine.frontier_auto_setup takes linear RGBA f32 (w*h*4), not RGB.
   const rgba = new Float32Array(w * h * 4);
   for (let i = 0, j = 0; i < w * h * 3; i += 3, j += 4) { rgba[j] = rgb[i]; rgba[j + 1] = rgb[i + 1]; rgba[j + 2] = rgb[i + 2]; rgba[j + 3] = 1; }
   const auto = Array.from(eng.frontier_auto_setup(rgba, w, h));
   return { ev, auto };
+}
+
+/** v4: the lab's enlarger filters for this frame (lib/lab.js), from small prints of the metered thumb (no grain, lens or dodge,
+ * Temperatura not applied: the lab corrects the scene's light, the slider is the user's on top). */
+function v4Lab(ev) {
+  const { preview } = photo, raw = preview.raw;
+  const { rgb, w, h } = raw ? rawThumb(raw, THUMB_PX) : jpegThumb(preview);
+  const g = 2 ** (ev + baselineEv());
+  for (let i = 0; i < rgb.length; i++) rgb[i] *= g;
+  const u = { ...ui(), mshift: 0, yshift: 0 };
+  return labFilters((y, m) => syncEngine(u, { noGrain: true, lab: { y, m } }).process(rgb.slice(), w, h));
 }
 
 // ---------- preview ----------
@@ -273,8 +303,7 @@ async function render() {
       const pv = photo.preview, t0 = performance.now(), n = ++renderCount;
       // Breadcrumb: if iOS kills the tab mid-render, the next load says so.
       setBusy(`anteprima #${n} ${pv.w}x${pv.h} ${JSON.stringify(u)}`);
-      ensureEngine();
-      updateEngine(renderParamsJson(u, false, 0, { x0: 0, y0: 0, fw: pv.w, fh: pv.h }));
+      syncEngine(u, { region: { x0: 0, y0: 0, fw: pv.w, fh: pv.h } });
       const cs = outP3() ? 'display-p3' : 'srgb';
       if (photo.after?.width !== pv.w || photo.after?.height !== pv.h || photo.after.colorSpace !== cs) photo.after = new ImageData(pv.w, pv.h, { colorSpace: cs });
       await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), u);
@@ -506,6 +535,7 @@ grip.addEventListener('dblclick', () => {
 });
 
 // Bottom tab bar: one section of sliders at a time; tapping while collapsed expands the sheet.
+if (V4) document.querySelector('#tabs [data-tab="light"]').remove();   // v4: the light is automatic
 {
   const tabBtns = [...document.querySelectorAll('#tabs button')], panes = [...document.querySelectorAll('.pane')];
   const showTab = (t) => {
@@ -563,7 +593,7 @@ async function loadPhoto(file) {
         uploadFrame(preview.data, preview.w, preview.h);
       }
     }
-    engine?.free(); engine = null;
+    engine?.free(); engine = null;   // the input colour space is fixed at construction
     showPreview();
     await runAuto();
     $('export').disabled = false; $('auto').disabled = false; $('newPhoto').hidden = false;
@@ -667,7 +697,11 @@ async function runAuto() {
   photo.autoEv = a.ev; photo.autoCache = { [on]: a.auto };
   $('ev').value = a.ev; photo.auto = a.auto;
   syncOutputs();
-  log(`auto: ev ${a.ev}, scanner ${a.auto.map((v) => v.toFixed(3)).join(' ')}`);
+  if (V4) {
+    photo.filmEv = filmExposureEv(photo.preview.raw?.shot);   // before v4Lab: the lab prints the negative as exposed
+    photo.lab = v4Lab(a.ev);
+    log(`auto v4: meter ${a.ev}, film ${photo.filmEv.toFixed(2)} EV, lab Y ${photo.lab.y.toFixed(1)} M ${photo.lab.m.toFixed(1)}`);
+  } else log(`auto: ev ${a.ev}, scanner ${a.auto.map((v) => v.toFixed(3)).join(' ')}`);
   await render();
 }
 
@@ -701,8 +735,7 @@ function download(blob, name) {
 // saturated neutral (far above scene white), in output code values. Read from the engine on a flat patch.
 const MAT_PATCH = 8, MAT_SCENE = 64;
 function paperWhite(u) {
-  updateEngine(renderParamsJson(u, true));
-  const out = engine.process(new Float32Array(MAT_PATCH * MAT_PATCH * 3).fill(MAT_SCENE), MAT_PATCH, MAT_PATCH);
+  const out = syncEngine(u, { noGrain: true }).process(new Float32Array(MAT_PATCH * MAT_PATCH * 3).fill(MAT_SCENE), MAT_PATCH, MAT_PATCH);
   const px = Float32Array.from(out.subarray(0, 3));
   if (outP3()) toP3CPU(px);
   return Array.from(px, q8);
@@ -761,7 +794,6 @@ async function exportFull(ig = false) {
     const borderX = w <= h ? border : Math.round(border * w / h), borderY = w <= h ? Math.round(border * h / w) : border;
     log(`export start ${w}x${h} p3=${p3} progressive=${progressive} border=${borderX}x${borderY}`);
 
-    ensureEngine();
     const longSide = Math.max(w, h);
     const strips = Math.ceil(h / EXPORT_TILE), cols = Math.ceil(w / EXPORT_TILE);
 
@@ -783,7 +815,7 @@ async function exportFull(ig = false) {
         status(`Esporto ${w}×${h}: tile ${s * cols + c + 1}/${strips * cols}…`);
         const x0 = Math.max(0, tx - EXPORT_PAD), y0 = Math.max(0, ty - EXPORT_PAD);
         const tw = Math.min(w, tx + EXPORT_TILE + EXPORT_PAD) - x0, th = Math.min(h, ty + EXPORT_TILE + EXPORT_PAD) - y0;
-        updateEngine(renderParamsJson(u, false, FILM_FORMAT_MM * Math.max(tw, th) / longSide, { x0, y0, fw: tw, fh: th }));   // frame_px = the tile's dims: film_format_mm is already scaled to the tile, the engine's grain pitch is film_format_mm / max(frame_px)
+        syncEngine(u, { tileMm: FILM_FORMAT_MM * Math.max(tw, th) / longSide, region: { x0, y0, fw: tw, fh: th } });   // frame_px = the tile's dims: film_format_mm is already scaled to the tile, the engine's grain pitch is film_format_mm / max(frame_px)
         const tile = (tileBuf = tileBuf?.length >= tw * th * 4 ? tileBuf : new Uint8Array(tw * th * 4)).subarray(0, tw * th * 4);
         await renderRegion(frame, x0, y0, tw, th, tile, u);
         const cw = Math.min(EXPORT_TILE, w - tx);
@@ -844,7 +876,7 @@ async function exportFull(ig = false) {
         else uploadFrame(photo.preview.data, photo.preview.w, photo.preview.h);
       }
     } catch (e) { log('preview re-upload failed: ' + (e?.stack || e)); }
-    if (engine) updateEngine(renderParamsJson(ui()));   // back to preview params
+    if (engine) syncEngine(ui());   // back to preview params
     if (dirty) render();   // sliders moved during the export
   }
 }
@@ -975,7 +1007,7 @@ syncOutputs();
 // Build stamp: replaced at deploy (scripts/stamp-version.sh) with the version and
 // its time; it lives in app.js itself, so a stale cached app.js shows a stale stamp.
 const BUILD = '__BUILD__';
-$('ver').textContent = (BUILD.startsWith('__') ? 'dev' : BUILD) + (V3 ? '' : ' · modalità v2');
+$('ver').textContent = (BUILD.startsWith('__') ? 'dev' : BUILD) + (V4 ? ' · v4' : V3 ? '' : ' · modalità v2');
 if (V3) {
   // a switch to compare with/without the dodging (Alte luci / Bianchi / Nero stay)
   $('indoor').closest('.row').insertAdjacentHTML('beforebegin',
