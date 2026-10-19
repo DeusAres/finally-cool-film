@@ -5,5 +5,5 @@ export const INTERNO_EV = 2;   // the film sees scene x 2^-INTERNO_EV
 
 /** Parameters of the Interno toggle: { under: U, gains: [1, 1, 1], grain: 2^(0.25 U) } (density grain is amplified by the scanner gain). */
 export function internoParams() {
-  return { under: INTERNO_EV, gains: [1, 1, 1], grain: 2 ** (0.25 * INTERNO_EV) };   // v3.31: x1.41 (was x2: with the stronger default grain, sand-like)
+  return { under: INTERNO_EV, gains: [1, 1, 1], grain: 1 };   // v3.31: x1.41 (was x2: with the stronger default grain, sand-like)
 }
