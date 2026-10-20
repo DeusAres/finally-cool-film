@@ -1,5 +1,5 @@
 {
- "_doc": "Regression cases for scripts/eval/check.py: photo (repo-relative) + app sliders (render.cjs keys). Keep it small: each case is one headless render (~30-60 s on SwiftShader).",
+ "_doc": "Regression cases for scripts/eval/check.py: photo (repo-relative) + app sliders (render.cjs keys). Keep it small: each case is one headless render (~30-60 s on SwiftShader). Optional \"query\" (e.g. \"?v4\") is appended to index.html: the v4 cases render the preview page.",
  "cases": {
   "wall_default": {
    "photo": "samples/indigo/IDG_20261016_100312_440",
@@ -49,6 +49,26 @@
    "ui": {
     "sharp": 1
    }
+  },
+  "v4_sea": {
+   "photo": "samples/indigo/IDG_20261011_135459_749",
+   "query": "?v4",
+   "ui": {}
+  },
+  "v4_rock": {
+   "photo": "samples/indigo/IDG_20261011_134131_210",
+   "query": "?v4",
+   "ui": {}
+  },
+  "v4_cat": {
+   "photo": "samples/indigo/IDG_20261008_160856_907",
+   "query": "?v4",
+   "ui": {}
+  },
+  "v4_orf": {
+   "photo": "samples/olympus/P6090399.ORF",
+   "query": "?v4",
+   "ui": {}
   }
  }
 }

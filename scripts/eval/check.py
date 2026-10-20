@@ -55,8 +55,8 @@ def pinned(photo):
     return dst
 
 
-def render(port, photo, ui, out_png):
-    r = subprocess.run(['node', os.path.join(ROOT, 'scripts', 'eval', 'render.cjs'), f'http://127.0.0.1:{port}/index.html',
+def render(port, photo, ui, out_png, query=''):
+    r = subprocess.run(['node', os.path.join(ROOT, 'scripts', 'eval', 'render.cjs'), f'http://127.0.0.1:{port}/index.html{query}',
                         pinned(photo), out_png, json.dumps(ui)], capture_output=True, text=True)
     line = next((l for l in (r.stdout + r.stderr).splitlines() if l.startswith(('OK', 'ERR'))), 'ERR no output')
     return line
@@ -144,7 +144,7 @@ def main():
         time.sleep(1)
         t0 = time.time()
         with ThreadPoolExecutor(a.jobs) as ex:
-            res = dict(zip(cases, ex.map(lambda kv: render(port, kv[1]['photo'], kv[1]['ui'], os.path.join(OUT, kv[0] + '.png')), cases.items())))
+            res = dict(zip(cases, ex.map(lambda kv: render(port, kv[1]['photo'], kv[1]['ui'], os.path.join(OUT, kv[0] + '.png'), kv[1].get('query', '')), cases.items())))
         print(f'renders: {len(cases)} in {time.time() - t0:.0f} s')
     finally:
         srv.terminate()
