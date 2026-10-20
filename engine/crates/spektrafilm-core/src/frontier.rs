@@ -1145,6 +1145,21 @@ pub fn auto_setup(base: &FrontierBase, cmy: &[f32], width: usize, height: usize)
         let s = &v[i0.min(i1)..=i1];
         mean[c] = s.iter().sum::<f64>() / s.len() as f64;
     }
+    // Colour: the trimmed mean, or (neutral_sigma > 0) a mean weighted towards near-neutral pixels.
+    let colour = if p.neutral_sigma > 0.0 {
+        let (mut acc, mut wsum) = ([0.0f64; 3], 0.0);
+        for d in &kept {
+            let chroma = (d[0] - d[1]).abs().max((d[2] - d[1]).abs());
+            let w = 1.0 / (1.0 + (chroma / p.neutral_sigma).powi(2));
+            for c in 0..3 {
+                acc[c] += w * d[c];
+            }
+            wsum += w;
+        }
+        acc.map(|a| a / wsum)
+    } else {
+        mean
+    };
     let target = base.d_ref + p.target_offset;
     let k_den = p.k_den * p.strength;
     let k_col0 = p.k_col * p.strength;
@@ -1164,7 +1179,7 @@ pub fn auto_setup(base: &FrontierBase, cmy: &[f32], width: usize, height: usize)
     let k_col = thin_k_col(p, d_den / base.d_per_ev, k_col0);
     let mut out = [(d_den / base.d_per_ev) as f32, 0.0, 0.0, 0.0];
     for c in 0..3 {
-        let dd = (k_col * (mean[1] - mean[c])).clamp(-p.clamp_colour, p.clamp_colour);
+        let dd = (k_col * (colour[1] - colour[c])).clamp(-p.clamp_colour, p.clamp_colour);
         out[1 + c] = (-dd) as f32; // a density gain is the opposite colour key
     }
     out

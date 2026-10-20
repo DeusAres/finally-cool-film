@@ -416,6 +416,12 @@ pub struct FrontierAutoParams {
     pub thin_k_col: f64,
     pub thin_ev_lo: f64,
     pub thin_ev_hi: f64,
+    /// Colour reading robust to one-colour subjects (the Frontier's "subject failure": a lawn, the sea, a red wall pulled
+    /// towards grey): each thumb pixel's weight in the colour mean is 1 / (1 + (chroma / neutral_sigma)^2), chroma = the
+    /// largest |D_c - D_G| in setup density (0 on a neutral). Large saturated areas then barely count; a real cast moves
+    /// the greys too and is still read. 0 = off (the plain trimmed mean, as before).
+    #[serde(default)]
+    pub neutral_sigma: f64,
 }
 
 impl Default for FrontierAutoParams {
@@ -437,6 +443,7 @@ impl Default for FrontierAutoParams {
             thin_k_col: 0.0,
             thin_ev_lo: 0.8,
             thin_ev_hi: 1.6,
+            neutral_sigma: 0.0,
         }
     }
 }
