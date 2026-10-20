@@ -32,11 +32,11 @@ export function log(msg) {
 export const logText = () => lines.join('\n');
 export const prevLogText = () => prev;
 
-/** Mark risky work in progress (e.g. 'export'); pass null when it finished. */
-// Risky work starting: the log is flushed with it, so the lines leading up to a crash are not lost to the persist throttle.
-export const setBusy = (what) => {
+/** Mark risky work in progress (e.g. 'export'); pass null when it finished. `flush`: also persist the log now (a decode or
+ * an export, so the lines leading up to a crash survive the persist throttle; not per render, that would undo it). */
+export const setBusy = (what, flush = false) => {
   write(BUSY, what);
-  if (what && persistTimer) { clearTimeout(persistTimer); persist(); }
+  if (flush && persistTimer) { clearTimeout(persistTimer); persist(); }
 };
 
 /** What the previous session was doing when it died, or null if it ended cleanly. */

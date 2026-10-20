@@ -22,45 +22,73 @@ export async function isRaw(file) {
     || isORFHeader(h);
 }
 
-async function decodeHere(file, opt) {
-  const buf = await file.arrayBuffer();
-  return (isORFHeader(new Uint8Array(buf, 0, 4)) ? decodeORF : decodeDNG)(buf, opt);
-}
+/** Decode raw bytes (DNG or ORF by header) at most `opt.maxLongSide` px: { w, h, rgb, exposure, meta }. */
+export const decodeRawBuffer = (buf, opt) => (isORFHeader(new Uint8Array(buf, 0, 4)) ? decodeORF : decodeDNG)(buf, opt);
 
-// In a page the decode runs in raw-worker.js; a worker that cannot start (no module workers) falls back to decoding here,
-// and so do node scripts (eval/dng2npy.mjs).
-let worker = null, workerOk = typeof Worker !== 'undefined' && typeof document !== 'undefined', nextId = 0;
-const pending = new Map();
-function decodeInWorker(file, opt) {
-  if (!worker) {
-    worker = new Worker(new URL('./raw-worker.js', import.meta.url), { type: 'module' });
-    worker.onmessage = ({ data: { id, d, error } }) => {
-      const p = pending.get(id); pending.delete(id);
-      if (error) p.reject(new Error(error)); else p.resolve(d);
-    };
-    worker.onerror = (e) => {   // the worker died or never loaded: decode the pending files here from now on
-      e.preventDefault?.();
-      workerOk = false; worker.terminate(); worker = null;
-      for (const [, p] of pending) p.fallback();
-      pending.clear();
-    };
-  }
-  return new Promise((resolve, reject) => {
-    const id = ++nextId;
-    pending.set(id, { resolve, reject, fallback: () => decodeHere(file, opt).then(resolve, reject) });
-    worker.postMessage({ id, file, opt });
-  });
-}
-
-/** Decode (optionally downscaled); returns { w, h, rgb, baseline, orientation, fullW, fullH }, sizes AFTER orientation.
- * `rot`: the user's extra quarter turns clockwise (withRotation). */
-export async function loadRaw(file, maxLongSide, rot = 0) {
-  const opt = maxLongSide ? { maxLongSide } : {};
-  const d = await (workerOk ? decodeInWorker(file, opt) : decodeHere(file, opt));
+/** The app's raw object for a decode `d`, turned by `rot` (see withRotation). */
+export function rawObject(d, rot = 0) {
   const o = d.meta?.orientation || 1, swap = o >= 5;
   const [cw, ch] = (d.meta?.crop || [0, 0, d.w, d.h]).slice(2);   // full (cropped) sensor size
   const ow = swap ? d.h : d.w, oh = swap ? d.w : d.h, ofw = swap ? ch : cw, ofh = swap ? cw : ch;
   return withRotation({ sw: d.w, sh: d.h, ow, oh, ofw, ofh, rgb: d.rgb, baseline: d.exposure || 0, orientation: o }, rot);
+}
+
+/**
+ * Decode and assemble, in this thread. `f16`: the export's form, the frame oriented and converted to half-float RGBA
+ * (`r.f16`, uploaded by uploadRaw as is) and the float image dropped: 8 B/px instead of 12, and no conversion on the main
+ * thread when it runs in the worker.
+ */
+export async function decodeRaw(buf, { maxLongSide, rot = 0, f16 = false } = {}) {
+  const r = rawObject(await decodeRawBuffer(buf, maxLongSide ? { maxLongSide } : {}), rot);
+  if (!f16) return r;
+  const out = new Uint16Array(r.w * r.h * 4), src = r.rgb;
+  for (let y = 0, k = 0; y < r.h; y++) {
+    for (let x = 0; x < r.w; x++, k += 4) {
+      const i = srcIndex(r, x, y) * 3;
+      out[k] = half(src[i]); out[k + 1] = half(src[i + 1]); out[k + 2] = half(src[i + 2]); out[k + 3] = 0x3c00;
+    }
+  }
+  return { ...r, rgb: null, f16: out };
+}
+
+// In a page each decode runs in its own raw-worker.js, terminated when it answers (its garbage, the file and the CFA,
+// goes with it) or when a newer photo cancels it; a worker that cannot start or dies decodes here instead, and so do node
+// scripts (eval/dng2npy.mjs). The bytes are read here and transferred.
+const canWork = typeof Worker !== 'undefined' && typeof document !== 'undefined';
+let workerOk = canWork;
+const active = new Set();
+function decodeInWorker(buf, opt) {
+  let w;
+  try {
+    // the worker URL carries the page's cache-busting query (scripts/stamp-version.sh stamps raw.js's import)
+    w = new Worker(new URL('./raw-worker.js' + new URL(import.meta.url).search, import.meta.url), { type: 'module' });
+  } catch { workerOk = false; return null; }
+  return new Promise((resolve, reject) => {
+    const job = { reject, w };
+    const done = () => { active.delete(job); w.terminate(); };
+    const fallback = () => {   // the worker died or never loaded: from now on decode here
+      done(); workerOk = false;
+      decodeRaw(buf, opt).then(resolve, reject);
+    };
+    w.onmessage = ({ data }) => { done(); if ('error' in data) reject(new Error(data.error)); else resolve(data.r); };
+    w.onerror = (e) => { e.preventDefault?.(); fallback(); };
+    w.onmessageerror = fallback;
+    active.add(job);
+    w.postMessage({ buf, opt });   // not transferred: the fallback may still need the bytes
+  });
+}
+
+/** Stop the raw decodes in flight (a newer photo replaces them); their loads fail with 'annullata'. */
+export function cancelRawDecodes() {
+  for (const job of active) { job.w.terminate(); job.reject(new Error('decodifica annullata')); }
+  active.clear();
+}
+
+/** Decode (optionally downscaled); returns { w, h, rgb, baseline, orientation, fullW, fullH } (with `f16`: { ..., f16 },
+ * see decodeRaw), sizes AFTER orientation. `rot`: the user's extra quarter turns clockwise (withRotation). */
+export async function loadRaw(file, maxLongSide, rot = 0, { f16 = false } = {}) {
+  const buf = await file.arrayBuffer(), opt = { maxLongSide, rot, f16 };
+  return (workerOk && await decodeInWorker(buf, opt)) || decodeRaw(buf, opt);
 }
 
 /** The same decoded raw turned by `rot` quarter turns clockwise after its EXIF orientation (no pixel copy:
@@ -109,6 +137,10 @@ function half(v) {
 export function uploadRaw(sf, r) {
   sf.alloc_frame_f16(r.w, r.h);
   const rows = Math.max(1, Math.floor((1 << 22) / (r.w * 8)));   // ~4 MB strips
+  if (r.f16) {   // already oriented half floats (decodeRaw f16)
+    for (let y0 = 0; y0 < r.h; y0 += rows) sf.set_frame_rows_f16(r.f16.subarray(y0 * r.w * 4, Math.min(r.h, y0 + rows) * r.w * 4), y0);
+    return;
+  }
   const buf = new Uint16Array(r.w * rows * 4), src = r.rgb;
   for (let y0 = 0; y0 < r.h; y0 += rows) {
     const n = Math.min(rows, r.h - y0);

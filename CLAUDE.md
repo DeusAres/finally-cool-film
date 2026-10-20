@@ -20,7 +20,7 @@ The user writes Italian; answer in Italian, short, human bullet points.
 - No magic numbers: every tuned constant gets a comment with what it does and where the value came from (measurement,
   datasheet, user choice). Unverified values are marked as such.
 - Stage boundaries: scene → film conversion → film + grain → lab → scanner look → output. A control belongs to exactly
-  one stage; do not let a slider act in two stages.
+  one stage; do not let a slider act in two stages (v3 has documented exceptions, eval/V3.md: do not extend them).
 - Match the surrounding style (comment density, naming); small functions over flags; delete dead code instead of
   commenting it out.
 - Prefer measuring to guessing: `scripts/eval/check.py` (browser, ~5 min), `engine/target/release/sf-eval` (CPU, fast).

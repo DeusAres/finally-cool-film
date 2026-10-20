@@ -150,7 +150,10 @@ async function exifFromHeic(file) {
 export async function readExifSegment(file) {
   if (!file) return null;
   const id = `${file.type || ''} ${file.name || ''}`;
-  if (/dng|orf|tiff?\b/i.test(id) || /\.(dng|orf|tiff?)$/i.test(file.name || '')) {
+  // TIFF-based raws (DNG, ORF, TIFF) by header too: phone raws are often named without an extension (Indigo's IDG_...).
+  const h = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+  const tiff = (h[0] === 0x49 && h[1] === 0x49 && (h[2] === 0x2a || h[2] === 0x52)) || (h[0] === 0x4d && h[1] === 0x4d && h[3] === 0x2a);
+  if (tiff || /image\/(x-adobe-dng|x-olympus-orf|tiff)/i.test(file.type || '') || /\.(dng|orf|tiff?)$/i.test(file.name || '')) {
     return exifFromTiff(new Uint8Array(await file.slice(0, 8 << 20).arrayBuffer()));
   }
   if (/hei[cf]/i.test(id)) return exifFromHeic(file);

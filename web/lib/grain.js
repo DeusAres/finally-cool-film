@@ -4,7 +4,7 @@
 // see eval/GRAIN.md), so it is the same on GPU, CPU and every export tile.
 
 import { wf, wv3 } from './util.js';
-import { SRGB_WGSL, REC2020_TO_P3, REC2020_TO_SRGB, srgbToLinear, linearToSrgb } from './color.js';
+import { SRGB_WGSL, REC2020_TO_P3, REC2020_TO_SRGB, LUMA, srgbToLinear, linearToSrgb } from './color.js';
 import { INVERT_WGSL, INVERT_LEN } from './invert.js';
 
 // ACES-style soft gamut compression (rgc) into each output space: threshold, the distance that maps to the edge, power.
@@ -19,7 +19,7 @@ const GAMUT = {
   p3: { id: 1, M: REC2020_TO_P3, thr: 0.9, lim: 1.3, pw: 1.2, fitWhite: false },
   srgb: { id: 2, M: REC2020_TO_SRGB, thr: 0.8, lim: 1.6, pw: 1.2, fitWhite: true },
 };
-const LUMA709 = [0.2126, 0.7152, 0.0722];
+const LUMA709 = LUMA.srgb;   // Rec.709 / sRGB luminance weights (color.js)
 const rgcScale = (g) => (g.lim - g.thr) / (((1 - g.thr) / (g.lim - g.thr)) ** -g.pw - 1) ** (1 / g.pw);
 // One channel's distance from the achromatic axis compressed beyond thr so that lim maps exactly to the gamut edge.
 const rgcWGSL = (name, g) => `fn ${name}(d: f32) -> f32 {

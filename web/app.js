@@ -3,7 +3,7 @@ import { sleep, store, PREVIEW_LONG_SIDE } from './lib/util.js';
 import { DISPLAY_GAIN_LUT } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
-import { isRaw, loadRaw, uploadRaw, rawThumb, rawPreviewRGBA, withRotation } from './lib/raw.js';
+import { isRaw, loadRaw, uploadRaw, rawThumb, rawPreviewRGBA, withRotation, cancelRawDecodes } from './lib/raw.js';
 import { internoParams } from './lib/interno.js';
 import { invertAnchors, invertUniform, invertCPU } from './lib/invert.js';
 import { iccSegment } from './lib/icc.js';
@@ -55,7 +55,7 @@ let photo = null;           // { file, size: { w, h } of the full decode, previe
 // The full-resolution decode of a JPEG / HEIC is not kept (24-48 MP = 96-195 MB for the photo's whole life): the export decodes
 // the file again and closes it.
 const decodeFull = (file) => createImageBitmap(file);   // export only (rotate turns the preview's pixels)
-let rendering = false, dirty = false, exporting = false, renderCount = 0;
+let rendering = false, dirty = false, exporting = false, renderCount = 0, renderErrors = 0;
 
 // ---------- params ----------
 
@@ -302,12 +302,15 @@ async function render() {
       status(`${pv.w}×${pv.h} · ${ms(t2 - t0)} ms (render ${ms(t1 - t0)} · display ${ms(t2 - t1)})${gpu ? '' : ' CPU'}`);
       log(`render #${n} ${ms(t1 - t0)}+${ms(t2 - t1)} ms`);
     } while (dirty && !exporting);
+    renderErrors = 0;
   } catch (e) {
     log('render error: ' + (e?.stack || e));
-    status('Errore: ' + (e?.message || e));
+    // A GPU error or a lost device leaves the engine dead (every later render fails the same way): after the second in a
+    // row the status line offers a reload, which keeps nothing but recovers.
+    status('Errore: ' + (e?.message || e) + (++renderErrors >= 2 ? ' — tocca qui per ricaricare' : ''), renderErrors >= 2 ? 'reload' : '');
   } finally {
     rendering = false;
-    if (!exporting) setBusy(null);
+    if (!exporting && !loadingPhoto) setBusy(null);   // a decode in flight keeps its marker
   }
 }
 
@@ -553,18 +556,19 @@ if (V4) {
 let loadSeq = 0, loadingPhoto = false;
 async function loadPhoto(file) {
   if (!file || exporting) return;   // a drop during an export would decode on top of it (memory) and race its finally
+  loadingPhoto = true;   // from here: the update check must not reload under it (also during the boot wait)
+  cancelRawDecodes();    // a raw still decoding for an older pick is replaced, not queued
   if (!engineReady) {
     status('Caricamento motore…');
     await booted;
-    if (!engineReady) { status(bootError); return; }   // boot failed: show its error again (reload to retry)
+    if (!engineReady) { status(bootError); loadingPhoto = false; return; }   // boot failed: show its error again (reload to retry)
   }
   const my = ++loadSeq, prev = photo;
   status('Decodifica…');
   // Nothing exportable until this photo has loaded and been auto-measured; stays disabled on error.
   $('export').disabled = $('exportIG').disabled = $('auto').disabled = true;
-  loadingPhoto = true;
   // Breadcrumb: a decode killed for memory (a 48 MP HEIC, a 20 MP raw) is reported on the next load.
-  setBusy(`decodifica ${file.name} ${(file.size / 1e6).toFixed(1)} MB`);
+  setBusy(`decodifica ${file.name} ${(file.size / 1e6).toFixed(1)} MB`, true);
   try {
     log(`photo: ${file.name} ${file.type} ${(file.size / 1e6).toFixed(1)} MB`);
     if (await isRaw(file)) {
@@ -725,8 +729,8 @@ async function runAuto() {
 // tile) and the same engine parameters as the preview, with an overlap margin cropped away.
 
 // The jpegli worker. A worker whose script or wasm failed to load never answers, and an export would wait on it for ever: it
-// posts 'ready' once jpegli is up and an export waits for that (ENCODER_READY_MS: generous, the 2 MB wasm compiles in a few
-// seconds on a slow phone; unmeasured). After an error, and after every export, the worker is replaced: its wasm heap never
+// posts 'ready' once jpegli is up and an export waits for that (ENCODER_READY_MS: generous, jpegli's ~200 KB wasm compiles
+// in well under a second; unmeasured on device). After an error, and after every export, the worker is replaced: its wasm heap never
 // shrinks and would keep the export's peak (hundreds of MB at 12 MP) for the whole session.
 const ENCODER_READY_MS = 20000;
 let encoder = null, encoderReady = null, encoderError = null, encoderDone = null;
@@ -737,7 +741,7 @@ function startEncoder() {
   encoderReady = new Promise((r) => { ready = r; });
   w.onmessage = ({ data }) => {
     if (data.cmd === 'ready') ready(true);
-    else if (data.cmd === 'error') { encoderError = data.error; log('jpegli error: ' + data.error); encoderDone?.reject(new Error(data.error)); if (encoder === w) encoder = null; }
+    else if (data.cmd === 'error') { encoderError = data.error; log('jpegli error: ' + data.error); encoderDone?.reject(new Error(data.error)); if (encoder === w) { w.terminate(); encoder = null; } }
     else if (data.cmd === 'done') { log(`jpegli done ${data.width}x${data.height}, heap ${data.heapMB} MB`); encoderDone?.resolve(data); }
   };
   w.onerror = (e) => {
@@ -786,7 +790,7 @@ async function exportFull(ig = false) {
   if (!photo || exporting) return;
   exporting = true;
   $('export').disabled = $('exportIG').disabled = $('auto').disabled = $('newPhoto').disabled = $('pick').disabled = $('indoor').disabled = $('rotL').disabled = $('rotR').disabled = true;
-  setBusy('export');
+  setBusy('export', true);
   // A preview render in flight shares the engine and the GPU frame: let it finish first.
   while (rendering) await sleep(20);
   const u = ui(), dust = dustAmount(), marks = dustMarks();   // fixed for every strip
@@ -809,7 +813,8 @@ async function exportFull(ig = false) {
     let frame;   // { data (CPU path only), w, h, p3, raw }
     if (rawPv) {
       // Full-resolution raw decode, uploaded as half-float strips, then dropped.
-      const raw = await loadRaw(photo.file, scale < 1 ? Math.round(longCap) : undefined, rot);
+      // f16: oriented half floats from the decode worker (8 B/px, no conversion on the main thread)
+      const raw = await loadRaw(photo.file, scale < 1 ? Math.round(longCap) : undefined, rot, { f16: true });
       uploadRaw(sf, raw);
       frame = { data: null, w: raw.w, h: raw.h, p3: true, raw: true };
     } else {
@@ -934,9 +939,9 @@ function openLog(title) {
   $('logText').textContent = fullLog();
   $('logPanel').style.display = 'flex';
 }
-// The status line opens the log, or applies a waiting update (checkUpdate): one action per tap.
-let updateReady = false;
-$('status').addEventListener('click', () => { if (updateReady) { if (!exporting) freshReload(); } else openLog('Log'); });
+// The status line opens the log; a message shown with an action (status(msg, 'reload'): a waiting update, a broken GPU)
+// reloads instead, until the next message replaces it. One action per tap.
+$('status').addEventListener('click', () => { if ($('status').dataset.action === 'reload') { if (!exporting) freshReload(); } else openLog('Log'); });
 $('logClose').addEventListener('click', () => { $('logPanel').style.display = 'none'; });
 $('logCopy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(fullLog()); $('logCopy').textContent = 'Copiato ✓'; } catch { $('logCopy').textContent = 'Seleziona il testo'; }
@@ -944,7 +949,7 @@ $('logCopy').addEventListener('click', async () => {
 
 // ---------- wiring ----------
 
-function status(msg) { $('status').textContent = msg; }
+function status(msg, action = '') { const el = $('status'); el.textContent = msg; el.dataset.action = action; }
 
 const sign = (v) => (v > 0 ? '+' : '');
 const pct = (v) => `${Math.round(v * 100)}`;
@@ -1103,8 +1108,7 @@ async function checkUpdate() {
       try { sessionStorage.setItem('fcf_reload_for', id); } catch { /* storage blocked */ }
       return freshReload();
     }
-    status('Nuova versione disponibile — tocca qui per aggiornare');
-    updateReady = true;
+    status('Nuova versione disponibile — tocca qui per aggiornare', 'reload');
   } catch { /* offline */ }
 }
 checkUpdate();

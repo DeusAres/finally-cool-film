@@ -1,15 +1,15 @@
-// Raw decode off the main thread (module worker, started by raw.js): the decoders are DOM-free; a multi-second decode no
-// longer freezes the page, and a parser stuck on a corrupt file stalls only this worker.
+// Raw decode off the main thread (module worker, one per decode, started by raw.js decodeInWorker).
+// Protocol: in { buf: ArrayBuffer of the file, opt: { maxLongSide, rot, f16 } }; out { r } (raw.js decodeRaw's object, its
+// rgb or f16 buffer transferred) or { error }. A multi-second decode no longer freezes the page, and a parser stuck on a
+// corrupt file stalls only this worker.
 
-import { decodeDNG } from './dng.js';
-import { decodeORF, isORFHeader } from './orf.js';
+import { decodeRaw } from './raw.js';
 
-self.onmessage = async ({ data: { id, file, opt } }) => {
+self.onmessage = async ({ data: { buf, opt } }) => {
   try {
-    const buf = await file.arrayBuffer();
-    const d = await (isORFHeader(new Uint8Array(buf, 0, 4)) ? decodeORF : decodeDNG)(buf, opt);
-    self.postMessage({ id, d }, [d.rgb.buffer]);
+    const r = await decodeRaw(buf, opt);
+    self.postMessage({ r }, [(r.f16 ?? r.rgb).buffer]);
   } catch (e) {
-    self.postMessage({ id, error: String(e?.message || e) });
+    self.postMessage({ error: String(e?.message || e) || 'errore di decodifica' });
   }
 };
