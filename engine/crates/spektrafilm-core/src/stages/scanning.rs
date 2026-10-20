@@ -163,7 +163,7 @@ pub fn scan(
     color_ref: &crate::color_reference::ColorReference,
     gamut: &crate::gamut_compression::OutputGamutCompress,
 ) -> ImageBuf {
-    scan_frontier(density_cmy, profile, params, backend, color_ref, gamut, None)
+    scan_frontier(density_cmy, profile, params, backend, color_ref, gamut, None, None)
 }
 
 /// `scan`, with a scan LUT when given (the Frontier's, or the narrowband scan's): the LUT maps the film
@@ -178,6 +178,7 @@ pub fn scan_frontier(
     color_ref: &crate::color_reference::ColorReference,
     gamut: &crate::gamut_compression::OutputGamutCompress,
     frontier: Option<&crate::frontier::FrontierLut>,
+    hyper: Option<(&crate::params::HyperToneParams, [f64; 3])>,
 ) -> ImageBuf {
     // Python parity — channel_density / base_density are f64 in the JSON profile.
     let channel_density: Vec<[f64; 3]> = profile
@@ -253,11 +254,20 @@ pub fn scan_frontier(
     // pre-CAT XYZ hook). Otherwise honour use_scanner_lut.
     let mut rgb = if let Some(lut) = frontier {
         let mut out = density_cmy.clone();
+        let w = density_cmy.width as usize;
         out.data
             .par_chunks_exact_mut(3)
             .zip(density_cmy.data.par_chunks_exact(3))
-            .for_each(|(dst, src)| {
-                let y = lut.apply([src[0] as f64, src[1] as f64, src[2] as f64]);
+            .enumerate()
+            .for_each(|(i, (dst, src))| {
+                let mut cmy = [src[0] as f64, src[1] as f64, src[2] as f64];
+                if let Some((h, gain)) = hyper {   // Hyper Tone (params.rs HyperToneParams), the GPU's scan_lut.wgsl twin
+                    let ev = spektrafilm_gpu::hyper_map(&h.map, h.map_w, h.map_h, h.origin_px.map(|v| v as f32), h.frame_px.map(|v| v as f32), (i % w) as u32, (i / w) as u32) as f64;
+                    for c in 0..3 {
+                        cmy[c] += gain[c] * ev;
+                    }
+                }
+                let y = lut.apply(cmy);
                 for c in 0..3 {
                     dst[c] = spektrafilm_math::precision::srgb_decode(from_f64(y[c]));
                 }

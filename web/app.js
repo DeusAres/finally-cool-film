@@ -16,6 +16,7 @@ import { dustField, drawDust, compositeDust } from './lib/dust.js';
 import { OUTPUT_WGSL, packParams, toSpaceCPU } from './lib/output.js';
 import { tiltMap, tiltRGBA } from './lib/tilt.js';
 import { tiltRuler } from './lib/ruler.js';
+import { hyperToneMap } from './lib/hypertone.js';
 
 // Engine default; sets the physical pixel size of the engine's own effects (grain, halation, DIR diffusion) as the frame's
 // long side in mm. Not util.js FRAME_UM (36 mm, the 24×36 frame, for the JS effects): the engine's look was tuned at 35,
@@ -66,7 +67,7 @@ const ui = () => ({
   ev: +$('ev').value, contrast: +$('contrast').value, highlight: +$('highlight').value, whites: +$('whites').value,
   mshift: +$('mshift').value, yshift: +$('yshift').value, vibrance: +$('vibrance').value, temp: +$('temp').value, black: +$('black').value,
   grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value, sharp: +$('sharp').value,
-  ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value, tilt: +$('tilt').value,
+  ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value, tilt: +$('tilt').value, hypertone: +$('hypertone').value,
   ...(V3 ? { hlc: +$('hlc').value, shadows: +$('shadows').value, v3dodge: $('v3dodge').checked } : {}),   // v3: snapshotted with the rest (export tiles)
 });
 // CA slider is quadratic: realistic (subtle) amounts get most of the travel.
@@ -122,6 +123,10 @@ const packTo = () => (engineWide() ? outSpace() : null);
 
 // `region` {x0, y0, fw, fh}: the rendered region's origin and its frame's size, in px (the engine's grain
 // is a hash of the frame position, so every tile of an export gets the same grain as the whole frame).
+/** The engine's frame position params of a render: its top-left and the frame's size (the whole preview without `region`). */
+const framePos = (region) => ({
+  origin_px: region ? [region.x0, region.y0] : [0, 0], frame_px: region ? [region.fw, region.fh] : [photo.preview.w, photo.preview.h],
+});
 function renderParams(u, { noGrain = false, region = null } = {}) {
   return {
     camera: { auto_exposure: false, film_format_mm: FILM_FORMAT_MM },
@@ -139,8 +144,9 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     // film-adjacency clarity in the input pass instead (lens-gpu.js), in µm.
     // v4 Scanner 'Nessuno': no scanner look, the engine returns the negative read in three narrow bands (engine narrowband.rs:
     // the bands of the real Gold 200 reference scans, eval/V4.md), inverted in the output pass (lib/invert.js).
-    scanner: neutralScan() ? { model: 'narrowband', unsharp_mask: [0, 0] } : {
+    scanner: neutralScan() ? { model: 'narrowband', unsharp_mask: [0, 0], hyper_tone: { amount: 0 } } : {
       model: 'frontier', black_correction: false, white_correction: false, unsharp_mask: [0, 0],
+      hyper_tone: { amount: u.hypertone * HYPER_MAX, ...framePos(region) },   // always sent: the engine merges updates
       frontier: {
         // v3.20: Alte luci / Bianchi below 0 darken the scene before the film (dodge.js, local, the negative keeps the detail); above 0 they
         // stay on the scanner curve (gentler than pushing the scene into the shoulder). v2 page: scanner only.
@@ -165,7 +171,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
       // Grana 1× = the old 0.25× (user-preferred); amount 1 = the calibrated Gold 200 grain (GRAIN_UNIT scales between them).
       grain: {
         active: !noGrain && u.grain > 0, rng: 'hash', blur: GRAIN_BLUR, amount: u.grain * GRAIN_UNIT * grainFactor(), seed: photo.grainSeed,
-        origin_px: region ? [region.x0, region.y0] : [0, 0], frame_px: region ? [region.fw, region.fh] : [photo.preview.w, photo.preview.h],
+        ...framePos(region),
       },
       // v2-calib: strength comes from the profile's antihalation; halation_amount is a multiplier on it (Halation slider).
       // v3.12: film scatter (core 2.2 / tail 9.3 µm) at half size: at full size it took ~35 % of the fine detail
@@ -193,6 +199,7 @@ function syncEngine(u, { noGrain = false, tileMm = 0, region = null } = {}) {
   }
   const json = renderParamsJson(u, noGrain, tileMm, region);
   if (json !== engineParams) { engine.update(json); engineParams = json; }
+  syncHyperMap(u);
   return engine;
 }
 
@@ -271,6 +278,26 @@ function autoSetup(on, evIn = null) {
   for (let i = 0, j = 0; i < w * h * 3; i += 3, j += 4) { rgba[j] = rgb[i]; rgba[j + 1] = rgb[i + 1]; rgba[j + 2] = rgb[i + 2]; rgba[j + 3] = 1; }
   const auto = Array.from(eng.frontier_auto_setup(rgba, w, h));
   return { ev, auto };
+}
+
+// Hyper Tone (Scanner, Frontier): the slider's 0..1 moves each area's density by up to HYPER_MAX of its map EV (a bright
+// area 2 EV over the median is scanned up to 1 EV darker), engine params.rs HyperToneParams. HYPER_MAX: a choice (first
+// version, unmeasured), the strength where skies keep their tone and shadows open without looking flat.
+const HYPER_MAX = 0.5;
+const HYPER_THUMB_PX = 512;   // the map's source thumb: its resolution is the map's (lib/hypertone.js MAP_LONG)
+/** The photo's Hyper Tone map in the engine (built once per photo and turn, from its thumb at HYPER_THUMB_PX, lib/hypertone.js),
+ * when Hyper Tone acts. */
+function syncHyperMap(u) {
+  if (!(u.hypertone > 0 && !neutralScan())) return;
+  if (!photo.hyper) {
+    const { preview } = photo, raw = preview.raw, { rgb, w, h } = raw ? rawThumb(raw, HYPER_THUMB_PX) : jpegThumb(preview, HYPER_THUMB_PX);
+    photo.hyper = hyperToneMap(rgb, w, h, LUMA[raw || preview.p3 ? 'rec2020' : 'srgb']);   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
+    log(`hyper tone map ${photo.hyper.w}x${photo.hyper.h}`);
+  }
+  if (engine.hyperFor !== photo.hyper) {
+    engine.set_hyper_tone_map(photo.hyper.map, photo.hyper.w, photo.hyper.h);
+    engine.hyperFor = photo.hyper;
+  }
 }
 
 /** v4: the inversion anchors of this frame (lib/invert.js), from the engine's negative scan of the metered thumb (no grain,
@@ -678,7 +705,7 @@ async function rotate(quarters) {
         preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
         if (gpu) uploadFrame(preview.data, preview.w, preview.h);
       }
-      Object.assign(photo, { rot, preview, dodge: null });   // dodging base: rebuilt from the turned thumb
+      Object.assign(photo, { rot, preview, dodge: null, hyper: null });   // dodging base, Hyper Tone map: rebuilt from the turned thumb
       log(`rotate ${rot * 90}°, preview ${preview.w}x${preview.h}`);
       showPreview();
     }
@@ -759,6 +786,7 @@ function neutralScan() { return scanner === 'none'; }
 async function setScanner(s) {
   scanner = s; store.set('fcf_scanner', s);
   for (const b of document.querySelectorAll('[data-scanner]')) b.setAttribute('aria-checked', String(b.dataset.scanner === s));
+  $('hyperRow').hidden = neutralScan();   // Hyper Tone is the Frontier's
   if (!photo || loadingPhoto) return;   // a photo still loading measures for this scanner in its own runAuto
   internoBusy++;   // an export waits for the switch (same guard as Interno)
   try {
@@ -1017,7 +1045,7 @@ const FORMAT = {
   grain: mult2, halation: mult,
   ca: pctOff, vignette: pctOff,
   falloff: pct,
-  texture: signPct, clarity: signPct, sharp: signPct, dust: pctOff, black: pctOff,
+  texture: signPct, clarity: signPct, sharp: signPct, dust: pctOff, black: pctOff, hypertone: pctOff,
 };
 const DUST_RESEED = 0.27;   // Rimescola with Polvere off turns it on at this amount (the default before v3.33)
 const AUTO_EV_MIN = -2, AUTO_EV_MAX = 2.5;   // Auto's exposure range, see autoSetup

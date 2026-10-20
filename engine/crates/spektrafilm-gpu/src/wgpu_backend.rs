@@ -1617,9 +1617,35 @@ impl WgpuBackend {
                 data_min: [f.data_min[0], f.data_min[1], f.data_min[2], 0.0],
                 inv: [f.inv[0], f.inv[1], f.inv[2], 0.0],
             };
+            #[repr(C)]
+            #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+            struct HyperParams {
+                map_w: u32,
+                map_h: u32,
+                on: u32,
+                pad: u32,
+                origin_frame: [f32; 4],
+                gain: [f32; 4],
+            }
+            let (hp, map): (HyperParams, &[f32]) = match &f.hyper {
+                Some(h) => (
+                    HyperParams {
+                        map_w: h.map_w,
+                        map_h: h.map_h,
+                        on: 1,
+                        pad: 0,
+                        origin_frame: [h.origin_px[0], h.origin_px[1], h.frame_px[0], h.frame_px[1]],
+                        gain: [h.gain[0], h.gain[1], h.gain[2], 0.0],
+                    },
+                    h.map,
+                ),
+                None => (HyperParams { map_w: 1, map_h: 1, on: 0, pad: 0, origin_frame: [0.0, 0.0, 1.0, 1.0], gain: [0.0; 4] }, &[0.0f32]),
+            };
             (
                 mk_uniform("scan_lut_params", bytemuck::bytes_of(&prm)),
                 mk_storage("scan_lut", bytemuck::cast_slice(f.table)),
+                mk_uniform("scan_lut_hyper", bytemuck::bytes_of(&hp)),
+                mk_storage("scan_lut_hyper_map", bytemuck::cast_slice(map)),
             )
         });
 
@@ -1670,6 +1696,8 @@ impl WgpuBackend {
                     wgpu::BufferBindingType::Storage { read_only: true },
                     wgpu::BufferBindingType::Storage { read_only: true },
                     wgpu::BufferBindingType::Storage { read_only: false },
+                    wgpu::BufferBindingType::Uniform,
+                    wgpu::BufferBindingType::Storage { read_only: true },
                 ],
             )
         });
@@ -1921,7 +1949,7 @@ impl WgpuBackend {
             ],
         });
 
-        let bg_scan_lut = scan_lut.as_ref().zip(scan_lut_pipe.as_ref()).map(|((prm, table), pipe)| {
+        let bg_scan_lut = scan_lut.as_ref().zip(scan_lut_pipe.as_ref()).map(|((prm, table, hyper, hyper_map), pipe)| {
             self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("bg_scan_lut"),
                 layout: &pipe.layout,
@@ -1930,6 +1958,8 @@ impl WgpuBackend {
                     wgpu::BindGroupEntry { binding: 1, resource: buf_a.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 2, resource: table.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 3, resource: buf_b.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 4, resource: hyper.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 5, resource: hyper_map.as_entire_binding() },
                 ],
             })
         });

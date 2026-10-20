@@ -90,6 +90,9 @@ pub struct Engine {
     pipeline: Option<Pipeline>,
     /// Full params as JSON (defaults + every override applied so far).
     params: serde_json::Value,
+    /// Hyper Tone map (map, w, h), set by `set_hyper_tone_map` and kept out of the JSON (hundreds of thousands of floats:
+    /// not re-sent, merged and parsed with every update); injected into the params at every rebuild.
+    hyper_map: (Vec<f32>, u32, u32),
 }
 
 #[wasm_bindgen]
@@ -107,7 +110,28 @@ impl Engine {
         let print = profile::load_profile_by_name(data_dir, paper)?;
         let pipeline = Pipeline::new_with_spectral(film, print, params, data_dir)
             .map_err(|e| JsError::new(&e))?;
-        Ok(Engine { pipeline: Some(pipeline), params: base })
+        Ok(Engine { pipeline: Some(pipeline), params: base, hyper_map: (Vec::new(), 0, 0) })
+    }
+
+    /// The params of `json` with the stored Hyper Tone map.
+    fn runtime(&self, json: &serde_json::Value) -> Result<RuntimeParams, JsError> {
+        let mut p: RuntimeParams = serde_json::from_value(json.clone())?;
+        let h = &mut p.scanner.hyper_tone;
+        (h.map, h.map_w, h.map_h) = self.hyper_map.clone();
+        Ok(p)
+    }
+
+    /// Set the Hyper Tone map (`scanner.hyper_tone`, row-major `width x height` EV values); the rest of Hyper Tone
+    /// (amount, frame position) comes with `update` as usual.
+    pub fn set_hyper_tone_map(&mut self, map: Vec<f32>, width: u32, height: u32) -> Result<(), JsError> {
+        if map.len() != (width * height) as usize {
+            return Err(JsError::new("hyper tone map size mismatch"));
+        }
+        self.hyper_map = (map, width, height);
+        let params = self.runtime(&self.params)?;
+        let pipeline = self.pipeline.take().expect("pipeline present");
+        self.pipeline = Some(pipeline.with_params(params));
+        Ok(())
     }
 
     /// Merge render-time overrides (print exposure, contrast morph, grain,
@@ -120,7 +144,7 @@ impl Engine {
         let overrides: serde_json::Value = serde_json::from_str(overrides_json)?;
         let mut next = self.params.clone();
         merge(&mut next, overrides);
-        let params: RuntimeParams = serde_json::from_value(next.clone())?;
+        let params = self.runtime(&next)?;
         let pipeline = self.pipeline.take().expect("pipeline present");
         self.pipeline = Some(pipeline.with_params(params));
         self.params = next;

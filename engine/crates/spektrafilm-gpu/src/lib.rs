@@ -253,6 +253,35 @@ pub struct FrontierGpuLut<'a> {
     pub steps: u32,
     pub data_min: [f32; 3],
     pub inv: [f32; 3],
+    /// Hyper Tone before the lookup (`spektrafilm_core::params::HyperToneParams`), when active.
+    pub hyper: Option<HyperToneGpu<'a>>,
+}
+
+/// Hyper Tone for the scan pass: density += `cmy_per_ev * (-amount * map(frame position))`.
+#[derive(Clone, Copy)]
+pub struct HyperToneGpu<'a> {
+    pub map: &'a [f32],
+    pub map_w: u32,
+    pub map_h: u32,
+    pub origin_px: [f32; 2],
+    pub frame_px: [f32; 2],
+    /// `-amount` times the stock's density change per EV at mid grey, per channel.
+    pub gain: [f32; 3],
+}
+
+/// The Hyper Tone map at pixel (x, y) of a render whose top-left is `origin_px` in a frame of `frame_px` pixels: bilinear,
+/// clamped to the edge, map texel centres at (i + 0.5) / map_w of the frame. `scan_lut.wgsl` `hyper_map` is the same maths.
+pub fn hyper_map(map: &[f32], map_w: u32, map_h: u32, origin_px: [f32; 2], frame_px: [f32; 2], x: u32, y: u32) -> f32 {
+    let (mw, mh) = (map_w as usize, map_h as usize);
+    let fx = ((origin_px[0] + x as f32 + 0.5) / frame_px[0] * map_w as f32 - 0.5).clamp(0.0, (mw - 1) as f32);
+    let fy = ((origin_px[1] + y as f32 + 0.5) / frame_px[1] * map_h as f32 - 0.5).clamp(0.0, (mh - 1) as f32);
+    let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
+    let (x1, y1) = ((x0 + 1).min(mw - 1), (y0 + 1).min(mh - 1));
+    let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+    let at = |i: usize, j: usize| map[j * mw + i];
+    let top = at(x0, y0) * (1.0 - tx) + at(x1, y0) * tx;
+    let bot = at(x0, y1) * (1.0 - tx) + at(x1, y1) * tx;
+    top * (1.0 - ty) + bot * ty
 }
 
 /// RGB → film-raw front pass of the GPU-resident chain. Both variants are

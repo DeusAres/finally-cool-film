@@ -152,6 +152,8 @@ pub struct Pipeline {
     frontier: Option<Arc<FrontierRuntime>>,
     /// Narrowband scan LUT (scan_film on a negative with `scanner.model="narrowband"`) and its key.
     narrowband: Option<Arc<(crate::frontier::FrontierLut, String)>>,
+    /// Hyper Tone's density change per EV at mid grey (the stock's grey ramp), per channel, and its key.
+    cmy_per_ev: Option<Arc<([f64; 3], String)>>,
 }
 
 impl Pipeline {
@@ -187,6 +189,7 @@ impl Pipeline {
         self.params = params;
         self.refresh_frontier();
         self.refresh_narrowband();
+        self.refresh_hyper_tone();
         self
     }
 
@@ -204,6 +207,44 @@ impl Pipeline {
     /// The scan LUT the scan stage uses instead of the spectral scan: the Frontier's or the narrowband scan's.
     fn scan_lut(&self) -> Option<&crate::frontier::FrontierLut> {
         self.frontier.as_deref().map(|f| &f.lut).or(self.narrowband.as_deref().map(|n| &n.0))
+    }
+
+    /// Hyper Tone, when it acts: its params and the density gain per map EV (`-amount * cmy_per_ev`). Only on a scan LUT
+    /// (Frontier, narrowband) with a usable map.
+    fn hyper_tone(&self) -> Option<(&crate::params::HyperToneParams, [f64; 3])> {
+        let h = &self.params.scanner.hyper_tone;
+        let s = &self.cmy_per_ev.as_deref()?.0;
+        (self.scan_lut().is_some() && h.amount != 0.0).then_some((h, s.map(|v| -h.amount * v)))
+    }
+
+    /// (Re)measure the stock's density change per EV at mid grey (grey ramp at 0.18 x 2^(+-1/2), developed on the CPU) when
+    /// Hyper Tone is on with a valid map and the film's development changed.
+    fn refresh_hyper_tone(&mut self) {
+        let p = &self.params;
+        let h = &p.scanner.hyper_tone;
+        let valid = h.amount != 0.0 && h.map_w > 0 && h.map_h > 0 && h.map.len() == (h.map_w * h.map_h) as usize
+            && h.frame_px[0] > 0.0 && h.frame_px[1] > 0.0;
+        if !(valid && p.io.scan_film && self.film.is_negative()) {
+            self.cmy_per_ev = None;
+            return;
+        }
+        let key = serde_json::to_string(&(&p.film_render.dir_couplers, p.film_render.density_curve_gamma, &p.io.input_color_space, &p.film_render.halation))
+            .unwrap_or_default();
+        if self.cmy_per_ev.as_ref().is_some_and(|c| c.1 == key) {
+            return;
+        }
+        let mut q = p.clone();
+        q.film_render.grain.active = false;
+        q.camera.auto_exposure = false;
+        q.camera.exposure_compensation_ev = 0.0;
+        let grey = |ev: f64| {
+            let v = spektrafilm_math::precision::from_f64(0.18 * 2f64.powf(ev));
+            let d = self.film_density(&ImageBuf::from_data(8, 8, vec![v; 8 * 8 * 3]), &q);
+            let i = (4 * 8 + 4) * 3;
+            [d.data[i] as f64, d.data[i + 1] as f64, d.data[i + 2] as f64]
+        };
+        let (lo, hi) = (grey(-0.5), grey(0.5));
+        self.cmy_per_ev = Some(Arc::new(([0, 1, 2].map(|c| hi[c] - lo[c]), key)));
     }
 
     /// (Re)build the narrowband scan LUT when `scanner.model = "narrowband"` and its inputs changed.
@@ -366,6 +407,7 @@ impl Pipeline {
             output_gamut,
             frontier: None,
             narrowband: None,
+            cmy_per_ev: None,
         }
     }
 
@@ -643,9 +685,11 @@ impl Pipeline {
             output_gamut,
             frontier: None,
             narrowband: None,
+            cmy_per_ev: None,
         };
         pipeline.refresh_frontier();
         pipeline.refresh_narrowband();
+        pipeline.refresh_hyper_tone();
         Ok(pipeline)
     }
 
@@ -719,6 +763,7 @@ impl Pipeline {
                 &color_ref,
                 &self.output_gamut,
                 self.scan_lut(),
+                self.hyper_tone(),
             );
             print_stage_timing(stage_timings, "scanning", t);
             tracing::info!("pipeline: scanning complete (film scan)");
@@ -1371,7 +1416,15 @@ impl Pipeline {
             output_cctf_encoding: self.params.io.output_cctf_encoding,
             frontier: self.scan_lut().map(|lut| {
                 let (table, steps, data_min, inv) = lut.gpu_table();
-                spektrafilm_gpu::FrontierGpuLut { table, steps, data_min, inv }
+                let hyper = self.hyper_tone().map(|(h, gain)| spektrafilm_gpu::HyperToneGpu {
+                    map: &h.map,
+                    map_w: h.map_w,
+                    map_h: h.map_h,
+                    origin_px: h.origin_px.map(|v| v as f32),
+                    frame_px: h.frame_px.map(|v| v as f32),
+                    gain: gain.map(|v| v as f32),
+                });
+                spektrafilm_gpu::FrontierGpuLut { table, steps, data_min, inv, hyper }
             }),
         };
         backend.try_run_film_chain(&params)

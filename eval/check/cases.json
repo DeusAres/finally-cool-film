@@ -84,6 +84,17 @@
      "scanFrontier"
     ]
    }
+  },
+  "v4_rock_hypertone": {
+   "photo": "samples/indigo/IDG_20261011_134131_210",
+   "query": "?v4",
+   "export": "export",
+   "ui": {
+    "hypertone": 1,
+    "_click": [
+     "scanFrontier"
+    ]
+   }
   }
  }
 }

@@ -179,6 +179,26 @@ pub struct ScannerParams {
     /// `model = "narrowband"`: the negative read in three narrow bands (see `crate::narrowband`).
     #[serde(default)]
     pub narrowband: NarrowbandParams,
+    /// Hyper Tone: local exposure compensation in the scanner, before its LUT (see `HyperToneParams`).
+    #[serde(default)]
+    pub hyper_tone: HyperToneParams,
+}
+
+/// Hyper Tone (the Frontier's local tone control, in the scan): each pixel's film density is moved along the stock's own
+/// grey ramp by `-amount * map(x, y)` EV, where `map` is the caller's low-resolution, edge-preserving base of the frame's
+/// log exposure (EV from the frame's median; bright areas positive). So large bright areas are scanned darker and large dark
+/// ones lighter (a compressed range), detail inside them and colour kept; the map's edges set where it changes (no halos
+/// when the map follows them). `amount` 0 = off (the scan is untouched). The map is sampled bilinearly in frame coordinates
+/// (`origin_px` = this render's top-left in the frame of `frame_px` pixels), so every export tile reads the same map.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HyperToneParams {
+    pub amount: f64,
+    pub map: Vec<f32>,
+    pub map_w: u32,
+    pub map_h: u32,
+    pub origin_px: [f64; 2],
+    pub frame_px: [f64; 2],
 }
 
 /// Bands of the narrowband scan (nm). Default: the RGB LEDs of the reference scans in the gold200
@@ -210,6 +230,7 @@ impl Default for ScannerParams {
             model: None,
             frontier: FrontierParams::default(),
             narrowband: NarrowbandParams::default(),
+            hyper_tone: HyperToneParams::default(),
         }
     }
 }
