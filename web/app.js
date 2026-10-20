@@ -196,7 +196,7 @@ function renderParamsJson(u, noGrain = false, tileMm = 0, region = null) {
  * update: none of ours change after the build. */
 function syncEngine(u, { noGrain = false, tileMm = 0, region = null } = {}) {
   if (!engine) {
-    engine = new sf.Engine(FILM, PAPER, JSON.stringify(deepMerge(BASE_PARAMS, inputParams(photo.preview.p3))));
+    engine = new sf.Engine(FILM, PAPER, JSON.stringify(deepMerge(BASE_PARAMS, inputParams(photo.preview.p3), V4 ? V4_STOCK : {})));
     engineParams = '';
   }
   const json = renderParamsJson(u, noGrain, tileMm, region);
@@ -1087,6 +1087,12 @@ function onThumbDoubleTap(input, fn) {
 // film's; 1.2 overshoots the film's strongest colours. The old values had no Gold data behind them (eval/calib/CALIB.md).
 // First calibration step, to be refined as more references come in. v3 keeps the engine's defaults (its look was tuned on them).
 const V4_DIR = { inhibition_samelayer: 1.0, inhibition_interlayer: 1.0 };
+// v4 film layer speeds (engine FilmRenderingParams.layer_speed_ev, a calibration input: set when the engine is built). Real Gold
+// 200 (eval/gold200, two scenes, each at the film exposure that best explains its negative: -0.5 / -2 EV) has its red layer
+// relatively faster than the datasheet curves: red +0.75 EV takes the mids' green / cool cast down (mean |a*| over tones
+// 8.6 -> 4.2, hue error +14 / +8 -> +7 / +2 deg); +1 EV does slightly better in the shadows but turns the lights red (a* +5.9).
+// Second calibration step; to refine with more references.
+const V4_STOCK = { film_render: { layer_speed_ev: [0.75, 0, 0] } };
 // v4 Frontier AutoSetup reads the colour from near-neutral pixels (engine FrontierAutoParams.neutral_sigma, density): a frame
 // filled by one colour no longer pulls it towards grey (the Frontier's "subject failure"). Measured (sf-eval, v4 Frontier):
 // green park ORF Y key -0.065 -> -0.018 (its grey path no longer pink), tungsten cat C +0.035 -> +0.024 (a real cast still read),

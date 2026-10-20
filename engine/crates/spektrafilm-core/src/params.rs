@@ -759,6 +759,12 @@ impl Default for GlareParams {
 pub struct FilmRenderingParams {
     #[serde(default = "default_one")]
     pub density_curve_gamma: f32,
+    /// Per-layer speed offset of the film (EV, R/G/B layer): each layer's density curve is moved along log exposure, a
+    /// positive value making that layer faster (it reaches a density at less light). Models a real stock / process
+    /// differing from the datasheet curves. Calibration input (applied to the profile when the pipeline is built, like
+    /// `development_time`; `with_params` keeps the built curves). 0 = the datasheet.
+    #[serde(default)]
+    pub layer_speed_ev: [f64; 3],
     /// Development time (minutes) for B&W development-time families —
     /// forward-port of upstream dev's `chemistry.development_time`. Selects
     /// the nearest entry of the profile's family; `None` picks the
@@ -779,6 +785,7 @@ impl Default for FilmRenderingParams {
     fn default() -> Self {
         Self {
             density_curve_gamma: 1.0,
+            layer_speed_ev: [0.0; 3],
             development_time: None,
             grain: GrainParams::default(),
             halation: HalationParams::default(),

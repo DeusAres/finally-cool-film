@@ -381,7 +381,10 @@ impl Pipeline {
         // B&W profiles must be resolved on every construction path —
         // an unresolved family would read development-time columns as
         // R/G/B channels.
-        let film = crate::profile::resolve_for_render(film, params.film_render.development_time);
+        let film = crate::profile::with_layer_speed(
+            crate::profile::resolve_for_render(film, params.film_render.development_time),
+            params.film_render.layer_speed_ev,
+        );
         let print = crate::profile::resolve_for_render(print, params.print_render.development_time);
         let print_illuminant = enlarger::enlarger_filtered_illuminant_f64(
             &params.enlarger.illuminant,
@@ -421,7 +424,10 @@ impl Pipeline {
         // B&W profiles: collapse the development-time family to the selected
         // time and broadcast the single channel onto the 3-channel engine
         // layout. Must happen before anything reads the profile data.
-        let film = crate::profile::resolve_for_render(film, params.film_render.development_time);
+        let film = crate::profile::with_layer_speed(
+            crate::profile::resolve_for_render(film, params.film_render.development_time),
+            params.film_render.layer_speed_ev,
+        );
         let print = crate::profile::resolve_for_render(print, params.print_render.development_time);
 
         // Python parity: mirror `_apply_film_specifics` in

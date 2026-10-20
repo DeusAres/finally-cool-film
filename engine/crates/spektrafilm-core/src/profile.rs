@@ -410,6 +410,33 @@ fn base_density_column(rows: &[Vec<f64>], idx: usize) -> Vec<f64> {
 /// channels, while `channel_density` becomes `[dye, 0, 0]` so every spectral
 /// integration computes exactly the upstream single-channel
 /// `density · dye_spectrum` (the G/B lanes carry no spectral weight).
+/// The profile with each layer's density curve moved by `speed_ev[c]` EV along log exposure (FilmRenderingParams
+/// `layer_speed_ev`): new_c(logE) = old_c(logE + speed_c log10 2), linear between the table's points, held at its ends;
+/// NaN where a neighbour is NaN. Zero offsets return the profile untouched.
+pub fn with_layer_speed(mut profile: Profile, speed_ev: [f64; 3]) -> Profile {
+    if speed_ev.iter().all(|&s| s == 0.0) {
+        return profile;
+    }
+    let x = profile.data.log_exposure.clone();
+    let old = profile.density_curves_f64();
+    for (c, &s) in speed_ev.iter().enumerate() {
+        if s == 0.0 {
+            continue;
+        }
+        let shift = s * std::f64::consts::LOG10_2;
+        for (i, row) in profile.data.density_curves.iter_mut().enumerate() {
+            let q = (x[i] + shift).clamp(x[0], x[x.len() - 1]);
+            let j = x.partition_point(|&v| v <= q).clamp(1, x.len() - 1);
+            let t = (q - x[j - 1]) / (x[j] - x[j - 1]).max(1e-12);
+            let v = old[j - 1][c] * (1.0 - t) + old[j][c] * t;
+            if let Some(cell) = row.get_mut(c) {
+                *cell = v;
+            }
+        }
+    }
+    profile
+}
+
 pub fn resolve_for_render(mut profile: Profile, development_time: Option<f64>) -> Profile {
     if !profile.is_bw() {
         return profile;
