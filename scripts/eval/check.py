@@ -16,7 +16,9 @@ Metrics per render (sRGB PNG of the app canvas):
   edges    "created edges": Sobel energy of the render not explained by a global tone map of the scene-linear source (posterisation,
            halos, contour lines; 0.41 when the v3.17 recovery posterised the cat, 0.05 after the fix)
   tex      median |L* - blur(L*, 1.5 px)| on the light areas (L* > 70): highlight texture
-Outputs go to eval/out/check/ (git-ignored): <case>.png, metrics.json.
+A case with "export": "export" | "exportIG" also exports (the raw decode / jpegli / border path) and measures the JPEG,
+downscaled to the preview's long side, as <case>_export (no edges: other pixels than the source luma).
+Outputs go to eval/out/check/ (git-ignored): <case>.png, <case>_export.jpg, metrics.json.
 """
 import argparse, json, os, socket, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
@@ -55,7 +57,9 @@ def pinned(photo):
     return dst
 
 
-def render(port, photo, ui, out_png, query=''):
+def render(port, photo, ui, out_png, query='', export=None):
+    if export:
+        ui = dict(ui, _export=out_png[:-4] + '_export.jpg', _exportBtn=export)
     r = subprocess.run(['node', os.path.join(ROOT, 'scripts', 'eval', 'render.cjs'), f'http://127.0.0.1:{port}/index.html{query}',
                         pinned(photo), out_png, json.dumps(ui)], capture_output=True, text=True)
     line = next((l for l in (r.stdout + r.stderr).splitlines() if l.startswith(('OK', 'ERR'))), 'ERR no output')
@@ -75,8 +79,13 @@ def source_luma(photo):
     return np.log2(np.maximum(x @ [0.2627, 0.6780, 0.0593], 1e-6))
 
 
+PREVIEW_LONG_SIDE = 2000   # web/lib/util.js: exports are measured at the preview's size
+
+
 def measure(png, Ls):
-    lab = color.rgb2lab(np.asarray(Image.open(png).convert('RGB')) / 255.0)
+    im = Image.open(png).convert('RGB')
+    im.thumbnail((PREVIEW_LONG_SIDE, PREVIEW_LONG_SIDE), Image.LANCZOS)   # a no-op for the preview renders
+    lab = color.rgb2lab(np.asarray(im) / 255.0)
     L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
     m = {'L': round(float(L.mean()), 2), 'bands': {}}
     for lo, hi in BANDS:
@@ -144,7 +153,7 @@ def main():
         time.sleep(1)
         t0 = time.time()
         with ThreadPoolExecutor(a.jobs) as ex:
-            res = dict(zip(cases, ex.map(lambda kv: render(port, kv[1]['photo'], kv[1]['ui'], os.path.join(OUT, kv[0] + '.png'), kv[1].get('query', '')), cases.items())))
+            res = dict(zip(cases, ex.map(lambda kv: render(port, kv[1]['photo'], kv[1]['ui'], os.path.join(OUT, kv[0] + '.png'), kv[1].get('query', ''), kv[1].get('export')), cases.items())))
         print(f'renders: {len(cases)} in {time.time() - t0:.0f} s')
     finally:
         srv.terminate()
@@ -158,6 +167,8 @@ def main():
         if c['photo'] not in luma:
             luma[c['photo']] = source_luma(c['photo'])
         metrics[k] = measure(os.path.join(OUT, k + '.png'), luma[c['photo']])
+        if c.get('export'):
+            metrics[k + '_export'] = measure(os.path.join(OUT, k + '_export.jpg'), None)
     if a.chart:
         metrics['_chart'] = chart_score()
     json.dump(metrics, open(os.path.join(OUT, 'metrics.json'), 'w'), indent=1)

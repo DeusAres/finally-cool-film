@@ -8,7 +8,7 @@
 // Adobe ColorMatrix of the model (XYZ D65 -> camera, as dcraw / LibRaw adobe_coeff, /10000).
 // Not supported: 14-bit ORF of the OM-1 generation (another codec), lens corrections.
 
-import { parseTIFF, cameraColour, developCFA, PAD } from './dng.js';
+import { parseTIFF, tiffMagic, cameraColour, developCFA, PAD } from './dng.js';
 
 /** Adobe ColorMatrix (D65) per Olympus model, x10000, from LibRaw's colordata (Adobe DNG Converter values). */
 const ADOBE = {
@@ -70,9 +70,8 @@ const ADOBE = {
   'XZ-10': [9777, -3483, -925, -2886, 11297, 1800, -602, 1663, 5134],
 };
 
-/** 'IIRO' / 'IIRS' / 'MMOR' header (first 4 bytes). */
-export const isORFHeader = (h) => (h[0] === 0x49 && h[1] === 0x49 && h[2] === 0x52 && (h[3] === 0x4f || h[3] === 0x53))
-  || (h[0] === 0x4d && h[1] === 0x4d && h[2] === 0x4f && h[3] === 0x52);
+/** An Olympus ORF header (first 4 bytes: 'IIRO' / 'IIRS' / 'MMOR'): a TIFF with its own magic. */
+export const isORFHeader = (h) => tiffMagic(h) > 42;
 
 const TYPE_SIZE = [0, 1, 1, 2, 4, 8, 1, 1, 2, 4, 8, 4, 8, 4];
 

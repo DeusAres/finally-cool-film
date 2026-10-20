@@ -23,7 +23,7 @@ sed -i "s#new Worker('export-worker.js')#new Worker('export-worker.js?v=$v')#" "
 sed -i "s#importScripts('vendor/jpegli_wasm2.js')#importScripts('vendor/jpegli_wasm2.js?v=$v')#" "$dir/export-worker.js"
 sed -i "s#new URL('spektrafilm_wasm_bg.wasm', import.meta.url)#new URL('spektrafilm_wasm_bg.wasm?v=$v', import.meta.url)#" "$dir/pkg/spektrafilm_wasm.js"
 # Fail loudly if a pattern stopped matching (e.g. after a refactor).
-for f in "$dir/app.js" "$dir/export-worker.js" "$dir/pkg/spektrafilm_wasm.js" "$dir/index.html"; do
+for f in "$dir/app.js" "$dir/export-worker.js" "$dir/pkg/spektrafilm_wasm.js" "$dir/index.html" "$dir/lib/raw.js" "$dir/lib/raw-worker.js"; do
   grep -q "?v=$v" "$f" || { echo "stamp-version: nothing stamped in $f" >&2; exit 1; }
 done
 grep -q "__BUILD__\|__BUILD_ID__" "$dir/app.js" && { echo "stamp-version: build label not stamped" >&2; exit 1; }

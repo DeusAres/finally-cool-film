@@ -3,7 +3,7 @@ import { sleep, store, PREVIEW_LONG_SIDE } from './lib/util.js';
 import { DISPLAY_GAIN_LUT } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
-import { isRaw, loadRaw, uploadRaw, rawThumb, rawPreviewRGBA, withRotation, cancelRawDecodes } from './lib/raw.js';
+import { isRaw, loadRaw, uploadRaw, rawThumb, rawPreviewRGBA, withRotation } from './lib/raw.js';
 import { internoParams } from './lib/interno.js';
 import { invertAnchors, invertUniform, invertCPU } from './lib/invert.js';
 import { iccSegment } from './lib/icc.js';
@@ -310,7 +310,7 @@ async function render() {
     status('Errore: ' + (e?.message || e) + (++renderErrors >= 2 ? ' — tocca qui per ricaricare' : ''), renderErrors >= 2 ? 'reload' : '');
   } finally {
     rendering = false;
-    if (!exporting && !loadingPhoto) setBusy(null);   // a decode in flight keeps its marker
+    setBusy(exporting ? 'export' : loadingPhoto ? loadMark : null);   // a decode in flight gets its marker back
   }
 }
 
@@ -553,33 +553,38 @@ if (V4) {
 
 // ---------- photo ----------
 
-let loadSeq = 0, loadingPhoto = false;
+// loadSeq: the newest pick (an older load that resumes after it returns without touching anything); loadAbort stops an
+// older pick's raw decode (raw.js); loadMark: the decode's crash breadcrumb (a render during the decode puts it back).
+let loadSeq = 0, loadingPhoto = false, loadAbort = null, loadMark = null;
 async function loadPhoto(file) {
   if (!file || exporting) return;   // a drop during an export would decode on top of it (memory) and race its finally
+  const my = ++loadSeq, prev = photo;
   loadingPhoto = true;   // from here: the update check must not reload under it (also during the boot wait)
-  cancelRawDecodes();    // a raw still decoding for an older pick is replaced, not queued
+  loadAbort?.abort(new Error('decodifica annullata'));   // a raw still decoding for an older pick is replaced, not queued
+  const abort = loadAbort = new AbortController();
   if (!engineReady) {
     status('Caricamento motore…');
     await booted;
-    if (!engineReady) { status(bootError); loadingPhoto = false; return; }   // boot failed: show its error again (reload to retry)
+    if (my !== loadSeq) return;   // a newer pick waited too and loads instead
+    if (!engineReady) { status(bootError, 'reload'); loadingPhoto = false; return; }   // boot failed: show its error again
   }
-  const my = ++loadSeq, prev = photo;
   status('Decodifica…');
   // Nothing exportable until this photo has loaded and been auto-measured; stays disabled on error.
   $('export').disabled = $('exportIG').disabled = $('auto').disabled = true;
   // Breadcrumb: a decode killed for memory (a 48 MP HEIC, a 20 MP raw) is reported on the next load.
-  setBusy(`decodifica ${file.name} ${(file.size / 1e6).toFixed(1)} MB`, true);
+  loadMark = `decodifica ${file.name} ${(file.size / 1e6).toFixed(1)} MB`;
+  setBusy(loadMark, true);
   try {
     log(`photo: ${file.name} ${file.type} ${(file.size / 1e6).toFixed(1)} MB`);
     if (await isRaw(file)) {
       // DNG (raw.js): scene-linear Rec.2020, half-float frame; output in Display P3.
       if (!gpu) throw new Error('I file RAW (DNG / ORF) richiedono WebGPU');
-      const t = performance.now(), raw = await loadRaw(file, PREVIEW_LONG_SIDE);
+      const t = performance.now(), raw = await loadRaw(file, PREVIEW_LONG_SIDE, 0, { signal: abort.signal });
       while (rendering || exporting) await sleep(20);
       if (my !== loadSeq) return;
       const preview = { data: rawPreviewRGBA(raw), w: raw.w, h: raw.h, p3: true, raw };
       preview.before = new ImageData(preview.data, preview.w, preview.h, { colorSpace: 'display-p3' });
-      log(`raw ${raw.fullW}x${raw.fullH}, preview ${raw.w}x${raw.h}, orientation ${raw.orientation}, baseline ${raw.baseline} EV, ${Math.round(performance.now() - t)} ms`);
+      log(`raw ${raw.fullW}x${raw.fullH}, preview ${raw.w}x${raw.h}, orientation ${raw.orientation}, baseline ${raw.baseline} EV, ${Math.round(performance.now() - t)} ms (${raw.decodedIn})`);
       $('indoor').checked = false; rotPending = 0; resetTilt();
       photo = { file, size: null, preview, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file), rot: 0 };
       uploadRaw(sf, raw);
@@ -607,14 +612,15 @@ async function loadPhoto(file) {
     $('export').disabled = false; $('auto').disabled = false; $('newPhoto').hidden = false;
     $('exportIG').hidden = false; $('exportIG').disabled = false;
   } catch (e) {
+    if (my !== loadSeq) { log(`load superseded: ${file.name} (${e?.message || e})`); return; }   // the newer pick owns the status
     log('load error: ' + (e?.stack || e));
     status('Errore: ' + (e?.message || e));
-    if (my === loadSeq && photo === prev && prev) {   // failed decode: the previous photo is still shown, keep it usable
+    if (photo === prev && prev) {   // failed decode: the previous photo is still shown, keep it usable
       $('export').disabled = $('auto').disabled = false;
       $('exportIG').disabled = false;
     }
   } finally {
-    if (my === loadSeq) { loadingPhoto = false; if (!rendering && !exporting) setBusy(null); }
+    if (my === loadSeq) { loadingPhoto = false; loadMark = null; if (!rendering && !exporting) setBusy(null); }
   }
 }
 
@@ -791,12 +797,12 @@ async function exportFull(ig = false) {
   exporting = true;
   $('export').disabled = $('exportIG').disabled = $('auto').disabled = $('newPhoto').disabled = $('pick').disabled = $('indoor').disabled = $('rotL').disabled = $('rotR').disabled = true;
   setBusy('export', true);
-  // A preview render in flight shares the engine and the GPU frame: let it finish first.
-  while (rendering) await sleep(20);
-  const u = ui(), dust = dustAmount(), marks = dustMarks();   // fixed for every strip
-  const t0 = performance.now();
   let enc = null;
-  try {
+  try {   // from `exporting = true` on: anything that throws must reach the finally (it re-enables the buttons)
+    // A preview render in flight shares the engine and the GPU frame: let it finish first.
+    while (rendering) await sleep(20);
+    const u = ui(), dust = dustAmount(), marks = dustMarks();   // fixed for every strip
+    const t0 = performance.now();
     const rawPv = photo.preview.raw, size = photo.size;
     const rot = photo.rot || 0, turned = rot & 1;
     const fw = rawPv ? rawPv.fullW : turned ? size.h : size.w, fh = rawPv ? rawPv.fullH : turned ? size.w : size.h;
@@ -812,10 +818,9 @@ async function exportFull(ig = false) {
     status('Esporto: decodifica…');
     let frame;   // { data (CPU path only), w, h, p3, raw }
     if (rawPv) {
-      // Full-resolution raw decode, uploaded as half-float strips, then dropped.
-      // f16: oriented half floats from the decode worker (8 B/px, no conversion on the main thread)
-      const raw = await loadRaw(photo.file, scale < 1 ? Math.round(longCap) : undefined, rot, { f16: true });
-      uploadRaw(sf, raw);
+      // Full-resolution raw decode, uploaded as it decodes (half-float strips from the worker: raw.js loadRaw `sf`)
+      const raw = await loadRaw(photo.file, scale < 1 ? Math.round(longCap) : undefined, rot, { sf });
+      log(`export raw ${raw.w}x${raw.h} (${raw.decodedIn})`);
       frame = { data: null, w: raw.w, h: raw.h, p3: true, raw: true };
     } else {
       const bitmap = await decodeFull(photo.file);
@@ -939,9 +944,10 @@ function openLog(title) {
   $('logText').textContent = fullLog();
   $('logPanel').style.display = 'flex';
 }
-// The status line opens the log; a message shown with an action (status(msg, 'reload'): a waiting update, a broken GPU)
-// reloads instead, until the next message replaces it. One action per tap.
-$('status').addEventListener('click', () => { if ($('status').dataset.action === 'reload') { if (!exporting) freshReload(); } else openLog('Log'); });
+// The status line opens the log; a message shown with an action (status(msg, 'reload'): a waiting update, a broken GPU, a
+// failed boot) reloads instead, until the next message replaces it. One action per tap; never during an export.
+const reloadNow = () => { if (!exporting) freshReload(); };
+$('status').addEventListener('click', () => { if ($('status').dataset.action === 'reload') reloadNow(); else openLog('Log'); });
 $('logClose').addEventListener('click', () => { $('logPanel').style.display = 'none'; });
 $('logCopy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(fullLog()); $('logCopy').textContent = 'Copiato ✓'; } catch { $('logCopy').textContent = 'Seleziona il testo'; }
@@ -1029,11 +1035,14 @@ let internoBusy = 0;
 $('indoor').addEventListener('change', async () => {
   if (!photo) return;
   internoBusy++;
+  const on = $('indoor').checked;   // the lab re-reads the (thin) negative; sliders are not touched
   try {
     while (rendering || exporting) await sleep(20);
-    const on = $('indoor').checked;   // the lab re-reads the (thin) negative; sliders are not touched
     photo.autoCache[on] ??= autoSetup(on, photo.autoEv).auto;
     photo.auto = photo.autoCache[on];
+  } catch (e) {   // the switch goes back to what is applied
+    log('interno error: ' + (e?.stack || e)); status('Errore: ' + (e?.message || e));
+    $('indoor').checked = !on;
   } finally { internoBusy--; }
   render();
 });
@@ -1108,8 +1117,15 @@ async function checkUpdate() {
       try { sessionStorage.setItem('fcf_reload_for', id); } catch { /* storage blocked */ }
       return freshReload();
     }
-    status('Nuova versione disponibile — tocca qui per aggiornare', 'reload');
+    offerUpdate();
   } catch { /* offline */ }
+}
+// The status line says so until the next message replaces it; the version label keeps the offer (tap to update).
+function offerUpdate() {
+  status('Nuova versione disponibile — tocca qui per aggiornare', 'reload');
+  const v = $('ver');
+  if (v.classList.contains('update')) return;
+  v.classList.add('update'); v.textContent += ' · aggiorna ↻'; v.addEventListener('click', reloadNow);
 }
 checkUpdate();
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
@@ -1122,4 +1138,4 @@ const booted = bootEngine().then(async (ok) => {
   gpu = ok; engineReady = true;
   log(`engine ready, gpu=${gpu}`);
   status(gpu ? 'Pronto. Scegli una foto.' : 'WebGPU non disponibile: userò la CPU (lento).');
-}).catch((e) => { log('boot error: ' + (e?.stack || e)); bootError = 'Errore avvio: ' + (e?.message || e) + ' (ricarica la pagina)'; status(bootError); });
+}).catch((e) => { log('boot error: ' + (e?.stack || e)); bootError = 'Errore avvio: ' + (e?.message || e) + ' — tocca qui per ricaricare'; status(bootError, 'reload'); });

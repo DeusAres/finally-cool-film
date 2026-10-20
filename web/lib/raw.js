@@ -9,7 +9,7 @@
 // Orientation (EXIF 1–8) is applied by index mapping while converting strips,
 // so the full-resolution float image is never copied.
 
-import { decodeDNG } from './dng.js';
+import { decodeDNG, tiffMagic } from './dng.js';
 import { decodeORF, isORFHeader } from './orf.js';
 import { REC2020_TO_P3, linearToSrgb } from './color.js';
 
@@ -17,9 +17,7 @@ import { REC2020_TO_P3, linearToSrgb } from './color.js';
 export async function isRaw(file) {
   if (/\.(dng|orf)$/i.test(file.name || '') || /dng|orf/i.test(file.type || '')) return true;
   if (file.type && file.type !== 'application/octet-stream') return false;
-  const h = new Uint8Array(await file.slice(0, 4).arrayBuffer());
-  return (h[0] === 0x49 && h[1] === 0x49 && h[2] === 0x2a && h[3] === 0) || (h[0] === 0x4d && h[1] === 0x4d && h[2] === 0 && h[3] === 0x2a)
-    || isORFHeader(h);
+  return tiffMagic(new Uint8Array(await file.slice(0, 4).arrayBuffer())) !== 0;
 }
 
 /** Decode raw bytes (DNG or ORF by header) at most `opt.maxLongSide` px: { w, h, rgb, exposure, meta }. */
@@ -33,62 +31,74 @@ export function rawObject(d, rot = 0) {
   return withRotation({ sw: d.w, sh: d.h, ow, oh, ofw, ofh, rgb: d.rgb, baseline: d.exposure || 0, orientation: o }, rot);
 }
 
-/**
- * Decode and assemble, in this thread. `f16`: the export's form, the frame oriented and converted to half-float RGBA
- * (`r.f16`, uploaded by uploadRaw as is) and the float image dropped: 8 B/px instead of 12, and no conversion on the main
- * thread when it runs in the worker.
- */
-export async function decodeRaw(buf, { maxLongSide, rot = 0, f16 = false } = {}) {
-  const r = rawObject(await decodeRawBuffer(buf, maxLongSide ? { maxLongSide } : {}), rot);
-  if (!f16) return r;
-  const out = new Uint16Array(r.w * r.h * 4), src = r.rgb;
-  for (let y = 0, k = 0; y < r.h; y++) {
-    for (let x = 0; x < r.w; x++, k += 4) {
-      const i = srcIndex(r, x, y) * 3;
-      out[k] = half(src[i]); out[k + 1] = half(src[i + 1]); out[k + 2] = half(src[i + 2]); out[k + 3] = 0x3c00;
-    }
-  }
-  return { ...r, rgb: null, f16: out };
+/** Decode and assemble, in this thread (the worker's job; here only as the fallback and in node). */
+export async function decodeRaw(buf, { maxLongSide, rot = 0 } = {}) {
+  return rawObject(await decodeRawBuffer(buf, maxLongSide ? { maxLongSide } : {}), rot);
 }
 
-// In a page each decode runs in its own raw-worker.js, terminated when it answers (its garbage, the file and the CFA,
-// goes with it) or when a newer photo cancels it; a worker that cannot start or dies decodes here instead, and so do node
-// scripts (eval/dng2npy.mjs). The bytes are read here and transferred.
+// In a page each decode runs in its own raw-worker.js, terminated when it is done (its garbage, the file and the CFA, goes
+// with it) or aborted (a newer photo); the file's bytes are transferred to it, not copied. A worker that cannot start or
+// dies decodes here instead, for the rest of the session (the bytes are read again: the transfer emptied them); so do
+// node scripts (eval/dng2npy.mjs).
+//   Preview: the worker posts { r } (the float image transferred) and main keeps it (turns, 'before' view, thumbs).
+//   Export (`sf` given): the worker posts { head } (r without pixels); main allocates the GPU frame and asks for one
+//   half-float strip at a time ('more' -> { strip, y0 }, transferred), uploading each before asking for the next. So the
+//   full f16 image never exists and main converts nothing: the peak is the worker's file + float image + one strip.
 const canWork = typeof Worker !== 'undefined' && typeof document !== 'undefined';
 let workerOk = canWork;
-const active = new Set();
-function decodeInWorker(buf, opt) {
+function decodeInWorker(file, buf, opt, sf, signal) {
   let w;
   try {
     // the worker URL carries the page's cache-busting query (scripts/stamp-version.sh stamps raw.js's import)
     w = new Worker(new URL('./raw-worker.js' + new URL(import.meta.url).search, import.meta.url), { type: 'module' });
   } catch { workerOk = false; return null; }
   return new Promise((resolve, reject) => {
-    const job = { reject, w };
-    const done = () => { active.delete(job); w.terminate(); };
+    let over = false, head = null;
+    const end = () => { over = true; w.terminate(); signal?.removeEventListener('abort', abort); };
+    const abort = () => { if (!over) { end(); reject(signal.reason); } };
     const fallback = () => {   // the worker died or never loaded: from now on decode here
-      done(); workerOk = false;
-      decodeRaw(buf, opt).then(resolve, reject);
+      if (over) return;
+      end(); workerOk = false;
+      file.arrayBuffer().then((b) => decodeHere(b, opt, sf)).then(resolve, reject);
     };
-    w.onmessage = ({ data }) => { done(); if ('error' in data) reject(new Error(data.error)); else resolve(data.r); };
+    w.onmessage = ({ data }) => {
+      if (over) return;   // an event queued before terminate()
+      try {
+        if ('error' in data) { end(); reject(new Error(data.error)); } else if (data.r) { end(); resolve({ ...data.r, decodedIn: 'worker' }); } else if (data.head) {
+          head = data.head; sf.alloc_frame_f16(head.w, head.h); w.postMessage('more');
+        } else {
+          sf.set_frame_rows_f16(data.strip, data.y0);
+          if (data.y0 + data.strip.length / (4 * head.w) < head.h) w.postMessage('more'); else { end(); resolve({ ...head, decodedIn: 'worker' }); }
+        }
+      } catch (e) { end(); reject(e); }   // a GPU upload error
+    };
     w.onerror = (e) => { e.preventDefault?.(); fallback(); };
     w.onmessageerror = fallback;
-    active.add(job);
-    w.postMessage({ buf, opt });   // not transferred: the fallback may still need the bytes
+    signal?.addEventListener('abort', abort);
+    w.postMessage({ buf, opt: { ...opt, stream: !!sf } }, [buf]);
   });
 }
 
-/** Stop the raw decodes in flight (a newer photo replaces them); their loads fail with 'annullata'. */
-export function cancelRawDecodes() {
-  for (const job of active) { job.w.terminate(); job.reject(new Error('decodifica annullata')); }
-  active.clear();
+// The fallback: decode in this thread; with `sf`, upload and drop the float image (the export's form).
+async function decodeHere(buf, opt, sf) {
+  const r = await decodeRaw(buf, opt);
+  if (!sf) return { ...r, decodedIn: 'main' };
+  uploadRaw(sf, r);
+  return { ...r, rgb: null, decodedIn: 'main' };
 }
 
-/** Decode (optionally downscaled); returns { w, h, rgb, baseline, orientation, fullW, fullH } (with `f16`: { ..., f16 },
- * see decodeRaw), sizes AFTER orientation. `rot`: the user's extra quarter turns clockwise (withRotation). */
-export async function loadRaw(file, maxLongSide, rot = 0, { f16 = false } = {}) {
-  const buf = await file.arrayBuffer(), opt = { maxLongSide, rot, f16 };
-  return (workerOk && await decodeInWorker(buf, opt)) || decodeRaw(buf, opt);
+/**
+ * Decode (optionally downscaled); returns { w, h, rgb, baseline, orientation, fullW, fullH, decodedIn ('worker' | 'main') },
+ * sizes AFTER orientation. `rot`: the user's extra quarter turns clockwise (withRotation). `sf`: upload the frame to the GPU
+ * as it decodes (export) and return the same object without pixels (rgb null). `signal`: an AbortSignal that stops the
+ * decode (a newer photo); the load then rejects with its reason.
+ */
+export async function loadRaw(file, maxLongSide, rot = 0, { sf = null, signal = null } = {}) {
+  signal?.throwIfAborted();
+  const buf = await file.arrayBuffer(), opt = { maxLongSide, rot };
+  signal?.throwIfAborted();   // aborted while the file was read (hundreds of ms for a big raw)
+  const p = workerOk && decodeInWorker(file, buf, opt, sf, signal);
+  return p ? p : decodeHere(buf, opt, sf);
 }
 
 /** The same decoded raw turned by `rot` quarter turns clockwise after its EXIF orientation (no pixel copy:
@@ -133,26 +143,32 @@ function half(v) {
   return s | ((e << 10) + ((m + 0x1000) >>> 13));   // + : a mantissa carry bumps the exponent
 }
 
-/** Upload the oriented raw as the GPU frame, in strips (alpha = 1). */
+// Rows per upload strip (~4 MB of half floats): uploadRaw's and the worker's export strips.
+const stripRows = (w) => Math.max(1, Math.floor((1 << 22) / (w * 8)));
+
+/** Rows y0 … y0+n-1 of the oriented raw as half-float RGBA (alpha = 1), into `out` (or a new array). */
+export function f16Rows(r, y0, n, out = new Uint16Array(r.w * n * 4)) {
+  const src = r.rgb;
+  for (let y = 0, k = 0; y < n; y++) {
+    for (let x = 0; x < r.w; x++, k += 4) {
+      const i = srcIndex(r, x, y0 + y) * 3;
+      out[k] = half(src[i]); out[k + 1] = half(src[i + 1]); out[k + 2] = half(src[i + 2]); out[k + 3] = 0x3c00;
+    }
+  }
+  return out;
+}
+
+/** The export strips of `r`, in order: [y0, n] (raw-worker.js). */
+export function* stripsOf(r) {
+  const rows = stripRows(r.w);
+  for (let y0 = 0; y0 < r.h; y0 += rows) yield [y0, Math.min(rows, r.h - y0)];
+}
+
+/** Upload the oriented raw as the GPU frame, in strips. */
 export function uploadRaw(sf, r) {
   sf.alloc_frame_f16(r.w, r.h);
-  const rows = Math.max(1, Math.floor((1 << 22) / (r.w * 8)));   // ~4 MB strips
-  if (r.f16) {   // already oriented half floats (decodeRaw f16)
-    for (let y0 = 0; y0 < r.h; y0 += rows) sf.set_frame_rows_f16(r.f16.subarray(y0 * r.w * 4, Math.min(r.h, y0 + rows) * r.w * 4), y0);
-    return;
-  }
-  const buf = new Uint16Array(r.w * rows * 4), src = r.rgb;
-  for (let y0 = 0; y0 < r.h; y0 += rows) {
-    const n = Math.min(rows, r.h - y0);
-    for (let y = 0, k = 0; y < n; y++) {
-      for (let x = 0; x < r.w; x++, k += 4) {
-        const i = srcIndex(r, x, y0 + y) * 3, R = src[i], G = src[i + 1], B = src[i + 2];
-        buf[k] = half(R); buf[k + 1] = half(G); buf[k + 2] = half(B);
-        buf[k + 3] = 0x3c00;
-      }
-    }
-    sf.set_frame_rows_f16(buf.subarray(0, r.w * n * 4), y0);
-  }
+  const buf = new Uint16Array(r.w * stripRows(r.w) * 4);
+  for (const [y0, n] of stripsOf(r)) sf.set_frame_rows_f16(f16Rows(r, y0, n, buf).subarray(0, r.w * n * 4), y0);
 }
 
 /** Scene-linear Rec.2020 thumb (sensor values, oriented, no baseline) for the engine's auto-exposure / AutoSetup. */

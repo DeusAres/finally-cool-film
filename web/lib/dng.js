@@ -23,13 +23,19 @@
 
 const TYPE_SIZE = [0, 1, 1, 2, 4, 8, 1, 1, 2, 4, 8, 4, 8, 4];
 
+/** The TIFF magic of a header (its first 4 bytes, II or MM byte order): 42 (TIFF, DNG) or Olympus ORF's 0x4f52 'RO' /
+ * 0x5352 'RS'; 0 for anything else (BigTIFF included). The one header check: parseTIFF, raw.js isRaw, exif.js, orf.js. */
+export function tiffMagic(h) {
+  const le = h[0] === 0x49 && h[1] === 0x49;
+  if (!le && !(h[0] === 0x4d && h[1] === 0x4d)) return 0;
+  const m = le ? h[2] | (h[3] << 8) : (h[2] << 8) | h[3];
+  return m === 42 || m === 0x4f52 || m === 0x5352 ? m : 0;
+}
+
 export function parseTIFF(buf) {
   const dv = new DataView(buf);
-  const bom = dv.getUint16(0, false);
-  const le = bom === 0x4949;
-  if (!le && bom !== 0x4d4d) throw new Error('DNG: not a TIFF file');
-  const magic = dv.getUint16(2, le);   // 42; Olympus ORF: 0x4f52 'RO' / 0x5352 'RS'
-  if (magic !== 42 && magic !== 0x4f52 && magic !== 0x5352) throw new Error('DNG: BigTIFF/unknown TIFF variant');
+  const le = dv.getUint16(0, false) === 0x4949;
+  if (!tiffMagic(new Uint8Array(buf, 0, 4))) throw new Error('DNG: not a TIFF file (or BigTIFF / unknown variant)');
 
   function readIFD(off) {
     const n = dv.getUint16(off, le);

@@ -20,7 +20,10 @@ let lines = [];
 const PERSIST_MS = 200;
 let persistTimer = 0;
 const persist = () => { persistTimer = 0; write(KEY, lines.join('\n')); };
-addEventListener('pagehide', () => { if (persistTimer) { clearTimeout(persistTimer); persist(); } });
+// pagehide, and hidden: iOS often kills a backgrounded tab without a pagehide.
+const flushLog = () => { if (persistTimer) { clearTimeout(persistTimer); persist(); } };
+addEventListener('pagehide', flushLog);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushLog(); });
 export function log(msg) {
   const line = `${new Date().toISOString().slice(11, 23)} ${msg}`;
   lines.push(line);
@@ -36,7 +39,7 @@ export const prevLogText = () => prev;
  * an export, so the lines leading up to a crash survive the persist throttle; not per render, that would undo it). */
 export const setBusy = (what, flush = false) => {
   write(BUSY, what);
-  if (flush && persistTimer) { clearTimeout(persistTimer); persist(); }
+  if (flush) flushLog();
 };
 
 /** What the previous session was doing when it died, or null if it ended cleanly. */
