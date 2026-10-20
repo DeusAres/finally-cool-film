@@ -386,7 +386,7 @@ pub fn scan_frontier(
     let [usm_sigma, usm_amount] = params.scanner.unsharp_mask;
     if usm_sigma > 0.0 && usm_amount > 0.0 {
         rgb =
-            spektrafilm_model::diffusion::apply_unsharp_mask(&rgb, usm_sigma, usm_amount, backend);
+            spektrafilm_model::diffusion::apply_unsharp_mask_gated(&rgb, usm_sigma, usm_amount, params.scanner.unsharp_threshold, backend);
     }
 
     // CCTF encoding + clip.

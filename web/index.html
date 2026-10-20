@@ -232,7 +232,10 @@
     <button type="button" class="chip" role="radio" id="scanNone" data-scanner="none" aria-checked="true">Nessuno</button>
     <button type="button" class="chip" role="radio" id="scanFrontier" data-scanner="frontier" aria-checked="false">Frontier</button>
   </div>
-  <div class="row" id="hyperRow"><label for="hypertone">Hyper Tone</label><input type="range" id="hypertone" min="0" max="1" step="0.01" value="0"><output for="hypertone"></output></div>
+  <div id="frontierRows">
+  <div class="row"><label for="hypertone">Hyper Tone</label><input type="range" id="hypertone" min="0" max="1" step="0.01" value="0"><output for="hypertone"></output></div>
+  <div class="row"><label for="hypersharp">Hyper Sharpness</label><input type="range" id="hypersharp" min="0" max="1" step="0.01" value="0"><output for="hypersharp"></output></div>
+  </div>
   </div>
   <div class="pane" data-pane="optics" role="tabpanel" hidden>
   <div class="row"><label for="ca">Aberrazione</label><input type="range" id="ca" min="0" max="1" step="0.01" value="1"><output for="ca"></output></div>

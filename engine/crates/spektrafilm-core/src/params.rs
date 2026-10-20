@@ -169,6 +169,11 @@ pub struct ScannerParams {
     pub black_level: f32,
     #[serde(default = "default_unsharp")]
     pub unsharp_mask: [f32; 2],
+    /// Hyper Sharpness gate of the unsharp mask, `[t0, t1]` (0 = off: the plain mask on every pixel): the detail
+    /// (pixel - blur) is applied by `smoothstep(t0, t1, r)`, r = |detail luminance| / blur luminance (relative contrast),
+    /// as one gain on the three channels (no colour fringes). Below t0 (grain, flat noise) nothing; above t1 the full mask.
+    #[serde(default)]
+    pub unsharp_threshold: [f32; 2],
     /// Scanner model. `None` keeps the legacy `scan_film` behaviour (the
     /// negative as a 17^3-LUT spectral scan). `"frontier"` (with `io.scan_film`
     /// on a negative stock) returns the positive made by the Frontier model.
@@ -227,6 +232,7 @@ impl Default for ScannerParams {
             white_level: 0.98,
             black_level: 0.01,
             unsharp_mask: [0.7, 0.7],
+            unsharp_threshold: [0.0, 0.0],
             model: None,
             frontier: FrontierParams::default(),
             narrowband: NarrowbandParams::default(),

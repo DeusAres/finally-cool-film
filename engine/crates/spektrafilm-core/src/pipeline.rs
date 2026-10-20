@@ -1326,6 +1326,7 @@ impl Pipeline {
             Some(spektrafilm_gpu::UnsharpGpuParams {
                 sigma_px: usm_sigma,
                 amount: usm_amount,
+                threshold: self.params.scanner.unsharp_threshold,
             })
         } else {
             None

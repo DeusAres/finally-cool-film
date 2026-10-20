@@ -5086,16 +5086,16 @@ fn build_unsharp_state(
     struct CombineParams {
         n_pixels: u32,
         amount: f32,
-        _pad0: u32,
-        _pad1: u32,
+        t0: f32,
+        t1: f32,
     }
     let combine_params = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some("unsharp_combine_params"),
         contents: bytemuck::bytes_of(&CombineParams {
             n_pixels: n_pixels as u32,
             amount: up.amount,
-            _pad0: 0,
-            _pad1: 0,
+            t0: up.threshold[0],
+            t1: up.threshold[1],
         }),
         usage: wgpu::BufferUsages::UNIFORM,
     });

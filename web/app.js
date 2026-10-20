@@ -1,5 +1,5 @@
 import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, turnRGBA, forEachStrip, extractLinear, jpegThumb, THUMB_PX, PACK_LUT } from './lib/common.js';
-import { sleep, store, stripRows, PREVIEW_LONG_SIDE } from './lib/util.js';
+import { sleep, store, stripRows, PREVIEW_LONG_SIDE, PREVIEW_KPX, FRAME_UM } from './lib/util.js';
 import { DISPLAY_GAIN_LUT } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
@@ -67,7 +67,7 @@ const ui = () => ({
   ev: +$('ev').value, contrast: +$('contrast').value, highlight: +$('highlight').value, whites: +$('whites').value,
   mshift: +$('mshift').value, yshift: +$('yshift').value, vibrance: +$('vibrance').value, temp: +$('temp').value, black: +$('black').value,
   grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value, sharp: +$('sharp').value,
-  ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value, tilt: +$('tilt').value, hypertone: +$('hypertone').value,
+  ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value, tilt: +$('tilt').value, hypertone: +$('hypertone').value, hypersharp: +$('hypersharp').value,
   ...(V3 ? { hlc: +$('hlc').value, shadows: +$('shadows').value, v3dodge: $('v3dodge').checked } : {}),   // v3: snapshotted with the rest (export tiles)
 });
 // CA slider is quadratic: realistic (subtle) amounts get most of the travel.
@@ -124,8 +124,8 @@ const packTo = () => (engineWide() ? outSpace() : null);
 // `region` {x0, y0, fw, fh, W, H}: the rendered region's origin in the frame, the size the engine's grain pitch is
 // relative to (fw, fh: the tile's own size in an export, see exportFull), and the whole frame's size (W, H), in px. The grain
 // is a hash of the frame position, so every tile of an export gets the same grain as the whole frame.
-/** Hyper Tone's frame position params: the render's top-left and the WHOLE frame's size (its map spans the frame). */
-const hyperPos = (region) => ({
+/** The render's top-left and the WHOLE frame's size (Hyper Tone's map spans the frame; Hyper Sharpness' pitch is the frame's). */
+const wholeFrame = (region) => ({
   origin_px: region ? [region.x0, region.y0] : [0, 0], frame_px: region ? [region.W, region.H] : [photo.preview.w, photo.preview.h],
 });
 function renderParams(u, { noGrain = false, region = null } = {}) {
@@ -146,8 +146,9 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     // v4 Scanner 'Nessuno': no scanner look, the engine returns the negative read in three narrow bands (engine narrowband.rs:
     // the bands of the real Gold 200 reference scans, eval/V4.md), inverted in the output pass (lib/invert.js).
     scanner: neutralScan() ? { model: 'narrowband', unsharp_mask: [0, 0], hyper_tone: { amount: 0 } } : {
-      model: 'frontier', black_correction: false, white_correction: false, unsharp_mask: [0, 0],
-      hyper_tone: { amount: u.hypertone * HYPER_MAX, ...hyperPos(region) },   // always sent: the engine merges updates
+      model: 'frontier', black_correction: false, white_correction: false,
+      hyper_tone: { amount: u.hypertone * HYPER_MAX, ...wholeFrame(region) },   // always sent: the engine merges updates
+      ...hyperSharp(u, region),
       frontier: {
         // v3.20: Alte luci / Bianchi below 0 darken the scene before the film (dodge.js, local, the negative keeps the detail); above 0 they
         // stay on the scanner curve (gentler than pushing the scene into the shoulder). v2 page: scanner only.
@@ -286,6 +287,19 @@ function autoSetup(on, evIn = null) {
 // version, unmeasured), the strength where skies keep their tone and shadows open without looking flat.
 const HYPER_MAX = 0.5;
 const HYPER_THUMB_PX = 512;   // the map's source thumb: its resolution is the map's (lib/hypertone.js MAP_LONG)
+// Hyper Sharpness (Scanner, Frontier; slider 0 = off): the engine's unsharp mask on the scan, gated by relative detail
+// (ScannerParams.unsharp_threshold) so the grain is left alone and only structure is sharpened (the real machine's version
+// fried the grain). Radius HS_UM on the film: about one Frontier scanner pixel (36 mm / ~3000 px; a choice). Amount at the
+// slider's top HS_MAX (a choice). Gate t0 / t1 measured at the preview pitch on the v4 Frontier rock (grain 3.1x): relative
+// detail at HS_UM in flat sky (grain) p99 0.032, on rock structure p50 0.085; scaled with the pixel pitch as Nitidezza's
+// (finer export pixels carry stronger per-pixel grain).
+const HS_UM = 12, HS_MAX = 1.0, HS_T0 = 0.03, HS_T1 = 0.08;
+function hyperSharp(u, region) {
+  if (!(u.hypersharp > 0)) return { unsharp_mask: [0, 0] };
+  const [W, H] = wholeFrame(region).frame_px, kpx = Math.max(W, H) / FRAME_UM, gate = Math.max(kpx / PREVIEW_KPX, 0.5);
+  return { unsharp_mask: [HS_UM * kpx, u.hypersharp * HS_MAX], unsharp_threshold: [HS_T0 * gate, HS_T1 * gate] };
+}
+
 /** The photo's Hyper Tone map in the engine (built once per photo and turn, from its thumb at HYPER_THUMB_PX, lib/hypertone.js),
  * when Hyper Tone acts. */
 function syncHyperMap(u) {
@@ -787,7 +801,7 @@ function neutralScan() { return scanner === 'none'; }
 async function setScanner(s) {
   scanner = s; store.set('fcf_scanner', s);
   for (const b of document.querySelectorAll('[data-scanner]')) b.setAttribute('aria-checked', String(b.dataset.scanner === s));
-  $('hyperRow').hidden = neutralScan();   // Hyper Tone is the Frontier's
+  $('frontierRows').hidden = neutralScan();   // Hyper Tone / Hyper Sharpness are the Frontier's
   if (!photo || loadingPhoto) return;   // a photo still loading measures for this scanner in its own runAuto
   internoBusy++;   // an export waits for the switch (same guard as Interno)
   try {
@@ -1046,7 +1060,7 @@ const FORMAT = {
   grain: mult2, halation: mult,
   ca: pctOff, vignette: pctOff,
   falloff: pct,
-  texture: signPct, clarity: signPct, sharp: signPct, dust: pctOff, black: pctOff, hypertone: pctOff,
+  texture: signPct, clarity: signPct, sharp: signPct, dust: pctOff, black: pctOff, hypertone: pctOff, hypersharp: pctOff,
 };
 const DUST_RESEED = 0.27;   // Rimescola with Polvere off turns it on at this amount (the default before v3.33)
 const AUTO_EV_MIN = -2, AUTO_EV_MAX = 2.5;   // Auto's exposure range, see autoSetup

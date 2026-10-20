@@ -15,6 +15,8 @@ export const FRAME_UM = 36000;
 /** Long side of the preview render, px (display canvas cap: bigger canvases make iOS compositing crash when zoomed). Effects
  * tuned "at preview size" (Nitidezza's noise gate) read it from here. */
 export const PREVIEW_LONG_SIDE = 2000;
+/** Preview pixels per µm of film: the reference pitch of thresholds tuned on the preview (a finer export pixel is noisier). */
+export const PREVIEW_KPX = PREVIEW_LONG_SIDE / FRAME_UM;
 
 // Strips of about this many bytes when a full-size frame is decoded or uploaded piecewise, so it never sits whole in memory.
 const STRIP_BYTES = 4 << 20;

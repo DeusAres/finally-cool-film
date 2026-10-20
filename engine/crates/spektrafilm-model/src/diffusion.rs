@@ -12,10 +12,32 @@ pub fn apply_unsharp_mask(
     amount: f32,
     backend: &dyn ComputeBackend,
 ) -> ImageBuf {
+    apply_unsharp_mask_gated(image, sigma, amount, [0.0, 0.0], backend)
+}
+
+/// The unsharp mask gated by relative detail (`threshold` = [t0, t1], ScannerParams.unsharp_threshold; t1 <= 0 = the plain
+/// mask). The GPU twin is `unsharp_combine.wgsl`.
+pub fn apply_unsharp_mask_gated(
+    image: &ImageBuf,
+    sigma: f32,
+    amount: f32,
+    threshold: [f32; 2],
+    backend: &dyn ComputeBackend,
+) -> ImageBuf {
     if sigma <= 0.0 || amount <= 0.0 {
         return image.clone();
     }
     let blurred = backend.gaussian_blur(image, sigma);
+    if threshold[1] > 0.0 {
+        let mut result = image.clone();
+        for (r, (o, b)) in result.data.chunks_exact_mut(3).zip(image.data.chunks_exact(3).zip(blurred.data.chunks_exact(3))) {
+            let g = unsharp_gate([o[0] as f32, o[1] as f32, o[2] as f32], [b[0] as f32, b[1] as f32, b[2] as f32], threshold);
+            for c in 0..3 {
+                r[c] = o[c] + from_f32(amount * g) * (o[c] - b[c]);
+            }
+        }
+        return result;
+    }
     let amount_s = from_f32(amount);
     let mut result = image.clone();
     for (r, (o, b)) in result
@@ -27,6 +49,22 @@ pub fn apply_unsharp_mask(
     }
     result
 }
+
+/// Hyper Sharpness gate: smoothstep(k t0, k t1, |Y(o - b)| / max(Y(b), UNSHARP_Y_FLOOR)), Y the mean of the three
+/// channels; k = clamp(sqrt(0.18 / Y(b)), 1, 4) raises the thresholds x2 per 2 stops below mid grey (up to x4): the film's
+/// grain is relatively stronger in the shadows (measured: dark rock grain passed a fixed gate and was sharpened). Same law as
+/// the app's Nitidezza noise gate (web/lib/lens-gpu.js).
+pub fn unsharp_gate(o: [f32; 3], b: [f32; 3], threshold: [f32; 2]) -> f32 {
+    let yd = ((o[0] - b[0]) + (o[1] - b[1]) + (o[2] - b[2])) / 3.0;
+    let yb = ((b[0] + b[1] + b[2]) / 3.0).max(UNSHARP_Y_FLOOR);
+    let k = (0.18 / yb).sqrt().clamp(1.0, 4.0);
+    let t = ((yd.abs() / yb - k * threshold[0]) / (k * (threshold[1] - threshold[0])).max(1e-6)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Luminance floor of the gate's relative contrast (linear): below it deep shadows are measured against it, so their noise
+/// is not read as huge relative detail. A choice (0.01 = ~L* 9).
+pub const UNSHARP_Y_FLOOR: f32 = 0.01;
 
 /// Apply Gaussian blur in physical units (micrometers).
 pub fn apply_gaussian_blur_um(

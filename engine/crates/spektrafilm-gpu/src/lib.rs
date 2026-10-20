@@ -408,6 +408,8 @@ pub struct GamutGpuParams<'a> {
 pub struct UnsharpGpuParams {
     pub sigma_px: f32,
     pub amount: f32,
+    /// Hyper Sharpness gate `[t0, t1]` (`t1 <= 0`: the plain mask).
+    pub threshold: [f32; 2],
 }
 
 /// Viewing glare parameters for the GPU-resident lognormal + blur + apply

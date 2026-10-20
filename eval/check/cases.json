@@ -95,6 +95,17 @@
      "scanFrontier"
     ]
    }
+  },
+  "v4_rock_hypersharp": {
+   "photo": "samples/indigo/IDG_20261011_134131_210",
+   "query": "?v4",
+   "export": "export",
+   "ui": {
+    "hypersharp": 1,
+    "_click": [
+     "scanFrontier"
+    ]
+   }
   }
  }
 }
