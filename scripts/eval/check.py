@@ -225,7 +225,7 @@ def main():
     if a.compare:
         for k in metrics:
             p, q = os.path.join(OUT, k + '.png'), os.path.join(a.compare, k + '.png')
-            if k != '_chart' and os.path.exists(q):
+            if k != '_chart' and not k.endswith('_export') and os.path.exists(q):   # exports: JPEGs, not compared here
                 x, y = np.asarray(Image.open(p)).astype(int), np.asarray(Image.open(q)).astype(int)
                 dm = int(np.abs(x - y).max()) if x.shape == y.shape else -1
                 print(f'pixels {k:18s} max diff {dm}')

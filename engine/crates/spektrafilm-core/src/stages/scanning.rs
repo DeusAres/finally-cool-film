@@ -166,8 +166,8 @@ pub fn scan(
     scan_frontier(density_cmy, profile, params, backend, color_ref, gamut, None)
 }
 
-/// `scan`, with the Frontier scanner LUT when given: the LUT maps the film
-/// density straight to the sRGB-encoded positive, which is decoded to linear
+/// `scan`, with a scan LUT when given (the Frontier's, or the narrowband scan's): the LUT maps the film
+/// density straight to an encoded output (the Frontier's sRGB positive, the narrowband transmittance), decoded to linear
 /// here so lens blur, unsharp, gamut compression and the output encoding stay
 /// as they are. Viewing glare does not apply to the digital positive.
 pub fn scan_frontier(

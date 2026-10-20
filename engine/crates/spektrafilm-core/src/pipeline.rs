@@ -150,6 +150,8 @@ pub struct Pipeline {
     output_gamut: crate::gamut_compression::OutputGamutCompress,
     /// Frontier scanner (scan_film on a negative with `scanner.model="frontier"`).
     frontier: Option<Arc<FrontierRuntime>>,
+    /// Narrowband scan LUT (scan_film on a negative with `scanner.model="narrowband"`) and its key.
+    narrowband: Option<Arc<(crate::frontier::FrontierLut, String)>>,
 }
 
 impl Pipeline {
@@ -184,6 +186,7 @@ impl Pipeline {
         );
         self.params = params;
         self.refresh_frontier();
+        self.refresh_narrowband();
         self
     }
 
@@ -196,6 +199,28 @@ impl Pipeline {
         params.io.scan_film
             && film.is_negative()
             && params.scanner.model.as_deref() == Some("frontier")
+    }
+
+    /// The scan LUT the scan stage uses instead of the spectral scan: the Frontier's or the narrowband scan's.
+    fn scan_lut(&self) -> Option<&crate::frontier::FrontierLut> {
+        self.frontier.as_deref().map(|f| &f.lut).or(self.narrowband.as_deref().map(|n| &n.0))
+    }
+
+    /// (Re)build the narrowband scan LUT when `scanner.model = "narrowband"` and its inputs changed.
+    fn refresh_narrowband(&mut self) {
+        let p = &self.params;
+        if !(p.io.scan_film && self.film.is_negative() && p.scanner.model.as_deref() == Some("narrowband")) {
+            self.narrowband = None;
+            return;
+        }
+        let key = serde_json::to_string(&(&p.scanner.narrowband, p.film_render.grain.density_min, p.settings.lut_resolution))
+            .unwrap_or_default();
+        if self.narrowband.as_ref().is_some_and(|n| n.1 == key) {
+            return;
+        }
+        let (dmin, dmax) = stages::scanning::scanner_lut_bounds(&self.film, p);
+        let lut = crate::narrowband::scan_lut(&self.film, &p.scanner.narrowband, dmin, dmax, p.settings.lut_resolution as usize);
+        self.narrowband = Some(Arc::new((lut, key)));
     }
 
     /// The frontier scanner state, when active.
@@ -340,6 +365,7 @@ impl Pipeline {
             preflash_raw: [0.0; 3],
             output_gamut,
             frontier: None,
+            narrowband: None,
         }
     }
 
@@ -616,8 +642,10 @@ impl Pipeline {
             preflash_raw,
             output_gamut,
             frontier: None,
+            narrowband: None,
         };
         pipeline.refresh_frontier();
+        pipeline.refresh_narrowband();
         Ok(pipeline)
     }
 
@@ -690,7 +718,7 @@ impl Pipeline {
                 backend,
                 &color_ref,
                 &self.output_gamut,
-                self.frontier.as_deref().map(|f| &f.lut),
+                self.scan_lut(),
             );
             print_stage_timing(stage_timings, "scanning", t);
             tracing::info!("pipeline: scanning complete (film scan)");
@@ -1210,8 +1238,8 @@ impl Pipeline {
         } else {
             &self.params.print_render.glare
         };
-        // The Frontier positive has no viewing glare (as on the CPU path).
-        let glare = if self.frontier.is_none() && glare_params.active && glare_params.percent > 0.0 {
+        // A scan LUT (Frontier positive, narrowband scan) has no viewing glare (as on the CPU path).
+        let glare = if self.scan_lut().is_none() && glare_params.active && glare_params.percent > 0.0 {
             let g = glare_params;
             // LogNormal parameters (same derivation as `compute_random_glare_amount`).
             let m = g.percent as f64;
@@ -1341,8 +1369,8 @@ impl Pipeline {
             enlarger_diffusion,
             print_exposure_scale,
             output_cctf_encoding: self.params.io.output_cctf_encoding,
-            frontier: self.frontier.as_ref().map(|f| {
-                let (table, steps, data_min, inv) = f.lut.gpu_table();
+            frontier: self.scan_lut().map(|lut| {
+                let (table, steps, data_min, inv) = lut.gpu_table();
                 spektrafilm_gpu::FrontierGpuLut { table, steps, data_min, inv }
             }),
         };

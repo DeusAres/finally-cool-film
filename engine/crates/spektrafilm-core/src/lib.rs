@@ -5,6 +5,7 @@ pub mod frontier;
 pub mod gamut_compression;
 pub mod input_gamut;
 pub mod mallett;
+pub mod narrowband;
 pub mod neutral_filters;
 pub mod params;
 pub mod pipeline;

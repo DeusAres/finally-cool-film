@@ -176,6 +176,26 @@ pub struct ScannerParams {
     pub model: Option<String>,
     #[serde(default)]
     pub frontier: FrontierParams,
+    /// `model = "narrowband"`: the negative read in three narrow bands (see `crate::narrowband`).
+    #[serde(default)]
+    pub narrowband: NarrowbandParams,
+}
+
+/// Bands of the narrowband scan (nm). Default: the RGB LEDs of the reference scans in the gold200
+/// dataset (github.com/DhaliwalX/gold200-dataset: SmallRig RM120, peaks 625 / 522 / 455 nm ±5,
+/// estimated there from the A7C II's spectral response), so the engine's scan and that real scan read
+/// the same bands. FWHM 20 nm: typical of single-colour LEDs, not measured (unverified).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NarrowbandParams {
+    pub peak_nm: [f64; 3],
+    pub fwhm_nm: [f64; 3],
+}
+
+impl Default for NarrowbandParams {
+    fn default() -> Self {
+        Self { peak_nm: [625.0, 522.0, 455.0], fwhm_nm: [20.0, 20.0, 20.0] }
+    }
 }
 
 impl Default for ScannerParams {
@@ -189,6 +209,7 @@ impl Default for ScannerParams {
             unsharp_mask: [0.7, 0.7],
             model: None,
             frontier: FrontierParams::default(),
+            narrowband: NarrowbandParams::default(),
         }
     }
 }

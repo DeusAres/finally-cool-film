@@ -137,8 +137,9 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     // preview size than on a 12 MP export) and inflated pixel-level detail
     // ×1.3–1.6 (measured): a phone's crunch, not film. Texture comes from the
     // film-adjacency clarity in the input pass instead (lens-gpu.js), in µm.
-    // v4: no scanner model, the engine returns the negative's scan (inverted in the output pass, lib/invert.js).
-    scanner: V4 ? { model: null, unsharp_mask: [0, 0] } : {
+    // v4: no scanner look, the engine returns the negative read in three narrow bands (engine narrowband.rs: the bands of
+    // the real Gold 200 reference scans, eval/V4.md), inverted in the output pass (lib/invert.js).
+    scanner: V4 ? { model: 'narrowband', unsharp_mask: [0, 0] } : {
       model: 'frontier', black_correction: false, white_correction: false, unsharp_mask: [0, 0],
       frontier: {
         // v3.20: Alte luci / Bianchi below 0 darken the scene before the film (dodge.js, local, the negative keeps the detail); above 0 they

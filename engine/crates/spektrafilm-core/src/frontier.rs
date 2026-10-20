@@ -101,6 +101,71 @@ pub fn ramp_evs(m: &FrontierModelParams) -> Vec<f64> {
         .collect()
 }
 
+/// The film's dye spectral densities (per wavelength: c, m, y) and its base density, on the
+/// 380-780 nm / 5 nm grid; NaN where the profile's dye data does not reach (UV/NIR edges).
+pub fn film_spectra(film: &Profile) -> (Vec<[f64; 3]>, Vec<f64>) {
+    let cd: Vec<[f64; 3]> = film
+        .data
+        .channel_density
+        .iter()
+        .take(N_WAVELENGTHS)
+        .map(|r| {
+            [
+                r.first().copied().unwrap_or(0.0),
+                r.get(1).copied().unwrap_or(0.0),
+                r.get(2).copied().unwrap_or(0.0),
+            ]
+        })
+        .collect();
+    let base: Vec<f64> = (0..cd.len())
+        .map(|i| film.data.base_density.get(i).copied().unwrap_or(0.0))
+        .collect();
+    (cd, base)
+}
+
+/// Per-wavelength weights of three Gaussian bands (peak, FWHM in nm), each normalised to sum 1:
+/// how a scanner's (or a densitometer's) channel c reads the film's transmittance. Wavelengths
+/// without dye data carry no weight (the bands are narrow).
+pub fn band_weights(cd: &[[f64; 3]], base: &[f64], peak_nm: [f64; 3], fwhm_nm: [f64; 3]) -> Vec<[f64; 3]> {
+    let n = cd.len();
+    let valid: Vec<bool> = (0..n)
+        .map(|i| base[i].is_finite() && cd[i].iter().all(|v| v.is_finite()))
+        .collect();
+    let mut weights = vec![[0.0f64; 3]; n];
+    for c in 0..3 {
+        let sigma = |fwhm: f64| fwhm / (2.0 * (2.0 * std::f64::consts::LN_2).sqrt());
+        let s = sigma(fwhm_nm[c]).max(1e-6);
+        let mut sum = 0.0;
+        for (i, w) in weights.iter_mut().enumerate() {
+            let wl = FIRST_WL_NM + STEP_WL_NM * i as f64;
+            let z = (wl - peak_nm[c]) / s;
+            w[c] = if valid[i] { (-0.5 * z * z).exp() } else { 0.0 };
+            sum += w[c];
+        }
+        for w in weights.iter_mut() {
+            w[c] /= sum;
+        }
+    }
+    weights
+}
+
+/// Band transmittance `T_c = sum_l w_c(l) 10^-(cmy . cd(l) + base(l))` of a film density.
+pub fn band_transmittance(cd: &[[f64; 3]], base: &[f64], weights: &[[f64; 3]], cmy: [f64; 3]) -> [f64; 3] {
+    let mut t = [0.0f64; 3];
+    for i in 0..cd.len() {
+        let w = &weights[i];
+        if w[0] + w[1] + w[2] == 0.0 {
+            continue; // no data at this wavelength
+        }
+        let c = &cd[i];
+        let tr = 10f64.powf(-(cmy[0] * c[0] + cmy[1] * c[1] + cmy[2] * c[2] + base[i]));
+        t[0] += tr * w[0];
+        t[1] += tr * w[1];
+        t[2] += tr * w[2];
+    }
+    t
+}
+
 /// Everything that depends on the film and the model constants but not on the
 /// operator keys: sensor, D-min, film-type setup.
 #[derive(Clone, Debug)]
@@ -126,43 +191,8 @@ impl FrontierBase {
     /// `ramp_cmy[i]` is the developed film density of the grey ramp at
     /// `ramp_evs(model)[i]`.
     pub fn new(film: &Profile, model: &FrontierModelParams, ramp_cmy: &[[f64; 3]]) -> Self {
-        let cd: Vec<[f64; 3]> = film
-            .data
-            .channel_density
-            .iter()
-            .take(N_WAVELENGTHS)
-            .map(|r| {
-                [
-                    r.first().copied().unwrap_or(0.0),
-                    r.get(1).copied().unwrap_or(0.0),
-                    r.get(2).copied().unwrap_or(0.0),
-                ]
-            })
-            .collect();
-        let n = cd.len();
-        let base: Vec<f64> = (0..n)
-            .map(|i| film.data.base_density.get(i).copied().unwrap_or(0.0))
-            .collect();
-        // Profile data is NaN where the dye data does not reach (UV/NIR edges):
-        // those wavelengths carry no sensor weight (the sensors are narrow).
-        let valid: Vec<bool> = (0..n)
-            .map(|i| base[i].is_finite() && cd[i].iter().all(|v| v.is_finite()))
-            .collect();
-        let mut weights = vec![[0.0f64; 3]; n];
-        for c in 0..3 {
-            let sigma = |fwhm: f64| fwhm / (2.0 * (2.0 * std::f64::consts::LN_2).sqrt());
-            let s = sigma(model.sensor_fwhm_nm[c]).max(1e-6);
-            let mut sum = 0.0;
-            for (i, w) in weights.iter_mut().enumerate() {
-                let wl = FIRST_WL_NM + STEP_WL_NM * i as f64;
-                let z = (wl - model.sensor_peak_nm[c]) / s;
-                w[c] = if valid[i] { (-0.5 * z * z).exp() } else { 0.0 };
-                sum += w[c];
-            }
-            for w in weights.iter_mut() {
-                w[c] /= sum;
-            }
-        }
+        let (cd, base) = film_spectra(film);
+        let weights = band_weights(&cd, &base, model.sensor_peak_nm, model.sensor_fwhm_nm);
         let mut b = Self {
             cd,
             base,
@@ -183,19 +213,7 @@ impl FrontierBase {
 
     /// Sensor densities `D_c` (before D-min removal).
     pub fn raw_density(&self, cmy: [f64; 3]) -> [f64; 3] {
-        let mut t = [0.0f64; 3];
-        for i in 0..self.cd.len() {
-            let c = &self.cd[i];
-            let d = cmy[0] * c[0] + cmy[1] * c[1] + cmy[2] * c[2] + self.base[i];
-            let w = &self.weights[i];
-            if w[0] + w[1] + w[2] == 0.0 {
-                continue; // no data at this wavelength
-            }
-            let tr = 10f64.powf(-d);
-            t[0] += tr * w[0];
-            t[1] += tr * w[1];
-            t[2] += tr * w[2];
-        }
+        let t = band_transmittance(&self.cd, &self.base, &self.weights, cmy);
         [
             -t[0].max(self.model.tmin_floor).log10(),
             -t[1].max(self.model.tmin_floor).log10(),
@@ -943,7 +961,8 @@ fn rotate_hue(lin: &[f64; 3], l: f64, deg: f64) -> [f64; 3] {
     out
 }
 
-/// The baked scanner LUT: film density (cmy) -> sRGB-encoded positive.
+/// The baked scanner LUT: film density (cmy) -> encoded output (the Frontier's sRGB-encoded positive, or the
+/// narrowband scan's encoded band transmittance).
 #[derive(Clone, Debug)]
 pub struct FrontierLut {
     prepared: PreparedPchip3d,
@@ -987,6 +1006,30 @@ impl FrontierLut {
                 scale / (data_max[1] - data_min[1]),
                 scale / (data_max[2] - data_min[2]),
             ],
+            max_coord: step_inv,
+        }
+    }
+
+    /// A scan LUT of any density -> encoded-output function `f` (the narrowband scan), with the same
+    /// node layout, interpolation and GPU table density as the Frontier's.
+    pub fn from_fn(f: impl Fn([f64; 3]) -> [f64; 3] + Sync, data_min: [f64; 3], data_max: [f64; 3], steps: usize) -> Self {
+        let nodes = |n: usize| -> Vec<f64> {
+            let at = |a: usize, i: usize| data_min[a] + (data_max[a] - data_min[a]) * i as f64 / (n - 1) as f64;
+            let mut out = vec![0.0f64; n * n * n * 3];
+            out.par_chunks_exact_mut(3).enumerate().for_each(|(idx, dst)| {
+                let (i, j, k) = (idx / (n * n), (idx / n) % n, idx % n);
+                dst.copy_from_slice(&f([at(0, i), at(1, j), at(2, k)]));
+            });
+            out
+        };
+        let step_inv = (steps - 1) as f64;
+        let gs = 3 * (steps - 1) + 1;
+        Self {
+            prepared: prepare_pchip_3d(nodes(steps), steps),
+            table: nodes(gs).iter().map(|&v| v as f32).collect(),
+            steps: gs,
+            data_min,
+            inv: [0, 1, 2].map(|c| step_inv / (data_max[c] - data_min[c])),
             max_coord: step_inv,
         }
     }
