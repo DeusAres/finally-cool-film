@@ -451,35 +451,63 @@ function gainEvaluator(maps, imgW, imgH, ox, oy, step, outW) {
 // ---------------------------------------------------------------- resample
 
 // Area (box) downscale of interleaved RGB float image.
-function areaResize(src, sw, sh, dw, dh) {
-  const axis = (sn, dn) => {
-    // per destination sample: list of (index, weight)
-    const scale = sn / dn, idx = [], wts = [], start = new Int32Array(dn + 1);
-    for (let d = 0; d < dn; d++) {
-      start[d] = idx.length;
-      const a = d * scale, b = a + scale;
-      for (let s = Math.floor(a); s < Math.min(Math.ceil(b), sn); s++) {
-        const w = Math.min(b, s + 1) - Math.max(a, s);
-        if (w > 1e-6) { idx.push(s); wts.push(w / scale); }
-      }
-    }
-    start[dn] = idx.length;
-    return { idx: Int32Array.from(idx), wts: Float32Array.from(wts), start };
-  };
-  const ax = axis(sw, dw), ay = axis(sh, dh);
-  const tmp = new Float32Array(dw * sh * 3);
-  const xIdx = ax.idx, xW = ax.wts, xSt = ax.start;
-  for (let y = 0; y < sh; y++) {
-    const so = y * sw * 3, to = y * dw * 3;
-    for (let x = 0; x < dw; x++) {
-      let r = 0, g = 0, b = 0;
-      for (let k = xSt[x], ke = xSt[x + 1]; k < ke; k++) {
-        const i = so + xIdx[k] * 3, w = xW[k];
-        r += src[i] * w; g += src[i + 1] * w; b += src[i + 2] * w;
-      }
-      tmp[to + x * 3] = r; tmp[to + x * 3 + 1] = g; tmp[to + x * 3 + 2] = b;
+// Area (box) resampling weights along one axis: per destination sample, the source samples it covers and their share.
+function areaAxis(sn, dn) {
+  const scale = sn / dn, idx = [], wts = [], start = new Int32Array(dn + 1);
+  for (let d = 0; d < dn; d++) {
+    start[d] = idx.length;
+    const a = d * scale, b = a + scale;
+    for (let s = Math.floor(a); s < Math.min(Math.ceil(b), sn); s++) {
+      const w = Math.min(b, s + 1) - Math.max(a, s);
+      if (w > 1e-6) { idx.push(s); wts.push(w / scale); }
     }
   }
+  start[dn] = idx.length;
+  return { idx: Int32Array.from(idx), wts: Float32Array.from(wts), start };
+}
+
+// Horizontal pass of one RGB row (sw px) into `to` (dw px).
+function resizeRow(ax, src, so, dw, to, oo) {
+  const xIdx = ax.idx, xW = ax.wts, xSt = ax.start;
+  for (let x = 0; x < dw; x++) {
+    let r = 0, g = 0, b = 0;
+    for (let k = xSt[x], ke = xSt[x + 1]; k < ke; k++) {
+      const i = so + xIdx[k] * 3, w = xW[k];
+      r += src[i] * w; g += src[i + 1] * w; b += src[i + 2] * w;
+    }
+    to[oo + x * 3] = r; to[oo + x * 3 + 1] = g; to[oo + x * 3 + 2] = b;
+  }
+}
+
+/**
+ * Streaming area resize sw×sh -> dw×dh: `push(row, y)` takes source rows in order (RGB float, sw px) and adds them into the
+ * output; only the output and one resized row are held (audit round 1, #4: a 20 MP raw export no longer holds its full
+ * float image plus a full-height intermediate, ~0.7 GB). Same weights as areaResize, so the result is identical.
+ */
+function areaResizer(sw, sh, dw, dh) {
+  const ax = areaAxis(sw, dw), ay = areaAxis(sh, dh), rowLen = dw * 3;
+  const out = new Float32Array(dw * dh * 3), tmp = new Float32Array(rowLen);
+  // per source row: the destination rows it feeds and with what weight (at most two when downscaling)
+  const feeds = Array.from({ length: sh }, () => []);
+  for (let d = 0; d < dh; d++) for (let k = ay.start[d]; k < ay.start[d + 1]; k++) feeds[ay.idx[k]].push(d, ay.wts[k]);
+  return {
+    out,
+    push(row, y) {
+      const f = feeds[y];
+      if (!f.length) return;
+      resizeRow(ax, row, 0, dw, tmp, 0);
+      for (let j = 0; j < f.length; j += 2) {
+        const oo = f[j] * rowLen, w = f[j + 1];
+        for (let i = 0; i < rowLen; i++) out[oo + i] += tmp[i] * w;
+      }
+    },
+  };
+}
+
+function areaResize(src, sw, sh, dw, dh) {
+  const ax = areaAxis(sw, dw), ay = areaAxis(sh, dh);
+  const tmp = new Float32Array(dw * sh * 3);
+  for (let y = 0; y < sh; y++) resizeRow(ax, src, y * sw * 3, dw, tmp, y * dw * 3);
   const out = new Float32Array(dw * dh * 3);
   const rowLen = dw * 3;
   for (let y = 0; y < dh; y++) {
@@ -822,9 +850,13 @@ export function developCFA({ cfa, PW, PH, aW, aH, cx, cy, cw, ch, colorAt, wb, M
       }
     }
   } else {
-    // Malvar-He-Cutler demosaic over the crop, fused with gain map + colour matrix
+    // Malvar-He-Cutler demosaic over the crop, fused with gain map + colour matrix. When the result is resized, the rows are
+    // demosaiced into one row buffer and streamed into the resize (the full-resolution float image never exists).
     outW = cw; outH = ch;
-    rgb = new Float32Array(outW * outH * 3);
+    const k = target && Math.max(outW, outH) > target ? target / Math.max(outW, outH) : 0;
+    const dw = k ? Math.max(1, Math.round(outW * k)) : 0, dh = k ? Math.max(1, Math.round(outH * k)) : 0;
+    const resizer = k ? areaResizer(outW, outH, dw, dh) : null;
+    rgb = new Float32Array(k ? outW * 3 : outW * outH * 3);
     const gain = gainEvaluator(maps, aW, aH, cx, cy, 1, outW);
     const a = cfa, w = PW;
     for (let y = 0; y < outH; y++) {
@@ -837,9 +869,11 @@ export function developCFA({ cfa, PW, PH, aW, aH, cx, cy, cw, ch, colorAt, wb, M
         const c = colorAt(Y, X0);
         // green sites: swap=1 when R is vertical; R/B sites: swap=1 at blue
         const swap = c === 1 ? (colorAt(Y, X0 + 1) === 0 ? 0 : 1) : (c === 2 ? 1 : 0);
-        (c === 1 ? mhcGreen : mhcRB)(a, w, rgb, rowBase + X0, y * outW * 3, ph, outW, swap, gR, gG, gB, M, sat);
+        (c === 1 ? mhcGreen : mhcRB)(a, w, rgb, rowBase + X0, resizer ? 0 : y * outW * 3, ph, outW, swap, gR, gG, gB, M, sat);
       }
+      resizer?.push(rgb, y);
     }
+    if (resizer) { rgb = resizer.out; outW = dw; outH = dh; }
   }
 
   if (target && Math.max(outW, outH) > target) {

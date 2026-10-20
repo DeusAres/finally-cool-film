@@ -51,7 +51,10 @@ const V3 = !new URLSearchParams(location.search).has('v2');
 const V4 = V3 && new URLSearchParams(location.search).has('v4');
 // v3 highlight dodging (Luci auto, lib/dodge.js) changes the scene light before the film: off in v4 (the film alone).
 const DODGE = V3 && !V4;
-let photo = null;           // { file, bitmap, preview, after, auto: scanner AutoSetup [d, c, m, y], rot: quarter turns clockwise, ... }
+let photo = null;           // { file, size: { w, h } of the full decode, preview, after, auto: scanner AutoSetup [d, c, m, y], rot: quarter turns clockwise, ... }
+// The full-resolution decode of a JPEG / HEIC is not kept (24-48 MP = 96-195 MB for the photo's whole life, audit round 1, #13):
+// rotate and export decode the file again and close it.
+const decodeFull = (file) => createImageBitmap(file);
 let rendering = false, dirty = false, exporting = false, renderCount = 0;
 
 // ---------- params ----------
@@ -568,24 +571,23 @@ async function loadPhoto(file) {
       const preview = { data: rawPreviewRGBA(raw), w: raw.w, h: raw.h, p3: true, raw };
       preview.before = new ImageData(preview.data, preview.w, preview.h, { colorSpace: 'display-p3' });
       log(`raw ${raw.fullW}x${raw.fullH}, preview ${raw.w}x${raw.h}, orientation ${raw.orientation}, baseline ${raw.baseline} EV, ${Math.round(performance.now() - t)} ms`);
-      photo?.bitmap?.close();
       $('indoor').checked = false; rotPending = 0; resetTilt();
-      photo = { file, bitmap: null, preview, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file), rot: 0 };
+      photo = { file, size: null, preview, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file), rot: 0 };
       uploadRaw(sf, raw);
     } else {
-      const bitmap = await createImageBitmap(file);
+      const bitmap = await decodeFull(file);
       // A render or export in flight still uses the current photo, engine and GPU frame.
       while (rendering || exporting) await sleep(20);
       if (my !== loadSeq) { bitmap.close(); return; }
       let preview;
+      const size = { w: bitmap.width, h: bitmap.height };   // read before close(): a closed bitmap reports 0 x 0
       try {
         preview = decodeRGBA(bitmap, PREVIEW_LONG_SIDE);
         preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
-      } catch (e) { bitmap.close(); throw e; }
-      log(`decoded ${bitmap.width}x${bitmap.height}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
-      photo?.bitmap?.close();   // full-resolution decode of the previous photo
+      } finally { bitmap.close(); }
+      log(`decoded ${size.w}x${size.h}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
       $('indoor').checked = false; rotPending = 0; resetTilt();
-      photo = { file, bitmap, preview, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file), rot: 0 };
+      photo = { file, size, preview, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file), rot: 0 };
       if (gpu) {
         uploadFrame(preview.data, preview.w, preview.h);
       }
@@ -642,7 +644,9 @@ async function rotate(quarters) {
         preview.before = new ImageData(preview.data, preview.w, preview.h, { colorSpace: 'display-p3' });
         uploadRaw(sf, raw);
       } else {
-        preview = decodeRGBA(photo.bitmap, PREVIEW_LONG_SIDE, rot);
+        const bitmap = await decodeFull(photo.file);
+        try { preview = decodeRGBA(bitmap, PREVIEW_LONG_SIDE, rot); } finally { bitmap.close(); }
+        if (photo !== target) return;
         preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
         if (gpu) uploadFrame(preview.data, preview.w, preview.h);
       }
@@ -777,9 +781,9 @@ async function exportFull(ig = false) {
   const u = ui(), dust = dustAmount(), marks = dustMarks();   // fixed for every strip
   const t0 = performance.now();
   try {
-    const { bitmap } = photo, rawPv = photo.preview.raw;
+    const rawPv = photo.preview.raw, size = photo.size;
     const rot = photo.rot || 0, turned = rot & 1;
-    const fw = rawPv ? rawPv.fullW : turned ? bitmap.height : bitmap.width, fh = rawPv ? rawPv.fullH : turned ? bitmap.width : bitmap.height;
+    const fw = rawPv ? rawPv.fullW : turned ? size.h : size.w, fh = rawPv ? rawPv.fullH : turned ? size.w : size.h;
     const bFrac = $('border').checked ? BORDER_FRACTION : 0;
     // IG: the posted image (iw × ih) fits inside the canvas with a bFrac mat; the film renders at IG_SUPER × that.
     const igFit = ig ? fitInside(fw, fh, IG_W, IG_H, Math.round(bFrac * IG_H)) : null;
@@ -794,16 +798,21 @@ async function exportFull(ig = false) {
       const raw = await loadRaw(photo.file, scale < 1 ? Math.round(longCap) : undefined, rot);
       uploadRaw(sf, raw);
       frame = { data: null, w: raw.w, h: raw.h, p3: true, raw: true };
-    } else if (gpu && scale === 1) {
-      // Native size: decoded and uploaded a strip at a time, so the full
-      // frame (~50 MB at 12 MP, plus its canvas) is never in memory.
-      frame = { data: null, w: fw, h: fh, p3: false };
-      sf.alloc_frame(frame.w, frame.h);
-      forEachStrip(bitmap, (data, y0, rows, p3) => { sf.set_frame_rows(data, y0); frame.p3 = p3; }, rot);
     } else {
-      frame = decodeRGBA(bitmap, longCap, rot);
-      // GPU: the pixels live in the frame texture; drop them for the tile loop.
-      if (gpu) { uploadFrame(frame.data, frame.w, frame.h); frame.data = null; }
+      const bitmap = await decodeFull(photo.file);
+      try {
+        if (gpu && scale === 1) {
+          // Native size: decoded and uploaded a strip at a time, so the full
+          // frame (~50 MB at 12 MP, plus its canvas) is never in memory.
+          frame = { data: null, w: fw, h: fh, p3: false };
+          sf.alloc_frame(frame.w, frame.h);
+          forEachStrip(bitmap, (data, y0, rows, p3) => { sf.set_frame_rows(data, y0); frame.p3 = p3; }, rot);
+        } else {
+          frame = decodeRGBA(bitmap, longCap, rot);
+          // GPU: the pixels live in the frame texture; drop them for the tile loop.
+          if (gpu) { uploadFrame(frame.data, frame.w, frame.h); frame.data = null; }
+        }
+      } finally { bitmap.close(); }
     }
     const { w, h, p3 } = frame;
     const progressive = w * h > PROGRESSIVE_PIXEL_LIMIT ? 0 : 2;
