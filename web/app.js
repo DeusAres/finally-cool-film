@@ -10,10 +10,10 @@ import { iccSegment } from './lib/icc.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, INPUT_WGSL_V3, inputUniform } from './lib/lens-gpu.js';
 import { dodgeBase, dodgeParams, dodgeArray, dodgeCPU } from './lib/dodge.js';
-import { LUMA } from './lib/color.js';
+import { LUMA, XYZ_TO_RGB } from './lib/color.js';
 import { downscale, sharpenForScreen, fitInside } from './lib/igout.js';
 import { dustField, drawDust, compositeDust } from './lib/dust.js';
-import { GRAIN_WGSL, packParams, toP3CPU } from './lib/grain.js';
+import { GRAIN_WGSL, packParams, toSpaceCPU } from './lib/grain.js';
 import { tiltMap, tiltRGBA } from './lib/tilt.js';
 import { tiltRuler } from './lib/ruler.js';
 
@@ -81,10 +81,6 @@ const underEv = (on) => interno(on)?.under ?? 0;
 // LIGHT_REF - v kelvin (right = warmer light); gains = Planckian white at that temperature / at LIGHT_REF, in the engine input
 // space, normalised to luma 1 (no exposure change). v = 0 -> exactly [1, 1, 1] (identical to before).
 const LIGHT_REF = 5500;
-const XYZ_TO = {
-  srgb: [[3.2404542, -1.5371385, -0.4985314], [-0.9692660, 1.8760108, 0.0415560], [0.0556434, -0.2040259, 1.0572252]],
-  rec2020: [[1.7166512, -0.3556708, -0.2533663], [-0.6666844, 1.6164812, 0.0157685], [0.0176399, -0.0427706, 0.9421031]],
-};
 function planckRgb(T, space) {   // Kim et al. 2002 cubic fit of the Planckian locus (1667-25000 K), Y = 1
   const t = 1e3 / T, x = T < 4000 ? -0.2661239 * t ** 3 - 0.2343589 * t ** 2 + 0.8776956 * t + 0.179910
     : -3.0258469 * t ** 3 + 2.1070379 * t ** 2 + 0.2226347 * t + 0.240390;
@@ -92,7 +88,7 @@ function planckRgb(T, space) {   // Kim et al. 2002 cubic fit of the Planckian l
     : T < 4000 ? -0.9549476 * x ** 3 - 1.37418593 * x ** 2 + 2.09137015 * x - 0.16748867
       : 3.0817580 * x ** 3 - 5.87338670 * x ** 2 + 3.75112997 * x - 0.37001483;
   const XYZ = [x / y, 1, (1 - x - y) / y];
-  return XYZ_TO[space].map((r) => r[0] * XYZ[0] + r[1] * XYZ[1] + r[2] * XYZ[2]);
+  return XYZ_TO_RGB[space].map((r) => r[0] * XYZ[0] + r[1] * XYZ[1] + r[2] * XYZ[2]);
 }
 function lightGains(v, space) {
   if (!v) return [1, 1, 1];
@@ -113,7 +109,12 @@ const sceneGain = (u) => 2 ** (u.ev - underEv() + baselineEv());
 // The film model and the Frontier scanner are the engine's (the positive comes out of it);
 // our input pass only conditions the light (display→scene, exposure, lens, Texture, Chiarezza, Nitidezza, Vividezza).
 let forceSRGB = false, grainBoost = 1;   // IG export: sRGB output (P3 dulls saturated reds on Instagram); grain compensation
-const outP3 = () => !forceSRGB && !!photo?.preview.p3;
+// Output space ('p3' | 'srgb'): v3, Display P3 for P3 photos (sRGB for IG and sRGB photos); v4, always sRGB (the photos end
+// on the web / Instagram). `engineWide`: the engine renders Rec.2020 and the output pass maps it softly into the output
+// space (grain.js GAMUT); otherwise the engine renders the output space itself (v3 sRGB: hard clip, kept as it was).
+const outSpace = () => (!V4 && !forceSRGB && photo?.preview.p3 ? 'p3' : 'srgb');
+const engineWide = () => V4 || outSpace() === 'p3';
+const packTo = () => (engineWide() ? outSpace() : null);
 
 // `region` {x0, y0, fw, fh}: the rendered region's origin and its frame's size, in px (the engine's grain
 // is a hash of the frame position, so every tile of an export gets the same grain as the whole frame).
@@ -127,7 +128,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     // to P3 with a soft gamut compression (grain.js toP3); plain P3 output
     // hard-clipped dark warm browns (B = 0, hue swung red).
     // v2-calib: the engine now returns a positive, so its own gamut compression could be back on for sRGB.
-    io: { output_color_space: outP3() ? 'ITU-R BT.2020' : 'sRGB', output_gamut_compress: { algorithm: 'off' }, scan_film: true },
+    io: { output_color_space: engineWide() ? 'ITU-R BT.2020' : 'sRGB', output_gamut_compress: { algorithm: 'off' }, scan_film: true },
     // The engine's scanner unsharp mask works in pixels (0.7 px: crisper at
     // preview size than on a 12 MP export) and inflated pixel-level detail
     // ×1.3–1.6 (measured): a phone's crunch, not film. Texture comes from the
@@ -212,7 +213,7 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
     const space = frame.raw ? 'rec2020' : frame.p3 ? 'p3' : 'srgb', wb = sceneWb(undefined, space === 'srgb' ? 'srgb' : 'rec2020', u.temp);
     return engine.process_frame(DODGE ? INPUT_WGSL_V3 : INPUT_WGSL, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb, u.sharp, u.vibrance / 100, !!interno(), u.tilt),
       DODGE ? v3Gain(u, space) : DISPLAY_GAIN_LUT, w, h, PACK_LUT,
-      GRAIN_WGSL, packParams(outP3(), invUniform(u)), target);
+      GRAIN_WGSL, packParams(packTo(), invUniform(u)), target);
   }
   const map = tiltMap(frame.w, frame.h, u.tilt);   // Raddrizza (tilt.js); null at 0
   const rgb = lensActive(lens) || map
@@ -224,11 +225,11 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
   }
   if (DODGE) dodgeCPU(rgb, w, h, x0, y0, frame.w, frame.h, expo, v3Gain(u, frame.p3 ? 'p3' : 'srgb'), DISPLAY_GAIN_LUT.length, LUMA[frame.p3 ? 'rec2020' : 'srgb'], map);
   const out = engine.process(rgb, w, h), d32 = new Uint32Array(target.buffer, target.byteOffset, w * h);
-  const px = new Float32Array(3), p3 = outP3(), inv = invUniform(u);
+  const px = new Float32Array(3), to = packTo(), inv = invUniform(u);
   for (let p = 0, j = 0; p < w * h; p++, j += 3) {
     px[0] = out[j]; px[1] = out[j + 1]; px[2] = out[j + 2];
     if (inv) invertCPU(px, inv);   // v4: negative -> positive, as the GPU output pass
-    if (p3) toP3CPU(px);   // Rec.2020 → P3, as the GPU output pass
+    if (to) toSpaceCPU(px, to);   // Rec.2020 → output space, as the GPU output pass
     d32[p] = (q8(px[0]) | (q8(px[1]) << 8) | (q8(px[2]) << 16) | 0xff000000) >>> 0;
   }
 }
@@ -291,7 +292,7 @@ async function render() {
       // Breadcrumb: if iOS kills the tab mid-render, the next load says so.
       setBusy(`anteprima #${n} ${pv.w}x${pv.h} ${JSON.stringify(u)}`);
       syncEngine(u, { region: { x0: 0, y0: 0, fw: pv.w, fh: pv.h } });
-      const cs = outP3() ? 'display-p3' : 'srgb';
+      const cs = outSpace() === 'p3' ? 'display-p3' : 'srgb';
       if (photo.after?.width !== pv.w || photo.after?.height !== pv.h || photo.after.colorSpace !== cs) photo.after = new ImageData(pv.w, pv.h, { colorSpace: cs });
       await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), u);
       const t1 = performance.now();
@@ -731,7 +732,7 @@ function paperWhite(u) {
   const out = syncEngine(u, { noGrain: true }).process(new Float32Array(MAT_PATCH * MAT_PATCH * 3).fill(MAT_SCENE), MAT_PATCH, MAT_PATCH);
   const px = Float32Array.from(out.subarray(0, 3)), inv = invUniform(u);
   if (inv) invertCPU(px, inv);
-  if (outP3()) toP3CPU(px);
+  if (packTo()) toSpaceCPU(px, packTo());
   return Array.from(px, q8);
 }
 
@@ -843,10 +844,10 @@ async function exportFull(ig = false) {
     encoder.postMessage({ cmd: 'finish' });
     const result = await done;
     let bytes = result.jpeg;
-    bytes = insertExif(bytes, iccSegment(outP3() ? 'p3' : 'srgb'));   // segments go right after SOI, JFIF dropped; Exif is inserted last so it ends up first
+    bytes = insertExif(bytes, iccSegment(outSpace()));   // segments go right after SOI, JFIF dropped; Exif is inserted last so it ends up first
     try {
       const seg = await readExifSegment(photo.file);
-      if (seg) { bytes = insertExif(bytes, patchExif(seg, result.width, result.height, outP3())); log(`EXIF carried over (${seg.length} B)`); }
+      if (seg) { bytes = insertExif(bytes, patchExif(seg, result.width, result.height, outSpace() === 'p3')); log(`EXIF carried over (${seg.length} B)`); }
     } catch (e) { log('EXIF skipped: ' + (e?.message || e)); }
     const blob = new Blob([bytes], { type: 'image/jpeg' });
     const base = (photo.file.name || 'foto').replace(/\.[^.]+$/, '');

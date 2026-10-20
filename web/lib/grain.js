@@ -1,14 +1,40 @@
-// Output pass of the engine's process_frame: Rec.2020 -> Display P3 (soft gamut
-// compression) for P3 photos, the 8-bit pack through the LUT, and a soft floor at black.
+// Output pass of the engine's process_frame: Rec.2020 -> Display P3 or sRGB (soft gamut
+// compression) when the engine renders wide, the 8-bit pack through the LUT, and a soft floor at black.
 // Film grain is NOT here any more: it is the engine's (film_render.grain, rng 'hash',
 // see eval/GRAIN.md), so it is the same on GPU, CPU and every export tile.
 
 import { wf, wv3 } from './util.js';
-import { SRGB_WGSL, REC2020_TO_P3, srgbToLinear, linearToSrgb } from './color.js';
+import { SRGB_WGSL, REC2020_TO_P3, REC2020_TO_SRGB, srgbToLinear, linearToSrgb } from './color.js';
 import { INVERT_WGSL, INVERT_LEN } from './invert.js';
 
-// ACES-style soft gamut compression (rgc): threshold, the distance that maps to the edge, power.
-const RGC = { thr: 0.9, lim: 1.3, pw: 1.2 };
+// ACES-style soft gamut compression (rgc) into each output space: threshold, the distance that maps to the edge, power.
+// P3: thr 0.9 / lim 1.3 (measured on film colours, v2). sRGB (v4, web / Instagram): lim 1.55 = the farthest Rec.2020 primary
+// from sRGB (green: distance 1.52), so every colour the engine can render lands inside; thr 0.8 leaves 80 % of the way to the
+// edge untouched (unverified: chosen so saturated reds keep their gradation instead of a flat clip).
+const GAMUT = {
+  p3: { id: 1, M: REC2020_TO_P3, thr: 0.9, lim: 1.3, pw: 1.2 },
+  srgb: { id: 2, M: REC2020_TO_SRGB, thr: 0.8, lim: 1.55, pw: 1.2 },
+};
+const rgcScale = (g) => (g.lim - g.thr) / (((1 - g.thr) / (g.lim - g.thr)) ** -g.pw - 1) ** (1 / g.pw);
+// One channel's distance from the achromatic axis compressed beyond thr so that lim maps exactly to the gamut edge.
+const rgcWGSL = (name, g) => `fn ${name}(d: f32) -> f32 {
+  if (d < ${wf(g.thr)}) { return d; }
+  let x = (d - ${wf(g.thr)}) / ${wf(rgcScale(g))};
+  return ${wf(g.thr)} + ${wf(rgcScale(g))} * x / pow(1.0 + pow(x, ${wf(g.pw)}), ${wf(1 / g.pw)});
+}`;
+// Rec.2020 (sRGB-encoded) → the output space (sRGB-encoded). Film colours outside it are pulled in along their own channel
+// instead of clipping to 0, which would rotate the hue and flatten them.
+const toSpaceWGSL = (name, g) => `${rgcWGSL(name + 'Rgc', g)}
+fn ${name}(e: vec3<f32>) -> vec3<f32> {
+  let l = srgbDec(e);
+  var p = vec3<f32>(${g.M.map((r) => `dot(${wv3(r)}, l)`).join(', ')});
+  let a = max(p.x, max(p.y, p.z));
+  if (a > 0.0) {
+    let d = (vec3<f32>(a) - p) / a;
+    p = vec3<f32>(a) - vec3<f32>(${name}Rgc(d.x), ${name}Rgc(d.y), ${name}Rgc(d.z)) * a;
+  }
+  return srgbEnc(p);
+}`;
 
 export const GRAIN_WGSL = /* wgsl */`
 @group(0) @binding(0) var<storage, read> src: array<f32>;
@@ -16,42 +42,22 @@ export const GRAIN_WGSL = /* wgsl */`
 @group(0) @binding(2) var<storage, read_write> dst: array<u32>;
 @group(0) @binding(3) var<storage, read> P: array<f32>;
 // P[] layout (the engine prepends 4 slots, so packParams' first value is P[4]):
-//   P[4] = 1: the engine output is Rec.2020 -> convert to Display P3 here, with
-//        ACES-style per-channel soft gamut compression (see toP3)
+//   P[4] = 1 / 2: the engine output is Rec.2020 -> convert to Display P3 / sRGB here, with
+//        ACES-style per-channel soft gamut compression (GAMUT); 0: the engine output is already final
 //   P[5] = 1: v4, the engine output is the negative's scan -> invert it first (invert.js), uniforms at P[6..14]
 fn q(v: f32) -> f32 { return f32(lut[u32(clamp(v * 4095.0 + 0.5, 0.0, 4095.0))]) / 255.0; }
 
 ${SRGB_WGSL}
 ${INVERT_WGSL}
-// One channel's distance from the achromatic axis compressed beyond THR so that
-// LIM (the farthest a film colour lands outside P3) maps exactly to the gamut edge.
-fn rgc(d: f32) -> f32 {
-  let thr = ${wf(RGC.thr)}; let lim = ${wf(RGC.lim)}; let pw = ${wf(RGC.pw)};
-  if (d < thr) { return d; }
-  let scl = (lim - thr) / pow(pow((1.0 - thr) / (lim - thr), -pw) - 1.0, 1.0 / pw);
-  let x = (d - thr) / scl;
-  return thr + scl * x / pow(1.0 + pow(x, pw), 1.0 / pw);
-}
-// Rec.2020 (sRGB-encoded) → Display P3 (sRGB-encoded). Film colours a little
-// outside P3 (dark saturated browns, deep reds) are pulled in along their own
-// channel instead of clipping to 0, which would rotate the hue and flatten them.
-fn toP3(e: vec3<f32>) -> vec3<f32> {
-  let l = srgbDec(e);
-  var p = vec3<f32>(${REC2020_TO_P3.map((r) => `dot(${wv3(r)}, l)`).join(', ')});
-  let a = max(p.x, max(p.y, p.z));
-  if (a > 0.0) {
-    let d = (vec3<f32>(a) - p) / a;
-    p = vec3<f32>(a) - vec3<f32>(rgc(d.x), rgc(d.y), rgc(d.z)) * a;
-  }
-  return srgbEnc(p);
-}
+${toSpaceWGSL('toP3', GAMUT.p3)}
+${toSpaceWGSL('toSRGB', GAMUT.srgb)}
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = id.x + id.y * u32(P[1]);
   if (i >= u32(P[0])) { return; }
   var c = vec3<f32>(src[3u * i], src[3u * i + 1u], src[3u * i + 2u]);   // the engine's positive (v4: negative), sRGB-encoded
   if (P[5] > 0.5) { c = srgbEnc(invertNeg(c, 6u)); }
-  if (P[4] > 0.5) { c = toP3(c); }
+  if (P[4] > 1.5) { c = toSRGB(c); } else if (P[4] > 0.5) { c = toP3(c); }
   c = vec3<f32>(q(c.x), q(c.y), q(c.z));
   // Soft floor at black: unchanged a few levels above it, approaching it below (softplus),
   // so the engine's grain, already added, never leaves pure-black specks in the deepest shadows. Black itself
@@ -66,23 +72,23 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 /** Number of f32 slots GRAIN_WGSL reads after the engine's own 4 (P[4]). */
 const PACK_PARAMS_LEN = 2 + INVERT_LEN;
 
-/** Params for GRAIN_WGSL (P[4..]): `rec2020ToP3`: the engine output is Rec.2020 and the photo is Display P3; `inv`: v4
- * inversion uniforms (invert.js invertUniform), or null for the engine's positive. */
-export function packParams(rec2020ToP3 = false, inv = null) {
-  const p = new Float32Array([rec2020ToP3 ? 1 : 0, inv ? 1 : 0, ...(inv ?? new Array(INVERT_LEN).fill(0))]);
+/** Params for GRAIN_WGSL (P[4..]): `to`: 'p3' | 'srgb' when the engine output is Rec.2020 and must be mapped into that
+ * space, null when it is already final; `inv`: v4 inversion uniforms (invert.js invertUniform), or null for the engine's positive. */
+export function packParams(to = null, inv = null) {
+  const p = new Float32Array([to ? GAMUT[to].id : 0, inv ? 1 : 0, ...(inv ?? new Array(INVERT_LEN).fill(0))]);
   if (p.length !== PACK_PARAMS_LEN) throw new Error('GRAIN_WGSL uniform layout mismatch');
   return p;
 }
 
-// CPU twin of toP3 in GRAIN_WGSL, for the no-WebGPU path and the export mat: `px` is one
-// engine output pixel (sRGB-encoded Rec.2020), converted in place to sRGB-encoded Display P3.
-const RGC_SCL = (RGC.lim - RGC.thr) / (((1 - RGC.thr) / (RGC.lim - RGC.thr)) ** -RGC.pw - 1) ** (1 / RGC.pw);
-const rgcCPU = (d) => { if (d < RGC.thr) return d; const x = (d - RGC.thr) / RGC_SCL; return RGC.thr + RGC_SCL * x / (1 + x ** RGC.pw) ** (1 / RGC.pw); };
-export function toP3CPU(px) {
-  const r = srgbToLinear(px[0]), g = srgbToLinear(px[1]), b = srgbToLinear(px[2]);
-  const [m0, m1, m2] = REC2020_TO_P3;   // no per-pixel allocation
-  let p0 = m0[0] * r + m0[1] * g + m0[2] * b, p1 = m1[0] * r + m1[1] * g + m1[2] * b, p2 = m2[0] * r + m2[1] * g + m2[2] * b;
+// CPU twin of toP3 / toSRGB in GRAIN_WGSL, for the no-WebGPU path and the export mat: `px` is one engine output pixel
+// (sRGB-encoded Rec.2020), converted in place to the sRGB-encoded output space `to` ('p3' | 'srgb').
+export function toSpaceCPU(px, to) {
+  const g = GAMUT[to], scl = rgcScale(g);
+  const rgc = (d) => { if (d < g.thr) return d; const x = (d - g.thr) / scl; return g.thr + scl * x / (1 + x ** g.pw) ** (1 / g.pw); };
+  const r = srgbToLinear(px[0]), gr = srgbToLinear(px[1]), b = srgbToLinear(px[2]);
+  const [m0, m1, m2] = g.M;   // no per-pixel allocation
+  let p0 = m0[0] * r + m0[1] * gr + m0[2] * b, p1 = m1[0] * r + m1[1] * gr + m1[2] * b, p2 = m2[0] * r + m2[1] * gr + m2[2] * b;
   const a = Math.max(p0, p1, p2);
-  if (a > 0) { p0 = a - rgcCPU((a - p0) / a) * a; p1 = a - rgcCPU((a - p1) / a) * a; p2 = a - rgcCPU((a - p2) / a) * a; }
+  if (a > 0) { p0 = a - rgc((a - p0) / a) * a; p1 = a - rgc((a - p1) / a) * a; p2 = a - rgc((a - p2) / a) * a; }
   px[0] = linearToSrgb(p0); px[1] = linearToSrgb(p1); px[2] = linearToSrgb(p2);
 }

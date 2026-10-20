@@ -51,6 +51,9 @@ export const LUMA = Object.fromEntries(Object.entries(RGB_TO_XYZ).map(([k, m]) =
 const convert = (from, to) => mul(inv3(RGB_TO_XYZ[to]), RGB_TO_XYZ[from]);
 export const P3_TO_REC2020 = convert('p3', 'rec2020');
 export const REC2020_TO_P3 = convert('rec2020', 'p3');
+export const REC2020_TO_SRGB = convert('rec2020', 'srgb');
+/** XYZ (D65) → linear RGB of each space. */
+export const XYZ_TO_RGB = Object.fromEntries(Object.keys(RGB_TO_XYZ).map((k) => [k, inv3(RGB_TO_XYZ[k])]));
 
 // ---------- display → scene (JPEG input) ----------
 // ONE fixed, generic inverse of what a phone does to the light, applied to linear

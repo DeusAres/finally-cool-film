@@ -16,7 +16,12 @@
 const LO_PCT = 0.005, HI_PCT = 0.998;   // black / white percentiles: robust to a few dust-like extremes
 const MID = 0.18;                       // display mid grey (linear)
 const BLACK = 0.004;                    // display black (linear, ~L* 3.6): not 0, so the deepest film shadows keep their shape
-const KEY = 0.003;                      // colour key per slider step, in normalised density (±30 -> ±0.09 of the frame's range)
+const KEY = 0.003;
+// Soft ends in log display light: past the white / black anchors the frame still has a few pixels (the anchors are
+// percentiles), so instead of clipping them the curve approaches white (ln 1 = 0) and FLOOR asymptotically, with slope 1 at
+// the join. SOFT_W: width of the white roll-off in ln units (0.12: the white anchor lands at 0.957 linear, 250/255);
+// FLOOR = BLACK / 8 with the same width at the bottom (the deepest film shadows never reach 0).
+const SOFT_W = 0.12, FLOOR = Math.log(BLACK / 8);                      // colour key per slider step, in normalised density (±30 -> ±0.09 of the frame's range)
 const T_MIN = 1e-6;
 
 const srgbDec = (v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
@@ -47,10 +52,12 @@ export function invertUniform({ lo, hi, xm }, mshift = 0, yshift = 0) {
   return [...lo, ...hi.map((h, c) => 1 / Math.max(1e-4, h - lo[c])), xm, mshift * KEY, yshift * KEY];
 }
 
-/** Display light (linear) of normalised density x: log-linear through (0, BLACK), (xm, MID), (1, 1). */
+/** Display light (linear) of normalised density x: log-linear through (0, BLACK), (xm, MID), (1, 1), soft at both ends. */
 function displayLin(x, xm) {
-  const l = x < xm ? Math.log(BLACK) + (Math.log(MID) - Math.log(BLACK)) * (x / xm) : Math.log(MID) * (1 - (x - xm) / (1 - xm));
-  return Math.min(1, Math.exp(l));
+  let l = x < xm ? Math.log(BLACK) + (Math.log(MID) - Math.log(BLACK)) * (x / xm) : Math.log(MID) * (1 - (x - xm) / (1 - xm));
+  if (l > -SOFT_W) l = -SOFT_W * Math.exp(-(l + SOFT_W) / SOFT_W);
+  else if (l < FLOOR + SOFT_W) l = FLOOR + SOFT_W * Math.exp((l - FLOOR - SOFT_W) / SOFT_W);
+  return Math.exp(l);
 }
 
 /** CPU twin of the output pass's inversion: `px` (one engine output pixel, display-encoded negative scan) -> display-encoded
@@ -70,7 +77,11 @@ fn invDisplay(x: vec3<f32>, xm: f32) -> vec3<f32> {
   let lb = log(${BLACK.toFixed(6)}); let lm = log(${MID.toFixed(6)});
   let lo = vec3<f32>(lb) + (lm - lb) * (x / xm);
   let hi = vec3<f32>(lm) * (vec3<f32>(1.0) - (x - vec3<f32>(xm)) / (1.0 - xm));
-  return min(vec3<f32>(1.0), exp(select(hi, lo, x < vec3<f32>(xm))));
+  var l = select(hi, lo, x < vec3<f32>(xm));
+  let w = ${SOFT_W.toFixed(4)}; let f = ${FLOOR.toFixed(6)};
+  l = select(l, -w * exp(-(l + w) / w), l > vec3<f32>(-w));
+  l = select(l, f + w * exp((l - f - w) / w), l < vec3<f32>(f + w));
+  return exp(l);
 }
 fn invertNeg(c: vec3<f32>, o: u32) -> vec3<f32> {
   let d = -log(max(srgbDec(c), vec3<f32>(${T_MIN.toExponential()}))) / log(10.0);
