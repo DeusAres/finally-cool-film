@@ -46,7 +46,7 @@ fn ${name}(e: vec3<f32>) -> vec3<f32> {
   return srgbEnc(p);
 }`;
 
-export const GRAIN_WGSL = /* wgsl */`
+export const OUTPUT_WGSL = /* wgsl */`
 @group(0) @binding(0) var<storage, read> src: array<f32>;
 @group(0) @binding(1) var<storage, read> lut: array<u32>;
 @group(0) @binding(2) var<storage, read_write> dst: array<u32>;
@@ -79,18 +79,18 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   dst[i] = o.x | (o.y << 8u) | (o.z << 16u) | 0xff000000u;
 }`;
 
-/** Number of f32 slots GRAIN_WGSL reads after the engine's own 4 (P[4]). */
+/** Number of f32 slots OUTPUT_WGSL reads after the engine's own 4 (P[4]). */
 const PACK_PARAMS_LEN = 2 + INVERT_LEN;
 
-/** Params for GRAIN_WGSL (P[4..]): `to`: 'p3' | 'srgb' when the engine output is Rec.2020 and must be mapped into that
+/** Params for OUTPUT_WGSL (P[4..]): `to`: 'p3' | 'srgb' when the engine output is Rec.2020 and must be mapped into that
  * space, null when it is already final; `inv`: v4 inversion uniforms (invert.js invertUniform), or null for the engine's positive. */
 export function packParams(to = null, inv = null) {
   const p = new Float32Array([to ? GAMUT[to].id : 0, inv ? 1 : 0, ...(inv ?? new Array(INVERT_LEN).fill(0))]);
-  if (p.length !== PACK_PARAMS_LEN) throw new Error('GRAIN_WGSL uniform layout mismatch');
+  if (p.length !== PACK_PARAMS_LEN) throw new Error('OUTPUT_WGSL uniform layout mismatch');
   return p;
 }
 
-// CPU twin of toP3 / toSRGB in GRAIN_WGSL, for the no-WebGPU path and the export mat: `px` is one engine output pixel
+// CPU twin of toP3 / toSRGB in OUTPUT_WGSL, for the no-WebGPU path and the export mat: `px` is one engine output pixel
 // (sRGB-encoded Rec.2020), converted in place to the sRGB-encoded output space `to` ('p3' | 'srgb').
 const RGC_CPU = Object.fromEntries(Object.entries(GAMUT).map(([k, g]) => {
   const scl = rgcScale(g);

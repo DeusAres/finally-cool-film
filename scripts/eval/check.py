@@ -70,9 +70,9 @@ def render(port, photo, ui, out_png, query='', export=None):
 def source_luma(photo):
     """log2 scene luma of the photo at the app's preview size (eval/dng2npy.mjs, cached); None if unavailable."""
     os.makedirs(CACHE, exist_ok=True)
-    npy = os.path.join(CACHE, os.path.basename(photo) + '.npy')
+    npy = os.path.join(CACHE, f'{os.path.basename(photo)}_{PREVIEW_LONG_SIDE}.npy')
     if not os.path.exists(npy):
-        r = subprocess.run(['node', os.path.join(ROOT, 'eval', 'dng2npy.mjs'), os.path.join(ROOT, photo), npy, '2000'],
+        r = subprocess.run(['node', os.path.join(ROOT, 'eval', 'dng2npy.mjs'), os.path.join(ROOT, photo), npy, str(PREVIEW_LONG_SIDE)],
                            capture_output=True, text=True, cwd=ROOT)
         if r.returncode or not os.path.exists(npy):
             return None
@@ -93,26 +93,32 @@ def rgb_to_xyz(primaries, white=(0.3127, 0.3290)):
 
 # Display P3 primaries (web/lib/color.js PRIMARIES.p3); the transfer function is sRGB's.
 P3_TO_XYZ = rgb_to_xyz([(0.68, 0.32), (0.265, 0.69), (0.15, 0.06)])
-MAT_TOL = 6   # code values: a mat pixel differs from the corner's paper colour by JPEG noise only
+MAT_TOL = 6     # code values: a mat pixel differs from the corner's paper colour by JPEG noise only
+MAT_INSET = 8   # px dropped inside the found box: the JPEG's 8x8 blocks ring up to a block edge (measured: 4 px with 2)
 
 
 def crop_mat(rgb):
     """The image inside a uniform mat (export border, IG padding): the box of pixels that differ from the corner's colour."""
     diff = np.abs(rgb.astype(int) - rgb[0, 0].astype(int)).max(2) > MAT_TOL
     ys, xs = np.nonzero(diff.any(1))[0], np.nonzero(diff.any(0))[0]
-    return rgb[ys[0] + 2:ys[-1] - 1, xs[0] + 2:xs[-1] - 1] if len(ys) > 4 and len(xs) > 4 else rgb
+    i = MAT_INSET
+    return rgb[ys[0] + i:ys[-1] + 1 - i, xs[0] + i:xs[-1] + 1 - i] if len(ys) > 4 * i and len(xs) > 4 * i else rgb
 
 
 def lab_of(path):
-    """Lab of a render: the canvas PNG holds Display P3 code values, an exported JPEG sRGB (its mat cropped)."""
-    im = Image.open(path).convert('RGB')
-    if path.endswith('.png'):
-        enc = np.asarray(im) / 255.0
-        lin = np.where(enc <= 0.04045, enc / 12.92, ((enc + 0.055) / 1.055) ** 2.4)
-        return color.xyz2lab(lin @ P3_TO_XYZ.T)
-    im = Image.fromarray(crop_mat(np.asarray(im)))
-    im.thumbnail((PREVIEW_LONG_SIDE, PREVIEW_LONG_SIDE), Image.LANCZOS)
-    return color.rgb2lab(np.asarray(im) / 255.0)
+    """Lab of a render: the canvas PNG holds Display P3 code values; an exported JPEG is sRGB or P3 as its ICC profile says
+    (web/lib/icc.js names it 'Display P3'), its mat cropped and downscaled to the preview's size."""
+    im = Image.open(path)
+    p3 = path.endswith('.png') or b'Display P3' in (im.info.get('icc_profile') or b'')
+    im = im.convert('RGB')
+    if not path.endswith('.png'):
+        im = Image.fromarray(crop_mat(np.asarray(im)))
+        im.thumbnail((PREVIEW_LONG_SIDE, PREVIEW_LONG_SIDE), Image.LANCZOS)
+    if not p3:
+        return color.rgb2lab(np.asarray(im) / 255.0)
+    enc = np.asarray(im) / 255.0
+    lin = np.where(enc <= 0.04045, enc / 12.92, ((enc + 0.055) / 1.055) ** 2.4)
+    return color.xyz2lab(lin @ P3_TO_XYZ.T)
 
 
 def measure(png, Ls):

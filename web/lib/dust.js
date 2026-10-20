@@ -9,7 +9,7 @@
 // toggling it, changing the amount or reseeding re-renders nothing.
 //
 // The field is a list of vector primitives generated from a seed, in µm on a
-// 36 mm-long-side frame (the engine's own physical scale), so the preview and
+// 36 mm-long-side frame (util.js FRAME_UM; the engine's grain uses 35, see app.js FILM_FORMAT_MM), so the preview and
 // every export tile draw exactly the same marks at any resolution:
 //   - specks: irregular clusters of 1–3 ellipses, mostly tiny grit (a few µm to
 //     ~30 µm, i.e. 1–3 px on a 12 MP scan), a light tail of bigger flakes up to

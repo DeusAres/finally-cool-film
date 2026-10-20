@@ -195,8 +195,12 @@ export function patchExif(seg, w, h, p3 = false) {
       fn(u16(e), e);
     }
   };
+  // IFD0's next-IFD link to 0: IFD1 is the original's thumbnail (the unprocessed photo, maybe the other orientation), which
+  // galleries and upload pickers would show for this export. Its bytes stay in the segment, unreferenced.
+  const ifd0 = u32(4), next = ifd0 + 2 + u16(ifd0) * 12;
+  if (T + next + 4 <= seg.length) dv.setUint32(T + next, 0, le);
   let exifIfd = 0;
-  walk(u32(4), (tag, e) => {
+  walk(ifd0, (tag, e) => {
     if (tag === 0x0112) set(e, 1);
     else if (tag === 0x8769) exifIfd = u32(e + 8);
   });

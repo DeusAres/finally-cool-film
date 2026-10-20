@@ -13,7 +13,7 @@ import { dodgeBase, dodgeParams, dodgeArray, dodgeCPU } from './lib/dodge.js';
 import { LUMA, XYZ_TO_RGB } from './lib/color.js';
 import { downscale, sharpenForScreen, fitInside } from './lib/igout.js';
 import { dustField, drawDust, compositeDust } from './lib/dust.js';
-import { GRAIN_WGSL, packParams, toSpaceCPU } from './lib/grain.js';
+import { OUTPUT_WGSL, packParams, toSpaceCPU } from './lib/output.js';
 import { tiltMap, tiltRGBA } from './lib/tilt.js';
 import { tiltRuler } from './lib/ruler.js';
 
@@ -115,7 +115,7 @@ const sceneGain = (u) => 2 ** (u.ev - underEv() + baselineEv());
 let forceSRGB = false;   // IG export: sRGB output (P3 dulls saturated reds on Instagram)
 // Output space ('p3' | 'srgb'): v3, Display P3 for P3 photos (sRGB for IG and sRGB photos); v4, always sRGB (the photos end
 // on the web / Instagram). `engineWide`: the engine renders Rec.2020 and the output pass maps it softly into the output
-// space (grain.js GAMUT); otherwise the engine renders the output space itself (v3 sRGB: hard clip, kept as it was).
+// space (output.js GAMUT); otherwise the engine renders the output space itself (v3 sRGB: hard clip, kept as it was).
 const outSpace = () => (!V4 && !forceSRGB && photo?.preview.p3 ? 'p3' : 'srgb');
 const engineWide = () => V4 || outSpace() === 'p3';
 const packTo = () => (engineWide() ? outSpace() : null);
@@ -129,7 +129,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     // identical): the engine's sRGB-only gamut compression was squeezing
     // saturated reds / oranges / yellows by ~20% (measured). The engine renders
     // them into Rec.2020 (film colours fit there) and the output pass converts
-    // to P3 with a soft gamut compression (grain.js toP3); plain P3 output
+    // to P3 with a soft gamut compression (output.js toP3); plain P3 output
     // hard-clipped dark warm browns (B = 0, hue swung red).
     // v2-calib: the engine now returns a positive, so its own gamut compression could be back on for sRGB.
     io: { output_color_space: engineWide() ? 'ITU-R BT.2020' : 'sRGB', output_gamut_compress: { algorithm: 'off' }, scan_film: true },
@@ -217,7 +217,7 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
     const space = frame.raw ? 'rec2020' : frame.p3 ? 'p3' : 'srgb', wb = sceneWb(undefined, space === 'srgb' ? 'srgb' : 'rec2020', u.temp);
     return engine.process_frame(DODGE ? INPUT_WGSL_V3 : INPUT_WGSL, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb, u.sharp, u.vibrance / 100, !!interno(), u.tilt),
       DODGE ? v3Gain(u, space) : DISPLAY_GAIN_LUT, w, h, PACK_LUT,
-      GRAIN_WGSL, packParams(packTo(), invUniform(u)), target);
+      OUTPUT_WGSL, packParams(packTo(), invUniform(u)), target);
   }
   const map = tiltMap(frame.w, frame.h, u.tilt);   // Raddrizza (tilt.js); null at 0
   const rgb = lensActive(lens) || map
@@ -262,7 +262,7 @@ function autoSetup(on, evIn = null) {
   // The meter sees the scene as shot: it never compensates Interno's U (the negative stays thin).
   // Auto keeps its own -2..+2.5 range (the slider's before v3.33, when it became -3..+3): a wider slider must not change what Auto picks.
   const ev = evIn !== null ? evIn : Math.max(AUTO_EV_MIN, Math.min(AUTO_EV_MAX, Math.round(eng.auto_exposure_ev(rgb.slice(), w, h) * 10) / 10));
-  if (V4) return { ev, auto: null };   // v4: no scanner AutoSetup (the lab is v4Lab)
+  if (V4) return { ev, auto: null };   // v4: no scanner AutoSetup (neutral inversion: invert.js, v4Anchors)
   scale(2 ** (ev - underEv(on)));
   // Engine.frontier_auto_setup takes linear RGBA f32 (w*h*4), not RGB.
   const rgba = new Float32Array(w * h * 4);
@@ -613,19 +613,22 @@ async function loadPhoto(file) {
     showPreview();
     await runAuto();
     if (my !== loadSeq) return;   // a newer pick is decoding: its load enables the buttons
-    $('export').disabled = false; $('auto').disabled = false; $('newPhoto').hidden = false;
-    $('exportIG').hidden = false; $('exportIG').disabled = false;
+    photoUsable();
   } catch (e) {
     if (my !== loadSeq) { log(`load superseded: ${file.name} (${e?.message || e})`); return; }   // the newer pick owns the status
     log('load error: ' + (e?.stack || e));
     status('Errore: ' + (e?.message || e));
-    if (photo === prev && prev) {   // failed decode: the previous photo is still shown, keep it usable
-      $('export').disabled = $('auto').disabled = false;
-      $('exportIG').disabled = false;
-    }
+    if (photo === prev && prev) photoUsable();   // failed decode: the previous photo is still shown, keep it usable
   } finally {
     if (my === loadSeq) { loadingPhoto = false; loadMark = null; if (!rendering && !exporting) setBusy(null); }
   }
+}
+
+/** The current photo's buttons enabled and shown (a load that finished, or a failed one that kept the previous photo, even one
+ * whose own load was superseded before it got here). */
+function photoUsable() {
+  $('export').disabled = $('auto').disabled = $('exportIG').disabled = false;
+  $('exportIG').hidden = $('newPhoto').hidden = false;
 }
 
 /** Canvas, dust layer, 'before' image and fit for the current photo.preview (new photo or a turn). */
@@ -818,6 +821,7 @@ async function exportFull(ig = false) {
       : Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (fw * fh)));
     if (ig) forceSRGB = true;
     const longCap = Math.round(Math.max(fw, fh) * scale);
+    encoderError = null;   // from here, any error of this export's worker fails it (also one during the decode below)
     await encoderUp();   // before the decode: a dead encoder fails the export at once
     enc = encoder;       // this export's worker (encoder may be replaced by an error mid-way)
     status('Esporto: decodifica…');
@@ -856,7 +860,7 @@ async function exportFull(ig = false) {
     const strips = Math.ceil(h / EXPORT_TILE), cols = Math.ceil(w / EXPORT_TILE);
 
     let tileBuf = null;   // reused across tiles
-    encoderError = null;
+    if (encoderError || encoder !== enc) throw new Error(encoderError || 'encoder JPEG terminato');
     const done = new Promise((resolve, reject) => { encoderDone = { resolve, reject }; });
     done.catch(() => {});
     const quality = +$('quality').value, distance = jpegDistance(quality);
@@ -1106,9 +1110,9 @@ log(`boot ${BUILD} ${navigator.userAgent}`);
 // version.txt past every cache; on a new deploy we reload (without a photo open) or offer a tap to update.
 const BUILD_ID = '__BUILD_ID__';
 let updating = false;
+addEventListener('pagehide', () => { if (updating) setBusy(null); });
 async function freshReload() {
-  updating = true;
-  setBusy(null);   // a reload in the middle of a render or a decode is not a crash
+  updating = true;   // the busy marker is cleared on pagehide: a reload in the middle of a render or a decode is not a crash
   try { await fetch('index.html', { cache: 'reload' }); } catch { /* offline: plain reload */ }
   location.reload();
 }

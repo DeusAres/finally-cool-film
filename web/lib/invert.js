@@ -11,7 +11,7 @@
 //     shoulder shape the shadows and highlights, nothing else does.
 // Magenta ↔ Verde / Giallo ↔ Blu shift the G / B channel's position between its black and white.
 //
-// No DOM: shared by the GPU output pass (grain.js) and the CPU path (app.js).
+// No DOM: shared by the GPU output pass (output.js) and the CPU path (app.js).
 
 import { srgbToLinear as srgbDec, linearToSrgb as srgbEnc } from './color.js';
 

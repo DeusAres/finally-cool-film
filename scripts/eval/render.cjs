@@ -139,10 +139,9 @@ function encodePng(w, h, rgba) {
       // the download, or the app's own export error (not a 'stalled' minutes later)
       const failed = page.waitForFunction(() => /^Export fallito/.test(document.getElementById('status').textContent), null, { timeout: TIMEOUT, polling: 500 })
         .then(async () => { throw new Error(await page.textContent('#status')); });
-      const dl = page.waitForEvent('download', { timeout: TIMEOUT });
+      const first = Promise.race([page.waitForEvent('download', { timeout: TIMEOUT }), failed]);   // handled from now on, before the click
       await page.evaluate((b) => document.getElementById(b).click(), exportBtn);
-      dl.catch(() => {});   // the loser of the race must not end node as an unhandled rejection
-      await (await Promise.race([dl, failed])).saveAs(exportTo);
+      await (await first).saveAs(exportTo);
       console.error('export saved', exportTo, await page.textContent('#status'));
     }
 
