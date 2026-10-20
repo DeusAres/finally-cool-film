@@ -33,7 +33,11 @@ export const logText = () => lines.join('\n');
 export const prevLogText = () => prev;
 
 /** Mark risky work in progress (e.g. 'export'); pass null when it finished. */
-export const setBusy = (what) => write(BUSY, what);
+// Risky work starting: the log is flushed with it, so the lines leading up to a crash are not lost to the persist throttle.
+export const setBusy = (what) => {
+  write(BUSY, what);
+  if (what && persistTimer) { clearTimeout(persistTimer); persist(); }
+};
 
 /** What the previous session was doing when it died, or null if it ended cleanly. */
 export function takeCrashMarker() {

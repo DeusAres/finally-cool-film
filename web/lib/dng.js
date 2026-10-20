@@ -155,7 +155,7 @@ function decodeLJ92(b, start, end, out) {
   if (NC > 4 || compTable.length < NC) throw new Error('LJ92: unsupported scan');
   for (let c = 0; c < NC; c++) if (!compTable[c]) throw new Error('LJ92: missing Huffman table');
   if (ri && ri % W) throw new Error('LJ92: restart interval not row-aligned');
-  // A corrupt SOF3 (e.g. 65535 x 65535) would loop ~1e10 times on zero bits, the writes silently dropped (audit round 1, #9).
+  // A corrupt SOF3 (e.g. 65535 x 65535) would loop ~1e10 times on zero bits, the writes silently dropped.
   if (W * NC * H > out.length) throw new Error('LJ92: frame larger than its tile');
   end = Math.min(end, b.length);
   const rowRestart = ri ? ri / W : 0;
@@ -481,7 +481,7 @@ function resizeRow(ax, src, so, dw, to, oo) {
 
 /**
  * Streaming area resize sw×sh -> dw×dh: `push(row, y)` takes source rows in order (RGB float, sw px) and adds them into the
- * output; only the output and one resized row are held (audit round 1, #4: a 20 MP raw export no longer holds its full
+ * output; only the output and one resized row are held (a 20 MP raw export no longer holds its full
  * float image plus a full-height intermediate, ~0.7 GB). Same weights as areaResize, so the result is identical.
  */
 function areaResizer(sw, sh, dw, dh) {

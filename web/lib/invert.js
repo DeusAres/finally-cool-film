@@ -28,7 +28,7 @@ const KEY = 0.003;
 // FLOOR = BLACK / 8 with the same width at the bottom (the deepest film shadows never reach 0).
 const SOFT_W = 0.12, FLOOR = Math.log(BLACK / 8);
 const T_MIN = 1e-6;
-// Degenerate frames (audit round 1, #2): a channel whose black and white are closer than MIN_RANGE density (a flat or
+// Degenerate frames: a channel whose black and white are closer than MIN_RANGE density (a flat or
 // near-flat frame) gets that range, so it is shown as a mid tone instead of being stretched; the mid-grey anchor is kept in
 // [XM_MIN, XM_MAX] of the range, or a frame half black / half white puts it on an end and the curve divides by zero.
 const MIN_RANGE = 0.05, XM_MIN = 0.1, XM_MAX = 0.9;

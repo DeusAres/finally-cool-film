@@ -1,4 +1,4 @@
-import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, jpegThumb, THUMB_PX, PACK_LUT } from './lib/common.js';
+import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, turnRGBA, forEachStrip, stripRows, extractLinear, jpegThumb, THUMB_PX, PACK_LUT } from './lib/common.js';
 import { sleep, store, PREVIEW_LONG_SIDE } from './lib/util.js';
 import { DISPLAY_GAIN_LUT } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
@@ -52,9 +52,9 @@ const V4 = V3 && new URLSearchParams(location.search).has('v4');
 // v3 highlight dodging (Luci auto, lib/dodge.js) changes the scene light before the film: off in v4 (the film alone).
 const DODGE = V3 && !V4;
 let photo = null;           // { file, size: { w, h } of the full decode, preview, after, auto: scanner AutoSetup [d, c, m, y], rot: quarter turns clockwise, ... }
-// The full-resolution decode of a JPEG / HEIC is not kept (24-48 MP = 96-195 MB for the photo's whole life, audit round 1, #13):
-// rotate and export decode the file again and close it.
-const decodeFull = (file) => createImageBitmap(file);
+// The full-resolution decode of a JPEG / HEIC is not kept (24-48 MP = 96-195 MB for the photo's whole life): the export decodes
+// the file again and closes it.
+const decodeFull = (file) => createImageBitmap(file);   // export only (rotate turns the preview's pixels)
 let rendering = false, dirty = false, exporting = false, renderCount = 0;
 
 // ---------- params ----------
@@ -524,12 +524,14 @@ grip.addEventListener('dblclick', () => {
 });
 
 // Bottom tab bar: one section of sliders at a time; tapping while collapsed expands the sheet.
+// v4: the film alone. Pre-film modifiers that are not the film (Texture, the lens) start at 0, the user can still add them;
+// grain and halation are the film's own and start (and reset, Azzera) at its values: Grana at the measured Gold 200 strength
+// (the v3 default 2.5× is ~80 % of the full-frame Gold scans, README v3.32), Halation at the stock's antihalation (1).
+const V4_FILM = { grain: 3.1, halation: 1 };
 if (V4) {
   document.querySelector('#tabs [data-tab="light"]').remove();   // v4: the light is the phone's exposure
-  // v4: the film alone. Pre-film modifiers that are not the film (Texture, the lens) start at 0; the user can still add them.
   for (const id of ['texture', 'ca', 'vignette', 'falloff']) $(id).value = 0;
-  // Grana at the measured Gold 200 strength: the v3 default 2.5× is ~80 % of the full-frame Gold scans (README, v3.32).
-  $('grain').value = 3.1;
+  for (const [id, v] of Object.entries(V4_FILM)) $(id).value = v;
 }
 {
   const tabBtns = [...document.querySelectorAll('#tabs button')], panes = [...document.querySelectorAll('.pane')];
@@ -548,18 +550,21 @@ if (V4) {
 
 // ---------- photo ----------
 
-let loadSeq = 0;
+let loadSeq = 0, loadingPhoto = false;
 async function loadPhoto(file) {
   if (!file || exporting) return;   // a drop during an export would decode on top of it (memory) and race its finally
   if (!engineReady) {
     status('Caricamento motore…');
     await booted;
-    if (!engineReady) return;   // boot failed: its error is on the status line
+    if (!engineReady) { status(bootError); return; }   // boot failed: show its error again (reload to retry)
   }
   const my = ++loadSeq, prev = photo;
   status('Decodifica…');
   // Nothing exportable until this photo has loaded and been auto-measured; stays disabled on error.
   $('export').disabled = $('exportIG').disabled = $('auto').disabled = true;
+  loadingPhoto = true;
+  // Breadcrumb: a decode killed for memory (a 48 MP HEIC, a 20 MP raw) is reported on the next load.
+  setBusy(`decodifica ${file.name} ${(file.size / 1e6).toFixed(1)} MB`);
   try {
     log(`photo: ${file.name} ${file.type} ${(file.size / 1e6).toFixed(1)} MB`);
     if (await isRaw(file)) {
@@ -604,6 +609,8 @@ async function loadPhoto(file) {
       $('export').disabled = $('auto').disabled = false;
       $('exportIG').disabled = false;
     }
+  } finally {
+    if (my === loadSeq) { loadingPhoto = false; if (!rendering && !exporting) setBusy(null); }
   }
 }
 
@@ -644,9 +651,9 @@ async function rotate(quarters) {
         preview.before = new ImageData(preview.data, preview.w, preview.h, { colorSpace: 'display-p3' });
         uploadRaw(sf, raw);
       } else {
-        const bitmap = await decodeFull(photo.file);
-        try { preview = decodeRGBA(bitmap, PREVIEW_LONG_SIDE, rot); } finally { bitmap.close(); }
-        if (photo !== target) return;
+        // the preview's own pixels turned (exact copy, no await: an export cannot start in between)
+        const pv = photo.preview, t = turnRGBA(pv.data, pv.w, pv.h, q);
+        preview = { data: t.data, w: t.w, h: t.h, p3: pv.p3 };
         preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
         if (gpu) uploadFrame(preview.data, preview.w, preview.h);
       }
@@ -658,7 +665,10 @@ async function rotate(quarters) {
   } catch (e) {
     log('rotate error: ' + (e?.stack || e));
     status('Errore: ' + (e?.message || e));
-  } finally { rotBusy = false; }
+  } finally {
+    rotBusy = false;
+    if (rotPending && photo) rotate(0);   // a turn tapped for a newer photo while the old loop was ending
+  }
 }
 $('rotL').addEventListener('click', () => rotate(-1));
 // Export JPEG quality (File tab): only read by exportFull, never re-renders. Double tap the label: back to the default.
@@ -714,9 +724,10 @@ async function runAuto() {
 // Each tile keeps the frame's physical pixel size (film_format_mm scaled to the
 // tile) and the same engine parameters as the preview, with an overlap margin cropped away.
 
-// The jpegli worker. A worker whose script or wasm failed to load never answers, and an export would wait on it for ever
-// (audit round 1, #5): it posts 'ready' once jpegli is up, an export waits for that (ENCODER_READY_MS), and a dead worker is
-// replaced by the next export.
+// The jpegli worker. A worker whose script or wasm failed to load never answers, and an export would wait on it for ever: it
+// posts 'ready' once jpegli is up and an export waits for that (ENCODER_READY_MS: generous, the 2 MB wasm compiles in a few
+// seconds on a slow phone; unmeasured). After an error, and after every export, the worker is replaced: its wasm heap never
+// shrinks and would keep the export's peak (hundreds of MB at 12 MP) for the whole session.
 const ENCODER_READY_MS = 20000;
 let encoder = null, encoderReady = null, encoderError = null, encoderDone = null;
 function startEncoder() {
@@ -726,13 +737,13 @@ function startEncoder() {
   encoderReady = new Promise((r) => { ready = r; });
   w.onmessage = ({ data }) => {
     if (data.cmd === 'ready') ready(true);
-    else if (data.cmd === 'error') { encoderError = data.error; log('jpegli error: ' + data.error); encoderDone?.reject(new Error(data.error)); }
+    else if (data.cmd === 'error') { encoderError = data.error; log('jpegli error: ' + data.error); encoderDone?.reject(new Error(data.error)); if (encoder === w) encoder = null; }
     else if (data.cmd === 'done') { log(`jpegli done ${data.width}x${data.height}, heap ${data.heapMB} MB`); encoderDone?.resolve(data); }
   };
   w.onerror = (e) => {
     encoderError = e.message || 'worker error'; log('jpegli worker error: ' + encoderError);
     encoderDone?.reject(new Error(encoderError));
-    if (encoder === w) encoder = null;   // the next export starts a fresh one
+    if (encoder === w) { w.terminate(); encoder = null; }   // the next export starts a fresh one
   };
 }
 startEncoder();
@@ -771,7 +782,7 @@ function paperWhite(u) {
 // output-sharpened for screen (lib/igout.js), like Lightroom's Resize to fit + Sharpen for Screen.
 async function exportFull(ig = false) {
   if (!photo || exporting) return;
-  while (internoBusy) await sleep(20);   // a pending Interno toggle / AutoSetup must land before the snapshot
+  while (internoBusy || rotBusy) await sleep(20);   // a pending Interno toggle / AutoSetup / turn must land before the snapshot
   if (!photo || exporting) return;
   exporting = true;
   $('export').disabled = $('exportIG').disabled = $('auto').disabled = $('newPhoto').disabled = $('pick').disabled = $('indoor').disabled = $('rotL').disabled = $('rotR').disabled = true;
@@ -780,6 +791,7 @@ async function exportFull(ig = false) {
   while (rendering) await sleep(20);
   const u = ui(), dust = dustAmount(), marks = dustMarks();   // fixed for every strip
   const t0 = performance.now();
+  let enc = null;
   try {
     const rawPv = photo.preview.raw, size = photo.size;
     const rot = photo.rot || 0, turned = rot & 1;
@@ -791,6 +803,8 @@ async function exportFull(ig = false) {
       : Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (fw * fh)));
     if (ig) forceSRGB = true;
     const longCap = Math.round(Math.max(fw, fh) * scale);
+    await encoderUp();   // before the decode: a dead encoder fails the export at once
+    enc = encoder;       // this export's worker (encoder may be replaced by an error mid-way)
     status('Esporto: decodifica…');
     let frame;   // { data (CPU path only), w, h, p3, raw }
     if (rawPv) {
@@ -827,14 +841,13 @@ async function exportFull(ig = false) {
     const strips = Math.ceil(h / EXPORT_TILE), cols = Math.ceil(w / EXPORT_TILE);
 
     let tileBuf = null;   // reused across tiles
-    await encoderUp();
     encoderError = null;
     const done = new Promise((resolve, reject) => { encoderDone = { resolve, reject }; });
     done.catch(() => {});
     const quality = +$('quality').value, distance = jpegDistance(quality);
     log(`export quality ${quality} (distance ${distance.toFixed(2)})`);
     const igFull = ig ? new Uint8Array(w * h * 3) : null;   // IG: the whole supersampled render, downscaled at the end
-    if (!ig) encoder.postMessage({ cmd: 'start', width: w, height: h, distance, progressive, yuv444: 1, border: borderX, borderY, mat: border ? paperWhite(u) : undefined });
+    if (!ig) enc.postMessage({ cmd: 'start', width: w, height: h, distance, progressive, yuv444: 1, border: borderX, borderY, mat: border ? paperWhite(u) : undefined });
 
     for (let s = 0; s < strips; s++) {
       const ty = s * EXPORT_TILE, ch = Math.min(EXPORT_TILE, h - ty);
@@ -857,7 +870,7 @@ async function exportFull(ig = false) {
       }
       dustIntoStrip(strip, w, h, ty, ch, dust, marks);
       if (ig) { igFull.set(strip, ty * w * 3); continue; }
-      encoder.postMessage({ cmd: 'rows', rgb: strip.buffer }, [strip.buffer]);
+      enc.postMessage({ cmd: 'rows', rgb: strip.buffer }, [strip.buffer]);
       log(`strip ${s + 1}/${strips} sent`);
     }
     if (ig) {
@@ -869,14 +882,14 @@ async function exportFull(ig = false) {
       const ox = (IG_W - iw) >> 1, oy = (IG_H - ih) >> 1;
       for (let y = 0; y < ih; y++) canvas.set(small.subarray(y * iw * 3, (y + 1) * iw * 3), ((oy + y) * IG_W + ox) * 3);
       log(`IG ${w}x${h} -> ${iw}x${ih} on ${IG_W}x${IG_H}`);
-      encoder.postMessage({ cmd: 'start', width: IG_W, height: IG_H, distance, progressive: 2, yuv444: 1, border: 0 });
+      enc.postMessage({ cmd: 'start', width: IG_W, height: IG_H, distance, progressive: 2, yuv444: 1, border: 0 });
       for (let y = 0; y < IG_H; y += 256) {
         const rows = canvas.slice(y * IG_W * 3, Math.min(IG_H, y + 256) * IG_W * 3);
-        encoder.postMessage({ cmd: 'rows', rgb: rows.buffer }, [rows.buffer]);
+        enc.postMessage({ cmd: 'rows', rgb: rows.buffer }, [rows.buffer]);
       }
     }
     status('Esporto: JPEG (jpegli)…');
-    encoder.postMessage({ cmd: 'finish' });
+    enc.postMessage({ cmd: 'finish' });
     const result = await done;
     let bytes = result.jpeg;
     bytes = insertExif(bytes, iccSegment(outSpace()));   // segments go right after SOI, JFIF dropped; Exif is inserted last so it ends up first
@@ -891,11 +904,12 @@ async function exportFull(ig = false) {
     status(`Esportata: ${result.width}×${result.height}, ${(blob.size / 1e6).toFixed(1)} MB in ${secs} s`);
     download(blob, `${base}_gold200${ig ? '_ig' : ''}${border || (ig && bFrac) ? '_bordo' : ''}.jpg`);
   } catch (e) {
-    encoder?.postMessage({ cmd: 'abort' });
+    enc?.postMessage({ cmd: 'abort' });
     log('export error: ' + (e?.stack || e));
     status('Export fallito: ' + (e?.message || e) + ' (tocca qui per il log)');
   } finally {
     forceSRGB = false;
+    startEncoder();   // a fresh worker: the old one's wasm heap kept this export's peak
     setBusy(null);
     exporting = false;
     if (dustStripCanvas) { dustStripCanvas.width = dustStripCanvas.height = 0; dustStripCanvas = null; }   // release the backing store
@@ -920,7 +934,9 @@ function openLog(title) {
   $('logText').textContent = fullLog();
   $('logPanel').style.display = 'flex';
 }
-$('status').addEventListener('click', () => openLog('Log'));
+// The status line opens the log, or applies a waiting update (checkUpdate): one action per tap.
+let updateReady = false;
+$('status').addEventListener('click', () => { if (updateReady) { if (!exporting) freshReload(); } else openLog('Log'); });
 $('logClose').addEventListener('click', () => { $('logPanel').style.display = 'none'; });
 $('logCopy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(fullLog()); $('logCopy').textContent = 'Copiato ✓'; } catch { $('logCopy').textContent = 'Seleziona il testo'; }
@@ -1021,7 +1037,10 @@ $('indoor').addEventListener('change', async () => {
 $('resetAll').addEventListener('click', () => {
   const ids = [...Object.keys(FORMAT), ...(V3 ? ['hlc', 'shadows'] : [])];
   for (const id of ids) $(id).value = 0;
-  if (V4 && photo) $('ev').value = photo.autoEv;   // v4: the exposure is the phone's (no Luce tab to bring it back)
+  if (V4) {   // v4: the exposure is the phone's (no Luce tab to bring it back), grain and halation the film's
+    if (photo) $('ev').value = photo.autoEv;
+    for (const [id, v] of Object.entries(V4_FILM)) $(id).value = v;
+  }
   syncOutputs();
   if (V3) for (const id of ['hlc', 'shadows']) $(id).dispatchEvent(new Event('input'));
   resetTilt();
@@ -1080,12 +1099,12 @@ async function checkUpdate() {
     log(`update available ${BUILD_ID} -> ${id}`);
     // one automatic reload per new id: the CDN may still serve the old index.html for a few minutes (no loop)
     let tried = null; try { tried = sessionStorage.getItem('fcf_reload_for'); } catch { /* storage blocked */ }
-    if (!photo && !exporting && tried !== id) {
+    if (!photo && !loadingPhoto && !exporting && tried !== id) {   // not while the first photo decodes
       try { sessionStorage.setItem('fcf_reload_for', id); } catch { /* storage blocked */ }
       return freshReload();
     }
     status('Nuova versione disponibile — tocca qui per aggiornare');
-    $('status').onclick = () => { if (!exporting) freshReload(); };
+    updateReady = true;
   } catch { /* offline */ }
 }
 checkUpdate();
@@ -1093,10 +1112,10 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 addEventListener('pageshow', (e) => { if (e.persisted) checkUpdate(); });
 
 // A photo picked or dropped while the engine still downloads waits for it (loadPhoto): decoding before the boot took the
-// CPU path for a GPU device and left the GPU frame unset (audit round 1, #1).
-let engineReady = false;
+// CPU path for a GPU device and left the GPU frame unset.
+let engineReady = false, bootError = '';
 const booted = bootEngine().then(async (ok) => {
   gpu = ok; engineReady = true;
   log(`engine ready, gpu=${gpu}`);
   status(gpu ? 'Pronto. Scegli una foto.' : 'WebGPU non disponibile: userò la CPU (lento).');
-}).catch((e) => { log('boot error: ' + (e?.stack || e)); status('Errore avvio: ' + (e?.message || e)); });
+}).catch((e) => { log('boot error: ' + (e?.stack || e)); bootError = 'Errore avvio: ' + (e?.message || e) + ' (ricarica la pagina)'; status(bootError); });

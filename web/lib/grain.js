@@ -9,17 +9,17 @@ import { INVERT_WGSL, INVERT_LEN } from './invert.js';
 
 // ACES-style soft gamut compression (rgc) into each output space: threshold, the distance that maps to the edge, power.
 // P3: thr 0.9 / lim 1.3 (measured on film colours, v2). sRGB (v4, web / Instagram): lim 1.6 covers the farthest Rec.2020
-// colour from sRGB (the cyan secondary, distance 1.59; audit round 1), so everything the engine renders lands inside; thr 0.8
+// colour from sRGB (the cyan secondary, distance 1.59), so everything the engine renders lands inside; thr 0.8
 // leaves 80 % of the way to the edge untouched (unverified: chosen so saturated reds keep their gradation instead of a flat
-// clip). `peak` (sRGB only): the matrix pushes bright warm tones past 1 in R (a cream highlight at Rec.2020 0.95/0.85/0.60
-// gives R 259/255), and the distance compression never limits the peak: above `peak` the largest channel rolls off towards 1,
-// all three scaled by the same factor (hue and saturation kept). P3 (v3) has none, as before.
+// clip). `fitWhite` (sRGB only): the matrix pushes bright warm tones past 1 in R (a cream highlight at Rec.2020 0.95/0.85/0.60
+// gives R 259/255) and the distance compression never limits the peak. A pixel whose largest channel is over 1 is pulled
+// towards its own luminance (Rec.709) until that channel is 1: luminance and hue kept, a little saturation given up; a pixel
+// already inside (every neutral, every white up to 255) is untouched; one brighter than white becomes white. P3 (v3): none.
 const GAMUT = {
-  p3: { id: 1, M: REC2020_TO_P3, thr: 0.9, lim: 1.3, pw: 1.2, peak: 0 },
-  srgb: { id: 2, M: REC2020_TO_SRGB, thr: 0.8, lim: 1.6, pw: 1.2, peak: 0.9 },
+  p3: { id: 1, M: REC2020_TO_P3, thr: 0.9, lim: 1.3, pw: 1.2, fitWhite: false },
+  srgb: { id: 2, M: REC2020_TO_SRGB, thr: 0.8, lim: 1.6, pw: 1.2, fitWhite: true },
 };
-// Soft peak: a <= k unchanged, above it k + (1 - k)(1 - e^-((a - k) / (1 - k))): slope 1 at k, approaches 1.
-const peakRoll = (a, k) => (a <= k ? a : k + (1 - k) * (1 - Math.exp(-(a - k) / (1 - k))));
+const LUMA709 = [0.2126, 0.7152, 0.0722];
 const rgcScale = (g) => (g.lim - g.thr) / (((1 - g.thr) / (g.lim - g.thr)) ** -g.pw - 1) ** (1 / g.pw);
 // One channel's distance from the achromatic axis compressed beyond thr so that lim maps exactly to the gamut edge.
 const rgcWGSL = (name, g) => `fn ${name}(d: f32) -> f32 {
@@ -37,9 +37,12 @@ fn ${name}(e: vec3<f32>) -> vec3<f32> {
   if (a > 0.0) {
     let d = (vec3<f32>(a) - p) / a;
     p = vec3<f32>(a) - vec3<f32>(${name}Rgc(d.x), ${name}Rgc(d.y), ${name}Rgc(d.z)) * a;
-  }${g.peak ? `
-  let k = ${wf(g.peak)}; let m = max(p.x, max(p.y, p.z));
-  if (m > k) { p *= (k + (1.0 - k) * (1.0 - exp(-(m - k) / (1.0 - k)))) / m; }` : ''}
+  }${g.fitWhite ? `
+  let m = max(p.x, max(p.y, p.z));
+  if (m > 1.0) {
+    let y = dot(${wv3(LUMA709)}, p);
+    p = select(vec3<f32>(y) + (p - vec3<f32>(y)) * ((1.0 - y) / (m - y)), vec3<f32>(1.0), y >= 1.0);
+  }` : ''}
   return srgbEnc(p);
 }`;
 
@@ -101,6 +104,9 @@ export function toSpaceCPU(px, to) {
   const a = Math.max(p0, p1, p2);
   if (a > 0) { p0 = a - rgc((a - p0) / a) * a; p1 = a - rgc((a - p1) / a) * a; p2 = a - rgc((a - p2) / a) * a; }
   const m = Math.max(p0, p1, p2);
-  if (g.peak && m > g.peak) { const f = peakRoll(m, g.peak) / m; p0 *= f; p1 *= f; p2 *= f; }
+  if (g.fitWhite && m > 1) {
+    const y = LUMA709[0] * p0 + LUMA709[1] * p1 + LUMA709[2] * p2;
+    if (y >= 1) { p0 = p1 = p2 = 1; } else { const f = (1 - y) / (m - y); p0 = y + (p0 - y) * f; p1 = y + (p1 - y) * f; p2 = y + (p2 - y) * f; }
+  }
   px[0] = linearToSrgb(p0); px[1] = linearToSrgb(p1); px[2] = linearToSrgb(p2);
 }

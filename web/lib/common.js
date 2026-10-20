@@ -81,6 +81,25 @@ export function decodeRGBA(bitmap, longSide = Infinity, rot = 0) {
   return { data, w: ow, h: oh, p3 };
 }
 
+/**
+ * `data` (w×h RGBA) turned by `q` quarter turns clockwise (an exact pixel copy, the same layout as turnTransform): the
+ * preview of a JPEG / HEIC is turned in place instead of re-decoding the file (no wait, no 48 MP decode per turn).
+ */
+export function turnRGBA(data, w, h, q) {
+  q &= 3;
+  if (!q) return { data, w, h };
+  const ow = q & 1 ? h : w, oh = q & 1 ? w : h, out = new Uint8ClampedArray(data.length);
+  const src = new Uint32Array(data.buffer, data.byteOffset, w * h), dst = new Uint32Array(out.buffer);
+  // source pixel of output (x, y): 1 = 90° right (y, h-1-x), 2 = 180° (w-1-x, h-1-y), 3 = 90° left (w-1-y, x)
+  for (let y = 0, o = 0; y < oh; y++) {
+    for (let x = 0; x < ow; x++, o++) {
+      const sx = q === 1 ? y : q === 2 ? w - 1 - x : w - 1 - y, sy = q === 1 ? h - 1 - x : q === 2 ? h - 1 - y : x;
+      dst[o] = src[sy * w + sx];
+    }
+  }
+  return { data: out, w: ow, h: oh };
+}
+
 // Strips of about this many bytes (8-bit RGBA) when a full-size frame is
 // decoded or uploaded piecewise, so it never sits whole in memory.
 const STRIP_BYTES = 4 << 20;
