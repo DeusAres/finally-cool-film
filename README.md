@@ -46,7 +46,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   gold200, `eval/gold200`): il negativo ora è letto a bande strette (625 / 522 / 455 nm) invece che con le curve CIE, e
   l'inibizione DIR è tarata sulla pellicola vera (saturazione 0.84–0.88 → 0.91–0.97 di quella reale); uscita sempre sRGB;
   scheda **Scanner**: Nessuno (la Gold neutra) | Frontier, con Magenta ↔ Verde / Giallo ↔ Blu. Aperto: mezzitoni ancora più
-  verdi / freddi della Gold vera (taratura in corso).
+  verdi / freddi della Gold vera (taratura in corso). v3.43: **Hyper Tone** (scheda Scanner, solo Frontier, slider manuale,
+  0 = spento): come sul Frontier, schiarisce le grandi zone scure e scurisce le grandi zone chiare durante la scansione
+  (spostando la densità lungo la scala dei grigi della pellicola), seguendo i bordi; dettaglio e colori restano.
 - **v3.42 (tutte le versioni)**: export raw meno pesante in memoria (strisce a mezza precisione dal worker, il file non è più
   copiato), una foto scelta sopra un'altra ancora in decodifica la annulla senza errori, l'export non si sovrappone più a un
   caricamento, gli export da JPEG non portano più la miniatura EXIF dell'originale, avvio / aggiornamento toccabili.
