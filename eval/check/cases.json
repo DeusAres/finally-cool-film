@@ -63,17 +63,12 @@
   "v4_cat": {
    "photo": "samples/indigo/IDG_20261008_160856_907",
    "query": "?v4",
-   "ui": {}
+   "ui": {},
+   "export": "export"
   },
   "v4_orf": {
    "photo": "samples/olympus/P6090399.ORF",
    "query": "?v4",
-   "ui": {}
-  },
-  "v4_cat_export": {
-   "photo": "samples/indigo/IDG_20261008_160856_907",
-   "query": "?v4",
-   "export": "export",
    "ui": {}
   },
   "jpeg_export_ig": {

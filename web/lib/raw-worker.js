@@ -9,17 +9,21 @@ import { decodeRaw, f16Rows, stripsOf } from './raw.js';
 const fail = (e) => self.postMessage({ error: String(e?.message || e) || 'errore di decodifica' });
 
 self.onmessage = async ({ data: { buf, opt } }) => {
-  let r;
-  try { r = await decodeRaw(buf, opt); } catch (e) { fail(e); return; }
-  if (!opt.stream) { self.postMessage({ r }, [r.rgb.buffer]); return; }
-  const strips = stripsOf(r);
-  self.onmessage = () => {   // 'more': the next strip (main uploaded the previous one)
-    try {
-      const [y0, n] = strips.next().value, strip = f16Rows(r, y0, n);
-      self.postMessage({ strip, y0 }, [strip.buffer]);
-    } catch (e) { fail(e); }
-  };
-  self.postMessage({ head: { ...r, rgb: null } });
+  try {
+    const r = await decodeRaw(buf, opt);
+    if (!opt.stream) { self.postMessage({ r }, [r.rgb.buffer]); return; }
+    const strips = stripsOf(r);
+    self.onmessage = () => {   // 'more': the next strip (main uploaded the previous one)
+      try {
+        const [y0, n] = strips.next().value, strip = f16Rows(r, y0, n);
+        self.postMessage({ strip, y0 }, [strip.buffer]);
+      } catch (e) { fail(e); }
+    };
+    self.postMessage({ head: { ...r, rgb: null } });
+  } catch (e) { fail(e); }
 };
-// A message that cannot be read here (the file's bytes under memory pressure): answer, or main would wait for ever.
+// Anything else that goes wrong here must answer too: an error in a worker never reaches main by itself, and main (an
+// export, every button disabled) would wait for ever. A message that cannot be read (the file's bytes under memory pressure)
+// included.
 self.onmessageerror = () => fail('messaggio non leggibile dal worker');
+self.addEventListener('unhandledrejection', (e) => fail(e.reason));

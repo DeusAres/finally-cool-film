@@ -1,6 +1,7 @@
 // Shared by the app and the benchmark page: engine boot + photo decoding.
 import init, * as sf from '../pkg/spektrafilm_wasm.js';
 import { LIN8, P3_TO_REC2020, displayGain } from './color.js';
+import { stripRows } from './util.js';
 
 export { sf };
 
@@ -100,10 +101,6 @@ export function turnRGBA(data, w, h, q) {
   return { data: out, w: ow, h: oh };
 }
 
-// Strips of about this many bytes (8-bit RGBA) when a full-size frame is
-// decoded or uploaded piecewise, so it never sits whole in memory.
-const STRIP_BYTES = 4 << 20;
-export const stripRows = (w) => Math.max(1, Math.floor(STRIP_BYTES / (w * 4)));
 
 /**
  * `bitmap` at its native size as 8-bit RGBA, a strip of rows at a time:

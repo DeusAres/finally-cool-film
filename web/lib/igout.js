@@ -2,7 +2,7 @@
 // Lightroom's "Resize to fit + Sharpen for Screen" export works (resize last, with a good filter, then a light luminance sharpen).
 // No DOM: pure functions on 8-bit RGB (sRGB-encoded), testable in node.
 
-import { srgbToLinear, linearToSrgb } from './color.js';
+import { srgbToLinear, linearToSrgb, LUMA } from './color.js';
 
 /** sRGB 8-bit -> linear, and linear -> sRGB 8-bit (rounded). */
 const DEC = Float32Array.from({ length: 256 }, (_, i) => srgbToLinear(i / 255));
@@ -60,7 +60,8 @@ const SHARP_SIGMA = 0.7, SHARP_AMOUNT = 0.6, SHARP_T0 = 1.5, SHARP_T1 = 4.0, SHA
 /** In place on RGB8 w×h. */
 export function sharpenForScreen(rgb, w, h, amount = SHARP_AMOUNT) {
   const n = w * h, Y = new Float32Array(n);
-  for (let i = 0, j = 0; i < n; i++, j += 3) Y[i] = 0.2126 * rgb[j] + 0.7152 * rgb[j + 1] + 0.0722 * rgb[j + 2];
+  const [kr, kg, kb] = LUMA.srgb;   // Rec.709 weights, applied to the encoded values (luma, not luminance)
+  for (let i = 0, j = 0; i < n; i++, j += 3) Y[i] = kr * rgb[j] + kg * rgb[j + 1] + kb * rgb[j + 2];
   const r = Math.ceil(3 * SHARP_SIGMA), k = Float32Array.from({ length: 2 * r + 1 }, (_, i) => Math.exp(-0.5 * ((i - r) / SHARP_SIGMA) ** 2));
   const ks = k.reduce((a, b) => a + b, 0); for (let i = 0; i < k.length; i++) k[i] /= ks;
   const t = new Float32Array(n), B = new Float32Array(n);

@@ -12,6 +12,7 @@
 import { decodeDNG, tiffMagic } from './dng.js';
 import { decodeORF, isORFHeader } from './orf.js';
 import { REC2020_TO_P3, linearToSrgb } from './color.js';
+import { stripRows } from './util.js';
 
 /** True for a DNG or an Olympus ORF (by name/type, or a TIFF / ORF header when the name says nothing). */
 export async function isRaw(file) {
@@ -43,7 +44,8 @@ export async function decodeRaw(buf, { maxLongSide, rot = 0 } = {}) {
 //   Preview: the worker posts { r } (the float image transferred) and main keeps it (turns, 'before' view, thumbs).
 //   Export (`sf` given): the worker posts { head } (r without pixels); main allocates the GPU frame and asks for one
 //   half-float strip at a time ('more' -> { strip, y0 }, transferred), uploading each before asking for the next. So the
-//   full f16 image never exists and main converts nothing: the peak is the worker's file + float image + one strip.
+//   full f16 image never exists and main converts nothing. Worker peak: file + CFA + float image during the decode, then the
+//   float image + one strip while streaming (measured, 12 MP DNG: <= 199 MB, then 146 MB); main holds one strip at a time.
 const canWork = typeof Worker !== 'undefined' && typeof document !== 'undefined';
 let workerOk = canWork;
 function decodeInWorker(file, buf, opt, sf, signal) {
@@ -59,7 +61,7 @@ function decodeInWorker(file, buf, opt, sf, signal) {
     const fallback = () => {   // the worker died or never loaded: from now on decode here
       if (over) return;
       end(); workerOk = false;
-      file.arrayBuffer().then((b) => decodeHere(b, opt, sf)).then(resolve, reject);
+      file.arrayBuffer().then((b) => { signal?.throwIfAborted(); return decodeHere(b, opt, sf); }).then(resolve, reject);
     };
     w.onmessage = ({ data }) => {
       if (over) return;   // an event queued before terminate()
@@ -143,9 +145,6 @@ function half(v) {
   return s | ((e << 10) + ((m + 0x1000) >>> 13));   // + : a mantissa carry bumps the exponent
 }
 
-// Rows per upload strip (~4 MB of half floats): uploadRaw's and the worker's export strips.
-const stripRows = (w) => Math.max(1, Math.floor((1 << 22) / (w * 8)));
-
 /** Rows y0 … y0+n-1 of the oriented raw as half-float RGBA (alpha = 1), into `out` (or a new array). */
 export function f16Rows(r, y0, n, out = new Uint16Array(r.w * n * 4)) {
   const src = r.rgb;
@@ -160,14 +159,14 @@ export function f16Rows(r, y0, n, out = new Uint16Array(r.w * n * 4)) {
 
 /** The export strips of `r`, in order: [y0, n] (raw-worker.js). */
 export function* stripsOf(r) {
-  const rows = stripRows(r.w);
+  const rows = stripRows(r.w, 8);   // half-float RGBA
   for (let y0 = 0; y0 < r.h; y0 += rows) yield [y0, Math.min(rows, r.h - y0)];
 }
 
 /** Upload the oriented raw as the GPU frame, in strips. */
 export function uploadRaw(sf, r) {
   sf.alloc_frame_f16(r.w, r.h);
-  const buf = new Uint16Array(r.w * stripRows(r.w) * 4);
+  const buf = new Uint16Array(r.w * stripRows(r.w, 8) * 4);
   for (const [y0, n] of stripsOf(r)) sf.set_frame_rows_f16(f16Rows(r, y0, n, buf).subarray(0, r.w * n * 4), y0);
 }
 

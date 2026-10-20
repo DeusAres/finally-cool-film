@@ -10,17 +10,18 @@ render and compare with eval/check/baseline.json. Run it before every push that 
     python3 scripts/eval/check.py --chart         # also the ColorChecker score (builds sf-eval, see build-sf-eval.sh)
     python3 scripts/eval/check.py --cases cat2_interno,wall_burn
 
-Metrics per render (sRGB PNG of the app canvas):
+Metrics per render (PNG of the app canvas, read as Display P3 as render.cjs writes it; exports: sRGB JPEG):
   bands    mean Lab a*/b* per L* band 3-20 / 20-40 / 40-60 / 60-80 / 80-101 (colour casts by tone: magenta fur, teal shadows)
   L        mean L*
   edges    "created edges": Sobel energy of the render not explained by a global tone map of the scene-linear source (posterisation,
-           halos, contour lines; 0.41 when the v3.17 recovery posterised the cat, 0.05 after the fix)
+           halos, contour lines); compare a case with its own baseline only, the level depends on the photo
   tex      median |L* - blur(L*, 1.5 px)| on the light areas (L* > 70): highlight texture
-A case with "export": "export" | "exportIG" also exports (the raw decode / jpegli / border path) and measures the JPEG,
-downscaled to the preview's long side, as <case>_export (no edges: other pixels than the source luma).
+A case with "export": "export" | "exportIG" also exports (the raw decode / jpegli / border path) and measures the JPEG, its mat
+(border, IG padding) cropped and downscaled to the preview's long side, as <case>_export (no edges: other pixels than the
+source luma).
 Outputs go to eval/out/check/ (git-ignored): <case>.png, <case>_export.jpg, metrics.json.
 """
-import argparse, json, os, socket, subprocess, sys, time
+import argparse, json, os, re, socket, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -79,13 +80,43 @@ def source_luma(photo):
     return np.log2(np.maximum(x @ [0.2627, 0.6780, 0.0593], 1e-6))
 
 
-PREVIEW_LONG_SIDE = 2000   # web/lib/util.js: exports are measured at the preview's size
+# The app's preview long side (web/lib/util.js, the one source): exports are measured at that size.
+PREVIEW_LONG_SIDE = int(re.search(r'PREVIEW_LONG_SIDE = (\d+)', open(os.path.join(ROOT, 'web', 'lib', 'util.js')).read()).group(1))
+
+
+def rgb_to_xyz(primaries, white=(0.3127, 0.3290)):
+    """Linear RGB -> XYZ (Y of white = 1) from xy primaries, as web/lib/color.js derives its matrices."""
+    xyz = lambda x, y: np.array([x / y, 1.0, (1 - x - y) / y])
+    P = np.stack([xyz(*p) for p in primaries], 1)
+    return P * np.linalg.solve(P, xyz(*white))
+
+
+# Display P3 primaries (web/lib/color.js PRIMARIES.p3); the transfer function is sRGB's.
+P3_TO_XYZ = rgb_to_xyz([(0.68, 0.32), (0.265, 0.69), (0.15, 0.06)])
+MAT_TOL = 6   # code values: a mat pixel differs from the corner's paper colour by JPEG noise only
+
+
+def crop_mat(rgb):
+    """The image inside a uniform mat (export border, IG padding): the box of pixels that differ from the corner's colour."""
+    diff = np.abs(rgb.astype(int) - rgb[0, 0].astype(int)).max(2) > MAT_TOL
+    ys, xs = np.nonzero(diff.any(1))[0], np.nonzero(diff.any(0))[0]
+    return rgb[ys[0] + 2:ys[-1] - 1, xs[0] + 2:xs[-1] - 1] if len(ys) > 4 and len(xs) > 4 else rgb
+
+
+def lab_of(path):
+    """Lab of a render: the canvas PNG holds Display P3 code values, an exported JPEG sRGB (its mat cropped)."""
+    im = Image.open(path).convert('RGB')
+    if path.endswith('.png'):
+        enc = np.asarray(im) / 255.0
+        lin = np.where(enc <= 0.04045, enc / 12.92, ((enc + 0.055) / 1.055) ** 2.4)
+        return color.xyz2lab(lin @ P3_TO_XYZ.T)
+    im = Image.fromarray(crop_mat(np.asarray(im)))
+    im.thumbnail((PREVIEW_LONG_SIDE, PREVIEW_LONG_SIDE), Image.LANCZOS)
+    return color.rgb2lab(np.asarray(im) / 255.0)
 
 
 def measure(png, Ls):
-    im = Image.open(png).convert('RGB')
-    im.thumbnail((PREVIEW_LONG_SIDE, PREVIEW_LONG_SIDE), Image.LANCZOS)   # a no-op for the preview renders
-    lab = color.rgb2lab(np.asarray(im) / 255.0)
+    lab = lab_of(png)
     L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
     m = {'L': round(float(L.mean()), 2), 'bands': {}}
     for lo, hi in BANDS:
@@ -136,7 +167,7 @@ def main():
     ap.add_argument('--compare')
     ap.add_argument('--chart', action='store_true')
     ap.add_argument('--cases')
-    ap.add_argument('--jobs', type=int, default=2)
+    ap.add_argument('--jobs', type=int, default=1)   # one Chromium at a time: two (plus a raw export) ran this container out of memory
     a = ap.parse_args()
 
     cases = json.load(open(os.path.join(ROOT, 'eval', 'check', 'cases.json')))['cases']

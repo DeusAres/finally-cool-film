@@ -77,7 +77,7 @@ export function invertCPU(px, u) {
   }
 }
 
-/** WGSL: `invertNeg(c, P, o)`, the same as invertCPU on a display-encoded pixel, with the uniforms at P[o..o+8]; returns
+/** WGSL: `invertNeg(c, o)`, the same as invertCPU on a display-encoded pixel, with the uniforms at P[o..o+8]; returns
  * linear light. Needs srgbDec (color.js SRGB_WGSL). */
 export const INVERT_WGSL = /* wgsl */`
 fn invDisplay(x: vec3<f32>, xm: f32) -> vec3<f32> {

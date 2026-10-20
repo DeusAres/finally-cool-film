@@ -1,7 +1,7 @@
 // Crash-survivable log: every line is written through to localStorage, so if
 // iOS kills the tab (out of memory: no JS event fires, nothing can be caught)
 // the trail up to that instant is readable on the next load. A "busy" marker
-// set around risky work (each render, the export) tells the next load that
+// set around risky work (each render, a photo decode, the export) tells the next load that
 // the previous session died in the middle of it. Each load starts a fresh log
 // and keeps the previous session's as `prevLogText`.
 import { store } from './util.js';

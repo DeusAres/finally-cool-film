@@ -1,5 +1,5 @@
-import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, turnRGBA, forEachStrip, stripRows, extractLinear, jpegThumb, THUMB_PX, PACK_LUT } from './lib/common.js';
-import { sleep, store, PREVIEW_LONG_SIDE } from './lib/util.js';
+import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, turnRGBA, forEachStrip, extractLinear, jpegThumb, THUMB_PX, PACK_LUT } from './lib/common.js';
+import { sleep, store, stripRows, PREVIEW_LONG_SIDE } from './lib/util.js';
 import { DISPLAY_GAIN_LUT } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
@@ -17,7 +17,10 @@ import { GRAIN_WGSL, packParams, toSpaceCPU } from './lib/grain.js';
 import { tiltMap, tiltRGBA } from './lib/tilt.js';
 import { tiltRuler } from './lib/ruler.js';
 
-const FILM_FORMAT_MM = 35;        // engine default; sets the physical pixel size
+// Engine default; sets the physical pixel size of the engine's own effects (grain, halation, DIR diffusion) as the frame's
+// long side in mm. Not util.js FRAME_UM (36 mm, the 24×36 frame, for the JS effects): the engine's look was tuned at 35,
+// so the two scales differ by 2.8 %; aligning either one moves the look (not done: needs a look check).
+const FILM_FORMAT_MM = 35;
 const EXPORT_TILE = 1024;         // export tile core size (px)
 const EXPORT_PAD = 128;           // tile overlap: covers halation / DIR diffusion reach at 12 MP
 const MAX_EXPORT_PIXELS = 12.5e6; // keeps native 12 MP iPhone frames; 48 MP gets downscaled (20 MP crashed the grain exporter)
@@ -609,6 +612,7 @@ async function loadPhoto(file) {
     engine?.free(); engine = null;   // the input colour space is fixed at construction
     showPreview();
     await runAuto();
+    if (my !== loadSeq) return;   // a newer pick is decoding: its load enables the buttons
     $('export').disabled = false; $('auto').disabled = false; $('newPhoto').hidden = false;
     $('exportIG').hidden = false; $('exportIG').disabled = false;
   } catch (e) {
@@ -791,9 +795,10 @@ function paperWhite(u) {
 // around, so Instagram never crops it), rendered at IG_SUPER × the posted size, then Lanczos-downscaled in linear light and
 // output-sharpened for screen (lib/igout.js), like Lightroom's Resize to fit + Sharpen for Screen.
 async function exportFull(ig = false) {
-  if (!photo || exporting) return;
+  // not during a photo load: its decode and the export's would be in memory together
+  if (!photo || exporting || loadingPhoto) return;
   while (internoBusy || rotBusy) await sleep(20);   // a pending Interno toggle / AutoSetup / turn must land before the snapshot
-  if (!photo || exporting) return;
+  if (!photo || exporting || loadingPhoto) return;
   exporting = true;
   $('export').disabled = $('exportIG').disabled = $('auto').disabled = $('newPhoto').disabled = $('pick').disabled = $('indoor').disabled = $('rotL').disabled = $('rotR').disabled = true;
   setBusy('export', true);
@@ -1030,14 +1035,17 @@ $('pick').addEventListener('change', (e) => { const f = e.target.files[0]; e.tar
   });
 }
 $('newPhoto').addEventListener('click', () => $('pick').click());
-$('auto').addEventListener('click', () => runAuto());
+$('auto').addEventListener('click', () => runAuto().catch((e) => { log('auto error: ' + (e?.stack || e)); status('Errore: ' + (e?.message || e)); }));
 let internoBusy = 0;
 $('indoor').addEventListener('change', async () => {
   if (!photo) return;
   internoBusy++;
-  const on = $('indoor').checked;   // the lab re-reads the (thin) negative; sliders are not touched
+  const target = photo;
+  let on;
   try {
     while (rendering || exporting) await sleep(20);
+    if (photo !== target) return;   // a new photo arrived during the wait: it reset the switch, nothing to apply
+    on = $('indoor').checked;   // the lab re-reads the (thin) negative; sliders are not touched
     photo.autoCache[on] ??= autoSetup(on, photo.autoEv).auto;
     photo.auto = photo.autoCache[on];
   } catch (e) {   // the switch goes back to what is applied
@@ -1100,6 +1108,7 @@ const BUILD_ID = '__BUILD_ID__';
 let updating = false;
 async function freshReload() {
   updating = true;
+  setBusy(null);   // a reload in the middle of a render or a decode is not a crash
   try { await fetch('index.html', { cache: 'reload' }); } catch { /* offline: plain reload */ }
   location.reload();
 }
