@@ -257,7 +257,8 @@ pub struct FrontierGpuLut<'a> {
     pub hyper: Option<HyperToneGpu<'a>>,
 }
 
-/// Hyper Tone for the scan pass: density += `cmy_per_ev * (-amount * map(frame position))`.
+/// Hyper Tone for the scan pass: density += `gain * map(frame position)` (the same gain on the three layers, see
+/// spektrafilm-core `Pipeline::hyper_tone`).
 #[derive(Clone, Copy)]
 pub struct HyperToneGpu<'a> {
     pub map: &'a [f32],
@@ -265,8 +266,24 @@ pub struct HyperToneGpu<'a> {
     pub map_h: u32,
     pub origin_px: [f32; 2],
     pub frame_px: [f32; 2],
-    /// `-amount` times the stock's density change per EV at mid grey, per channel.
+    /// Density per map EV (the same on the three layers, `-amount` x the grey ramp's mean density per EV).
     pub gain: [f32; 3],
+    /// The stock's toe: G dye density where it ends, and the red layer's shortfall there (see `hyper_apply`).
+    pub toe_density: f32,
+    pub toe_cyan: f32,
+}
+
+/// Hyper Tone on one pixel's dye density `cmy`, moved by `delta` (gain x map). A lift (delta > 0: a dark area made lighter)
+/// inside the stock's toe, where the negative holds little information, gives the red layer `toe_cyan` less of it in
+/// proportion to how deep in the toe the pixel is (1 - smoothstep(0, toe_density, G)): the red layer records less there,
+/// so lifting a void turns it cyan, as on the real machine. `scan_lut.wgsl` `hyper_apply` is the same maths.
+pub fn hyper_apply(cmy: [f32; 3], delta: f32, toe_density: f32, toe_cyan: f32) -> [f32; 3] {
+    let mut r = delta;
+    if delta > 0.0 && toe_cyan > 0.0 && toe_density > 0.0 {
+        let t = (cmy[1] / toe_density).clamp(0.0, 1.0);
+        r *= 1.0 - toe_cyan * (1.0 - t * t * (3.0 - 2.0 * t));
+    }
+    [cmy[0] + r, cmy[1] + delta, cmy[2] + delta]
 }
 
 /// The Hyper Tone map at pixel (x, y) of a render whose top-left is `origin_px` in a frame of `frame_px` pixels: bilinear,

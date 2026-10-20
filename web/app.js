@@ -282,9 +282,10 @@ function autoSetup(on, evIn = null) {
   return { ev, auto };
 }
 
-// Hyper Tone (Scanner, Frontier): the slider's 0..1 moves each area's density by up to HYPER_MAX of its map EV (a bright
-// area 2 EV over the median is scanned up to 1 EV darker), engine params.rs HyperToneParams. HYPER_MAX: a choice (first
-// version, unmeasured), the strength where skies keep their tone and shadows open without looking flat.
+// Hyper Tone (Scanner, Frontier): a recovery for the extremes (user): the slider's 0..1 moves each area's density by up to
+// HYPER_MAX of its map EV beyond the mids' dead zone (lib/hypertone.js DEAD_EV), engine params.rs HyperToneParams. HYPER_MAX
+// 0.5: with the dead zone the mids are untouched (the first version flattened whole photos, user), so a shadow 3 EV under mid
+// grey is lifted 1 EV and a sky 3 EV over is brought down 1 EV; a choice.
 const HYPER_MAX = 0.5;
 const HYPER_THUMB_PX = 512;   // the map's source thumb: its resolution is the map's (lib/hypertone.js MAP_LONG)
 // Hyper Sharpness (Scanner, Frontier; slider 0 = off): the engine's unsharp mask on the scan, gated by relative detail
@@ -306,7 +307,8 @@ function syncHyperMap(u) {
   if (!(u.hypertone > 0 && !neutralScan())) return;
   if (!photo.hyper) {
     const { preview } = photo, raw = preview.raw, { rgb, w, h } = raw ? rawThumb(raw, HYPER_THUMB_PX) : jpegThumb(preview, HYPER_THUMB_PX);
-    photo.hyper = hyperToneMap(rgb, w, h, LUMA[raw || preview.p3 ? 'rec2020' : 'srgb']);   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
+    // the thumb as the film sees it (Auto's exposure + baseline: v4 has no exposure slider, so it is fixed per photo)
+    photo.hyper = hyperToneMap(rgb, w, h, LUMA[raw || preview.p3 ? 'rec2020' : 'srgb'], 2 ** (photo.autoEv + baselineEv()));   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
     log(`hyper tone map ${photo.hyper.w}x${photo.hyper.h}`);
   }
   if (engine.hyperFor !== photo.hyper) {

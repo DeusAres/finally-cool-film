@@ -178,7 +178,7 @@ pub fn scan_frontier(
     color_ref: &crate::color_reference::ColorReference,
     gamut: &crate::gamut_compression::OutputGamutCompress,
     frontier: Option<&crate::frontier::FrontierLut>,
-    hyper: Option<(&crate::params::HyperToneParams, [f64; 3])>,
+    hyper: Option<(&crate::params::HyperToneParams, crate::pipeline::HyperFilm)>,
 ) -> ImageBuf {
     // Python parity — channel_density / base_density are f64 in the JSON profile.
     let channel_density: Vec<[f64; 3]> = profile
@@ -261,11 +261,10 @@ pub fn scan_frontier(
             .enumerate()
             .for_each(|(i, (dst, src))| {
                 let mut cmy = [src[0] as f64, src[1] as f64, src[2] as f64];
-                if let Some((h, gain)) = hyper {   // Hyper Tone (params.rs HyperToneParams), the GPU's scan_lut.wgsl twin
-                    let ev = spektrafilm_gpu::hyper_map(&h.map, h.map_w, h.map_h, h.origin_px.map(|v| v as f32), h.frame_px.map(|v| v as f32), (i % w) as u32, (i / w) as u32) as f64;
-                    for c in 0..3 {
-                        cmy[c] += gain[c] * ev;
-                    }
+                if let Some((h, f)) = hyper {   // Hyper Tone (params.rs HyperToneParams), the GPU's scan_lut.wgsl twin
+                    let ev = spektrafilm_gpu::hyper_map(&h.map, h.map_w, h.map_h, h.origin_px.map(|v| v as f32), h.frame_px.map(|v| v as f32), (i % w) as u32, (i / w) as u32);
+                    let c32 = spektrafilm_gpu::hyper_apply(cmy.map(|v| v as f32), f.gain as f32 * ev, f.toe_density as f32, f.toe_cyan as f32);
+                    cmy = c32.map(|v| v as f64);
                 }
                 let y = lut.apply(cmy);
                 for c in 0..3 {

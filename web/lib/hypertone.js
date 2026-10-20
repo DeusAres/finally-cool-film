@@ -1,5 +1,7 @@
 // Hyper Tone map (the Frontier scanner's local tone control; engine params.rs HyperToneParams): a low-resolution base of the
-// frame's log exposure that is smooth inside regions and changes only at their edges, in EV from the frame's median.
+// frame's log exposure that is smooth inside regions and changes only at their edges, in EV from mid grey as the film is
+// exposed (0.18 x the exposure gain), beyond DEAD_EV: a recovery of the frame's extremes, not of what is dark or bright
+// relative to the rest (a frame that is mostly dark rock has its median there, and its shadows were left alone).
 // The engine moves each pixel's film density along the stock's grey ramp by -amount x this map, so large bright areas are
 // scanned darker and large dark ones lighter while the detail inside them stays (it is not in the map).
 //
@@ -13,6 +15,10 @@
 // so a step in the map is spread over frame / MAP_LONG pixels: at 96 that was a visible light rim on a 2000 px rock against
 // the sky; 512 keeps it to ~4 px; the map goes to the engine once per photo, Engine.set_hyper_tone_map).
 const RADIUS_FRAC = 1 / 10, EDGE_EV = 1, MAP_LONG = 512;
+// Recovery, not flattening (user, v4): areas within DEAD_EV of the median are left alone (the mids keep their contrast);
+// beyond it only the excess acts (a sky 2.5 EV over the median moves as if it were 1.5 EV over). A choice.
+const DEAD_EV = 1;
+const MID_GREY = 0.18;   // scene-linear mid grey (the engine's meter target)
 const Y_MIN = 1e-5;   // floor of the luminance before log2 (black pixels)
 
 /** Box filter (mean over a (2r+1)² window, clamped at the edges) of a w×h Float32Array, separable, O(n). */
@@ -53,10 +59,11 @@ function shrink(src, w, h, tw, th) {
 }
 
 /**
- * The Hyper Tone map of a scene-linear thumb (`rgb` w×h×3, upright as rendered) with luminance weights `luma`:
- * { map: Float32Array (EV from the median, bright > 0), w, h } at MAP_LONG on the long side.
+ * The Hyper Tone map of a scene-linear thumb (`rgb` w×h×3, upright as rendered) with luminance weights `luma`, exposed for the
+ * film by `gain` (the exposure gain the render applies): { map: Float32Array (EV beyond DEAD_EV from mid grey, bright > 0), w, h }
+ * at MAP_LONG on the long side.
  */
-export function hyperToneMap(rgb, w, h, luma) {
+export function hyperToneMap(rgb, w, h, luma, gain = 1) {
   const n = w * h, L = new Float32Array(n);
   for (let i = 0; i < n; i++) L[i] = Math.log2(Math.max(Y_MIN, luma[0] * rgb[3 * i] + luma[1] * rgb[3 * i + 1] + luma[2] * rgb[3 * i + 2]));
   const r = Math.max(1, Math.round(RADIUS_FRAC * Math.max(w, h))), eps = EDGE_EV * EDGE_EV;
@@ -69,7 +76,7 @@ export function hyperToneMap(rgb, w, h, luma) {
   const ma = box(a, w, h, r), mb = box(b, w, h, r), base = new Float32Array(n);
   for (let i = 0; i < n; i++) base[i] = ma[i] * L[i] + mb[i];
   const s = Math.min(1, MAP_LONG / Math.max(w, h)), mw = Math.max(1, Math.round(w * s)), mh = Math.max(1, Math.round(h * s));
-  const map = shrink(base, w, h, mw, mh), median = Float32Array.from(map).sort()[map.length >> 1];
-  for (let i = 0; i < map.length; i++) map[i] -= median;
+  const map = shrink(base, w, h, mw, mh), ref = Math.log2(MID_GREY / gain);
+  for (let i = 0; i < map.length; i++) { const m = map[i] - ref; map[i] = m - Math.max(-DEAD_EV, Math.min(DEAD_EV, m)); }
   return { map, w: mw, h: mh };
 }

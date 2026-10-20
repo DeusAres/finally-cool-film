@@ -118,6 +118,63 @@ pub fn antihalation_scale(antihalation: &str) -> f64 {
 
 /// Frontier scanner state: the film-type setup (cached on what it depends on)
 /// and the baked LUT (cached on the operator keys).
+/// Hyper Tone's per-stock data (Pipeline::refresh_hyper_tone).
+struct HyperStock {
+    cmy_per_ev: [f64; 3],
+    toe_density: f64,
+    toe_cyan: f64,
+}
+
+/// Hyper Tone for one render (spektrafilm-gpu `hyper_apply`): density per map EV on the three layers, the stock's toe end
+/// (G dye density) and the red layer's shortfall there.
+#[derive(Clone, Copy, Debug)]
+pub struct HyperFilm {
+    pub gain: f64,
+    pub toe_density: f64,
+    pub toe_cyan: f64,
+}
+
+/// The stock's toe from its density curves (normalised, as developed): where the G curve's slope first reaches 90 % of its
+/// straight-line slope (the median slope where G is within 25-75 % of its range) is the toe's end, `toe_density` = G there;
+/// `toe_cyan` = 1 - (R slope / G slope) over the half decade of log exposure below it, clamped to 0..1 (Gold 200: 0.215,
+/// 1 - 0.283 / 0.346 = 0.18: its red layer records ~18 % less in the toe).
+fn stock_toe(film: &Profile) -> (f64, f64) {
+    let x = film.log_exposure_f64();
+    let n = spektrafilm_model::density_curves::normalize_density_curves_f64(&film.density_curves_f64());
+    let len = x.len().min(n.len());
+    if len < 4 {
+        return (0.0, 0.0);
+    }
+    let slope = |c: usize, i: usize| (n[i + 1][c] - n[i][c]) / (x[i + 1] - x[i]).max(1e-12);
+    let gmax = (0..len).map(|i| n[i][1]).filter(|v| v.is_finite()).fold(0.0f64, f64::max);
+    let mut mid: Vec<f64> = (0..len - 1)
+        .filter(|&i| n[i][1].is_finite() && n[i][1] > 0.25 * gmax && n[i][1] < 0.75 * gmax)
+        .map(|i| slope(1, i))
+        .filter(|v| v.is_finite())
+        .collect();
+    if mid.is_empty() {
+        return (0.0, 0.0);
+    }
+    mid.sort_by(|a, b| a.total_cmp(b));
+    let straight = mid[mid.len() / 2];
+    let Some(end) = (0..len - 1).find(|&i| slope(1, i).is_finite() && slope(1, i) >= 0.9 * straight && n[i][1] > 0.0) else {
+        return (0.0, 0.0);
+    };
+    let start = (0..end).find(|&i| x[i] >= x[end] - 0.5).unwrap_or(0);
+    let fit = |c: usize| -> f64 {
+        let (mut sx, mut sy, mut sxx, mut sxy, mut k) = (0.0, 0.0, 0.0, 0.0, 0.0);
+        for i in start..=end {
+            if n[i][c].is_finite() {
+                sx += x[i]; sy += n[i][c]; sxx += x[i] * x[i]; sxy += x[i] * n[i][c]; k += 1.0;
+            }
+        }
+        if k < 2.0 { f64::NAN } else { (k * sxy - sx * sy) / (k * sxx - sx * sx).max(1e-12) }
+    };
+    let (gr, gg) = (fit(0), fit(1));
+    let cyan = if gr.is_finite() && gg.is_finite() && gg > 0.0 { (1.0 - gr / gg).clamp(0.0, 1.0) } else { 0.0 };
+    (n[end][1], cyan)
+}
+
 pub struct FrontierRuntime {
     pub base: Arc<crate::frontier::FrontierBase>,
     base_key: String,
@@ -152,8 +209,10 @@ pub struct Pipeline {
     frontier: Option<Arc<FrontierRuntime>>,
     /// Narrowband scan LUT (scan_film on a negative with `scanner.model="narrowband"`) and its key.
     narrowband: Option<Arc<(crate::frontier::FrontierLut, String)>>,
-    /// Hyper Tone's density change per EV at mid grey (the stock's grey ramp), per channel, and its key.
-    cmy_per_ev: Option<Arc<([f64; 3], String)>>,
+    /// Hyper Tone's stock data (density per EV at mid grey, toe) and its key.
+    cmy_per_ev: Option<Arc<(HyperStock, String)>>,
+    /// The stock's toe (G density at its end, red layer shortfall), from the datasheet curves (`stock_toe`).
+    toe: (f64, f64),
 }
 
 impl Pipeline {
@@ -209,12 +268,16 @@ impl Pipeline {
         self.frontier.as_deref().map(|f| &f.lut).or(self.narrowband.as_deref().map(|n| &n.0))
     }
 
-    /// Hyper Tone, when it acts: its params and the density gain per map EV (`-amount * cmy_per_ev`). Only on a scan LUT
-    /// (Frontier, narrowband) with a usable map.
-    fn hyper_tone(&self) -> Option<(&crate::params::HyperToneParams, [f64; 3])> {
+    /// Hyper Tone, when it acts: its params and the density gain per map EV, the same on the three layers (`-amount` x the
+    /// grey ramp's mean density per EV): a lift of the scanner's signal, not more light on the film. So where the film's
+    /// layers are not balanced (the toe: no information) a lift shows their imbalance, cyan as on the real machine.
+    /// Only on a scan LUT (Frontier, narrowband) with a usable map.
+    fn hyper_tone(&self) -> Option<(&crate::params::HyperToneParams, HyperFilm)> {
         let h = &self.params.scanner.hyper_tone;
-        let s = &self.cmy_per_ev.as_deref()?.0;
-        (self.scan_lut().is_some() && h.amount != 0.0).then_some((h, s.map(|v| -h.amount * v)))
+        let st = &self.cmy_per_ev.as_deref()?.0;
+        let mean = (st.cmy_per_ev[0] + st.cmy_per_ev[1] + st.cmy_per_ev[2]) / 3.0;
+        (self.scan_lut().is_some() && h.amount != 0.0)
+            .then_some((h, HyperFilm { gain: -h.amount * mean, toe_density: st.toe_density, toe_cyan: st.toe_cyan }))
     }
 
     /// (Re)measure the stock's density change per EV at mid grey (grey ramp at 0.18 x 2^(+-1/2), developed on the CPU) when
@@ -244,7 +307,8 @@ impl Pipeline {
             [d.data[i] as f64, d.data[i + 1] as f64, d.data[i + 2] as f64]
         };
         let (lo, hi) = (grey(-0.5), grey(0.5));
-        self.cmy_per_ev = Some(Arc::new(([0, 1, 2].map(|c| hi[c] - lo[c]), key)));
+        let (toe_density, toe_cyan) = self.toe;
+        self.cmy_per_ev = Some(Arc::new((HyperStock { cmy_per_ev: [0, 1, 2].map(|c| hi[c] - lo[c]), toe_density, toe_cyan }, key)));
     }
 
     /// (Re)build the narrowband scan LUT when `scanner.model = "narrowband"` and its inputs changed.
@@ -381,10 +445,10 @@ impl Pipeline {
         // B&W profiles must be resolved on every construction path —
         // an unresolved family would read development-time columns as
         // R/G/B channels.
-        let film = crate::profile::with_layer_speed(
-            crate::profile::resolve_for_render(film, params.film_render.development_time),
-            params.film_render.layer_speed_ev,
-        );
+        let film = crate::profile::resolve_for_render(film, params.film_render.development_time);
+        // Hyper Tone's toe from the datasheet curves: layer_speed_ev is calibrated in the mids, the toe is not measurable there
+        let toe = stock_toe(&film);
+        let film = crate::profile::with_layer_speed(film, params.film_render.layer_speed_ev);
         let print = crate::profile::resolve_for_render(print, params.print_render.development_time);
         let print_illuminant = enlarger::enlarger_filtered_illuminant_f64(
             &params.enlarger.illuminant,
@@ -411,6 +475,7 @@ impl Pipeline {
             frontier: None,
             narrowband: None,
             cmy_per_ev: None,
+            toe,
         }
     }
 
@@ -424,10 +489,10 @@ impl Pipeline {
         // B&W profiles: collapse the development-time family to the selected
         // time and broadcast the single channel onto the 3-channel engine
         // layout. Must happen before anything reads the profile data.
-        let film = crate::profile::with_layer_speed(
-            crate::profile::resolve_for_render(film, params.film_render.development_time),
-            params.film_render.layer_speed_ev,
-        );
+        let film = crate::profile::resolve_for_render(film, params.film_render.development_time);
+        // Hyper Tone's toe from the datasheet curves: layer_speed_ev is calibrated in the mids, the toe is not measurable there
+        let toe = stock_toe(&film);
+        let film = crate::profile::with_layer_speed(film, params.film_render.layer_speed_ev);
         let print = crate::profile::resolve_for_render(print, params.print_render.development_time);
 
         // Python parity: mirror `_apply_film_specifics` in
@@ -692,6 +757,7 @@ impl Pipeline {
             frontier: None,
             narrowband: None,
             cmy_per_ev: None,
+            toe,
         };
         pipeline.refresh_frontier();
         pipeline.refresh_narrowband();
@@ -1423,13 +1489,15 @@ impl Pipeline {
             output_cctf_encoding: self.params.io.output_cctf_encoding,
             frontier: self.scan_lut().map(|lut| {
                 let (table, steps, data_min, inv) = lut.gpu_table();
-                let hyper = self.hyper_tone().map(|(h, gain)| spektrafilm_gpu::HyperToneGpu {
+                let hyper = self.hyper_tone().map(|(h, f)| spektrafilm_gpu::HyperToneGpu {
                     map: &h.map,
                     map_w: h.map_w,
                     map_h: h.map_h,
                     origin_px: h.origin_px.map(|v| v as f32),
                     frame_px: h.frame_px.map(|v| v as f32),
-                    gain: gain.map(|v| v as f32),
+                    gain: [f.gain as f32; 3],
+                    toe_density: f.toe_density as f32,
+                    toe_cyan: f.toe_cyan as f32,
                 });
                 spektrafilm_gpu::FrontierGpuLut { table, steps, data_min, inv, hyper }
             }),

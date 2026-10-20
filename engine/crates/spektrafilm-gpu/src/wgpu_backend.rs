@@ -1626,6 +1626,7 @@ impl WgpuBackend {
                 pad: u32,
                 origin_frame: [f32; 4],
                 gain: [f32; 4],
+                toe: [f32; 4],
             }
             let (hp, map): (HyperParams, &[f32]) = match &f.hyper {
                 Some(h) => (
@@ -1636,10 +1637,11 @@ impl WgpuBackend {
                         pad: 0,
                         origin_frame: [h.origin_px[0], h.origin_px[1], h.frame_px[0], h.frame_px[1]],
                         gain: [h.gain[0], h.gain[1], h.gain[2], 0.0],
+                        toe: [h.toe_density, h.toe_cyan, 0.0, 0.0],
                     },
                     h.map,
                 ),
-                None => (HyperParams { map_w: 1, map_h: 1, on: 0, pad: 0, origin_frame: [0.0, 0.0, 1.0, 1.0], gain: [0.0; 4] }, &[0.0f32]),
+                None => (HyperParams { map_w: 1, map_h: 1, on: 0, pad: 0, origin_frame: [0.0, 0.0, 1.0, 1.0], gain: [0.0; 4], toe: [0.0; 4] }, &[0.0f32]),
             };
             (
                 mk_uniform("scan_lut_params", bytemuck::bytes_of(&prm)),
