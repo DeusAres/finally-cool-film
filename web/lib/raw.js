@@ -22,11 +22,41 @@ export async function isRaw(file) {
     || isORFHeader(h);
 }
 
+async function decodeHere(file, opt) {
+  const buf = await file.arrayBuffer();
+  return (isORFHeader(new Uint8Array(buf, 0, 4)) ? decodeORF : decodeDNG)(buf, opt);
+}
+
+// In a page the decode runs in raw-worker.js; a worker that cannot start (no module workers) falls back to decoding here,
+// and so do node scripts (eval/dng2npy.mjs).
+let worker = null, workerOk = typeof Worker !== 'undefined' && typeof document !== 'undefined', nextId = 0;
+const pending = new Map();
+function decodeInWorker(file, opt) {
+  if (!worker) {
+    worker = new Worker(new URL('./raw-worker.js', import.meta.url), { type: 'module' });
+    worker.onmessage = ({ data: { id, d, error } }) => {
+      const p = pending.get(id); pending.delete(id);
+      if (error) p.reject(new Error(error)); else p.resolve(d);
+    };
+    worker.onerror = (e) => {   // the worker died or never loaded: decode the pending files here from now on
+      e.preventDefault?.();
+      workerOk = false; worker.terminate(); worker = null;
+      for (const [, p] of pending) p.fallback();
+      pending.clear();
+    };
+  }
+  return new Promise((resolve, reject) => {
+    const id = ++nextId;
+    pending.set(id, { resolve, reject, fallback: () => decodeHere(file, opt).then(resolve, reject) });
+    worker.postMessage({ id, file, opt });
+  });
+}
+
 /** Decode (optionally downscaled); returns { w, h, rgb, baseline, orientation, fullW, fullH }, sizes AFTER orientation.
  * `rot`: the user's extra quarter turns clockwise (withRotation). */
 export async function loadRaw(file, maxLongSide, rot = 0) {
-  const buf = await file.arrayBuffer(), opt = maxLongSide ? { maxLongSide } : {};
-  const d = await (isORFHeader(new Uint8Array(buf, 0, 4)) ? decodeORF : decodeDNG)(buf, opt);
+  const opt = maxLongSide ? { maxLongSide } : {};
+  const d = await (workerOk ? decodeInWorker(file, opt) : decodeHere(file, opt));
   const o = d.meta?.orientation || 1, swap = o >= 5;
   const [cw, ch] = (d.meta?.crop || [0, 0, d.w, d.h]).slice(2);   // full (cropped) sensor size
   const ow = swap ? d.h : d.w, oh = swap ? d.w : d.h, ofw = swap ? ch : cw, ofh = swap ? cw : ch;
