@@ -171,6 +171,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
       // v3.12: film scatter (core 2.2 / tail 9.3 µm) at half size: at full size it took ~35 % of the fine detail
       // everywhere, visible in the highlights where the shoulder leaves no contrast to hide it (sunlit walls).
       halation: { active: u.halation > 0, halation_amount: u.halation, scatter_spatial_scale: SCATTER_SCALE },
+      ...(V4 ? { dir_couplers: V4_DIR } : {}),
     },
   };
 }
@@ -1002,6 +1003,11 @@ function onThumbDoubleTap(input, fn) {
   });
   input.addEventListener('pointercancel', () => { down = null; last = null; });
 }
+// v4 DIR couplers (film stage): inter-image inhibition, same layer and between layers, 0.6 / 0.6 -> 1.0 / 1.0. Measured against
+// real Gold 200 (eval/gold200, eval/V4.md): the film's chroma on the same registered pixels, 0.84 / 0.88 -> 0.91 / 0.97 of the
+// film's; 1.2 overshoots the film's strongest colours. The old values had no Gold data behind them (eval/calib/CALIB.md).
+// First calibration step, to be refined as more references come in. v3 keeps the engine's defaults (its look was tuned on them).
+const V4_DIR = { inhibition_samelayer: 1.0, inhibition_interlayer: 1.0 };
 const SCATTER_SCALE = 0.5;   // film scatter size multiplier (engine default 1), see renderParams
 // v3.32: dye-cloud blur 0.65 -> 0.45 (reference px, ~12 -> ~8 um): measured on 10 full-frame Gold 200 scans the grain has ~12 % of
 // its power below 40 um wavelength and r50 ~13.5 um; ours had 3 % / 18.6 um (soft). At 0.45
