@@ -42,7 +42,14 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 - **v4 in prova** (`index.html?v4`, v3.40): la Gold 200 "nuda": esposizione dell'iPhone, negativo dal motore e inversione
   neutra (nero / bianco / grigio medio presi dal fotogramma, in mezzo solo la curva della pellicola), niente scanner, niente
   scheda Luce. Dettagli in `eval/V4.md`. L'app normale resta la v3. v3.41: solo la pellicola (niente Luci auto, Texture
-  e obiettivo a 0), Grana 3.1× = la Gold misurata.
+  e obiettivo a 0), Grana 3.1× = la Gold misurata. v3.42: confrontata con Gold 200 vera (scansioni a LED R/G/B del dataset
+  gold200, `eval/gold200`): il negativo ora è letto a bande strette (625 / 522 / 455 nm) invece che con le curve CIE, e
+  l'inibizione DIR è tarata sulla pellicola vera (saturazione 0.84–0.88 → 0.91–0.97 di quella reale); uscita sempre sRGB;
+  scheda **Scanner**: Nessuno (la Gold neutra) | Frontier, con Magenta ↔ Verde / Giallo ↔ Blu. Aperto: mezzitoni ancora più
+  verdi / freddi della Gold vera (taratura in corso).
+- **v3.42 (tutte le versioni)**: export raw meno pesante in memoria (strisce a mezza precisione dal worker, il file non è più
+  copiato), una foto scelta sopra un'altra ancora in decodifica la annulla senza errori, l'export non si sovrappone più a un
+  caricamento, gli export da JPEG non portano più la miniatura EXIF dell'originale, avvio / aggiornamento toccabili.
 - **Drag & drop** (v3.35): trascina una foto in qualsiasi punto della pagina, come Scegli foto.
 - **ORF (v3.37)**: livello di saturazione del sensore misurato dall'istogramma (XZ-1: 3971, non 4095): le alte luci bruciate
   tornano neutre invece che magenta; file troncato → errore chiaro; aggiunti E-M10 (I–IIIS), OM-5, TG-5/6/7, Stylus 1, SH-2.
