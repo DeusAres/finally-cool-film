@@ -107,8 +107,8 @@ export function rawThumb(r, longSide) {
 }
 
 /** The 'before' view: the raw as plain Display P3 (exposure + baseline, clipped), RGBA 8-bit. */
-export function rawPreviewRGBA(r, ev = 0) {
-  const out = new Uint8ClampedArray(r.w * r.h * 4), g = 2 ** (r.baseline + ev), M = REC2020_TO_P3;
+export function rawPreviewRGBA(r) {
+  const out = new Uint8ClampedArray(r.w * r.h * 4), g = 2 ** r.baseline, M = REC2020_TO_P3;
   const enc = new Uint8Array(4096); for (let i = 0; i < 4096; i++) enc[i] = Math.round(255 * linearToSrgb(i / 4095));
   const q = (v) => enc[Math.max(0, Math.min(4095, Math.round(v * 4095)))];
   for (let y = 0, k = 0; y < r.h; y++) {

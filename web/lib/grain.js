@@ -8,13 +8,18 @@ import { SRGB_WGSL, REC2020_TO_P3, REC2020_TO_SRGB, srgbToLinear, linearToSrgb }
 import { INVERT_WGSL, INVERT_LEN } from './invert.js';
 
 // ACES-style soft gamut compression (rgc) into each output space: threshold, the distance that maps to the edge, power.
-// P3: thr 0.9 / lim 1.3 (measured on film colours, v2). sRGB (v4, web / Instagram): lim 1.55 = the farthest Rec.2020 primary
-// from sRGB (green: distance 1.52), so every colour the engine can render lands inside; thr 0.8 leaves 80 % of the way to the
-// edge untouched (unverified: chosen so saturated reds keep their gradation instead of a flat clip).
+// P3: thr 0.9 / lim 1.3 (measured on film colours, v2). sRGB (v4, web / Instagram): lim 1.6 covers the farthest Rec.2020
+// colour from sRGB (the cyan secondary, distance 1.59; audit round 1), so everything the engine renders lands inside; thr 0.8
+// leaves 80 % of the way to the edge untouched (unverified: chosen so saturated reds keep their gradation instead of a flat
+// clip). `peak` (sRGB only): the matrix pushes bright warm tones past 1 in R (a cream highlight at Rec.2020 0.95/0.85/0.60
+// gives R 259/255), and the distance compression never limits the peak: above `peak` the largest channel rolls off towards 1,
+// all three scaled by the same factor (hue and saturation kept). P3 (v3) has none, as before.
 const GAMUT = {
-  p3: { id: 1, M: REC2020_TO_P3, thr: 0.9, lim: 1.3, pw: 1.2 },
-  srgb: { id: 2, M: REC2020_TO_SRGB, thr: 0.8, lim: 1.55, pw: 1.2 },
+  p3: { id: 1, M: REC2020_TO_P3, thr: 0.9, lim: 1.3, pw: 1.2, peak: 0 },
+  srgb: { id: 2, M: REC2020_TO_SRGB, thr: 0.8, lim: 1.6, pw: 1.2, peak: 0.9 },
 };
+// Soft peak: a <= k unchanged, above it k + (1 - k)(1 - e^-((a - k) / (1 - k))): slope 1 at k, approaches 1.
+const peakRoll = (a, k) => (a <= k ? a : k + (1 - k) * (1 - Math.exp(-(a - k) / (1 - k))));
 const rgcScale = (g) => (g.lim - g.thr) / (((1 - g.thr) / (g.lim - g.thr)) ** -g.pw - 1) ** (1 / g.pw);
 // One channel's distance from the achromatic axis compressed beyond thr so that lim maps exactly to the gamut edge.
 const rgcWGSL = (name, g) => `fn ${name}(d: f32) -> f32 {
@@ -32,7 +37,9 @@ fn ${name}(e: vec3<f32>) -> vec3<f32> {
   if (a > 0.0) {
     let d = (vec3<f32>(a) - p) / a;
     p = vec3<f32>(a) - vec3<f32>(${name}Rgc(d.x), ${name}Rgc(d.y), ${name}Rgc(d.z)) * a;
-  }
+  }${g.peak ? `
+  let k = ${wf(g.peak)}; let m = max(p.x, max(p.y, p.z));
+  if (m > k) { p *= (k + (1.0 - k) * (1.0 - exp(-(m - k) / (1.0 - k)))) / m; }` : ''}
   return srgbEnc(p);
 }`;
 
@@ -82,13 +89,18 @@ export function packParams(to = null, inv = null) {
 
 // CPU twin of toP3 / toSRGB in GRAIN_WGSL, for the no-WebGPU path and the export mat: `px` is one engine output pixel
 // (sRGB-encoded Rec.2020), converted in place to the sRGB-encoded output space `to` ('p3' | 'srgb').
+const RGC_CPU = Object.fromEntries(Object.entries(GAMUT).map(([k, g]) => {
+  const scl = rgcScale(g);
+  return [k, (d) => { if (d < g.thr) return d; const x = (d - g.thr) / scl; return g.thr + scl * x / (1 + x ** g.pw) ** (1 / g.pw); }];
+}));
 export function toSpaceCPU(px, to) {
-  const g = GAMUT[to], scl = rgcScale(g);
-  const rgc = (d) => { if (d < g.thr) return d; const x = (d - g.thr) / scl; return g.thr + scl * x / (1 + x ** g.pw) ** (1 / g.pw); };
+  const g = GAMUT[to], rgc = RGC_CPU[to];   // per-space constants built once, not per pixel
   const r = srgbToLinear(px[0]), gr = srgbToLinear(px[1]), b = srgbToLinear(px[2]);
   const [m0, m1, m2] = g.M;   // no per-pixel allocation
   let p0 = m0[0] * r + m0[1] * gr + m0[2] * b, p1 = m1[0] * r + m1[1] * gr + m1[2] * b, p2 = m2[0] * r + m2[1] * gr + m2[2] * b;
   const a = Math.max(p0, p1, p2);
   if (a > 0) { p0 = a - rgc((a - p0) / a) * a; p1 = a - rgc((a - p1) / a) * a; p2 = a - rgc((a - p2) / a) * a; }
+  const m = Math.max(p0, p1, p2);
+  if (g.peak && m > g.peak) { const f = peakRoll(m, g.peak) / m; p0 *= f; p1 *= f; p2 *= f; }
   px[0] = linearToSrgb(p0); px[1] = linearToSrgb(p1); px[2] = linearToSrgb(p2);
 }

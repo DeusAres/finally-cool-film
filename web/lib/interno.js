@@ -3,7 +3,9 @@
 
 export const INTERNO_EV = 2;   // the film sees scene x 2^-INTERNO_EV
 
-/** Parameters of the Interno toggle: { under: U, gains: [1, 1, 1], grain: 2^(0.25 U) } (density grain is amplified by the scanner gain). */
+/** Parameters of the Interno toggle: { under: U, gains, grain }. Since v3.39 gains and grain are identity (the light colour is
+ * the scene's, the grain no longer boosted: x2 until v3.30, x1.41 until v3.38); kept as fields because dng2npy.mjs and app.js
+ * read them. */
 export function internoParams() {
-  return { under: INTERNO_EV, gains: [1, 1, 1], grain: 1 };   // v3.31: x1.41 (was x2: with the stronger default grain, sand-like)
+  return { under: INTERNO_EV, gains: [1, 1, 1], grain: 1 };
 }

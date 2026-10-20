@@ -2,12 +2,11 @@
 // Lightroom's "Resize to fit + Sharpen for Screen" export works (resize last, with a good filter, then a light luminance sharpen).
 // No DOM: pure functions on 8-bit RGB (sRGB-encoded), testable in node.
 
+import { srgbToLinear, linearToSrgb } from './color.js';
+
 /** sRGB 8-bit -> linear, and linear -> sRGB 8-bit (rounded). */
-const DEC = Float32Array.from({ length: 256 }, (_, i) => { const v = i / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
-const enc = (v) => {
-  const c = v <= 0 ? 0 : v >= 1 ? 1 : v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055;
-  return Math.round(255 * c);
-};
+const DEC = Float32Array.from({ length: 256 }, (_, i) => srgbToLinear(i / 255));
+const enc = (v) => Math.round(255 * (v <= 0 ? 0 : v >= 1 ? 1 : linearToSrgb(v)));
 
 const LANCZOS_A = 3;
 const sinc = (x) => (x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x));

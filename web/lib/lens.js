@@ -72,13 +72,17 @@ function coverageLUT(falloff) {
   return lut;
 }
 
+// The coverage LUT (2049 pow) only changes with Falloff: rebuilt when it moves, not per render / tile.
+let covKey = NaN, covLut = null;
+const coverage = (falloff) => (falloff === covKey ? covLut : (covKey = falloff, covLut = coverageLUT(falloff)));
+
 /** Frame-level lens geometry for a W×H frame. */
 export function lensGeometry(W, H, { ca, vignette, falloff }) {
   const m = Math.min(W, H);
   const cx = W / 2 + AXIS_X * m, cy = H / 2 + AXIS_Y * m;
   const rMax = Math.max(...[[0, 0], [W, 0], [0, H], [W, H]].map(([x, y]) => Math.hypot(x - cx, y - cy)));
   const dR = ca * CA_MAX * rMax;
-  return { cx, cy, rMax, falloff, cov: coverageLUT(falloff), dR, dB: -dR * CA_BLUE_K, blur: dR * CA_BLUR, depth: vignette * VIG_MAX };
+  return { cx, cy, rMax, falloff, cov: coverage(falloff), dR, dB: -dR * CA_BLUE_K, blur: dR * CA_BLUR, depth: vignette * VIG_MAX };
 }
 
 // Bilinear sample of channel `c` of 8-bit RGBA `data`, interpolated in linear light.

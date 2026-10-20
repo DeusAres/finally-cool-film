@@ -1,4 +1,4 @@
-// Debug v3: automatic highlight dodging, Frontier "Hyper Tone"-style (digital dodging of the
+// v3: automatic highlight dodging, Frontier "Hyper Tone"-style (digital dodging of the
 // minilabs: the low-frequency brightness of the bright areas is shifted down, the detail is kept).
 // Runs in the GPU input pass (scene light, before the film), from a base map computed here on the
 // AutoSetup thumbnail of the whole frame: preview, export tiles and any resolution see the same map.

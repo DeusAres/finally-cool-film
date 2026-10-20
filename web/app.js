@@ -1,5 +1,5 @@
 import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, forEachStrip, stripRows, extractLinear, jpegThumb, THUMB_PX, PACK_LUT } from './lib/common.js';
-import { sleep, store } from './lib/util.js';
+import { sleep, store, PREVIEW_LONG_SIDE } from './lib/util.js';
 import { DISPLAY_GAIN_LUT } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
@@ -17,14 +17,12 @@ import { GRAIN_WGSL, packParams, toSpaceCPU } from './lib/grain.js';
 import { tiltMap, tiltRGBA } from './lib/tilt.js';
 import { tiltRuler } from './lib/ruler.js';
 
-const PREVIEW_LONG_SIDE = 2000;   // display canvas cap (bigger canvases make iOS compositing crash when zoomed)
 const FILM_FORMAT_MM = 35;        // engine default; sets the physical pixel size
 const EXPORT_TILE = 1024;         // export tile core size (px)
 const EXPORT_PAD = 128;           // tile overlap: covers halation / DIR diffusion reach at 12 MP
 const MAX_EXPORT_PIXELS = 12.5e6; // keeps native 12 MP iPhone frames; 48 MP gets downscaled (20 MP crashed the grain exporter)
 const IG_W = 1080, IG_H = 1440;    // Instagram canvas: 3:4, the profile grid's ratio since 2025 (the whole photo fits inside, mat around)
 const IG_SUPER = 2;                // IG: the film is rendered at this × the posted size, then downscaled + output-sharpened (lib/igout.js)
-const IG_GRAIN_BOOST = 1;          // IG: grain amount × this at the supersampled render, so after the downscale it reads as before
 // Film camera (Contax T3-like compact, handheld, no flash) loaded with Gold 200. Interno (lib/interno.js) takes a fixed
 // INTERNO_EV off the scene exposure before the film: a pure function of the checkbox. The lab scanner's AutoSetup
 // (frontier.auto) decides what it does about the thin negative.
@@ -108,7 +106,7 @@ const sceneGain = (u) => 2 ** (u.ev - underEv() + baselineEv());
 // Everything else is read at render time and goes through `engine.update`.
 // The film model and the Frontier scanner are the engine's (the positive comes out of it);
 // our input pass only conditions the light (display→scene, exposure, lens, Texture, Chiarezza, Nitidezza, Vividezza).
-let forceSRGB = false, grainBoost = 1;   // IG export: sRGB output (P3 dulls saturated reds on Instagram); grain compensation
+let forceSRGB = false;   // IG export: sRGB output (P3 dulls saturated reds on Instagram)
 // Output space ('p3' | 'srgb'): v3, Display P3 for P3 photos (sRGB for IG and sRGB photos); v4, always sRGB (the photos end
 // on the web / Instagram). `engineWide`: the engine renders Rec.2020 and the output pass maps it softly into the output
 // space (grain.js GAMUT); otherwise the engine renders the output space itself (v3 sRGB: hard clip, kept as it was).
@@ -159,7 +157,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
       // Grain is the engine's (rng 'hash': a pure function of seed + frame position, see eval/GRAIN.md).
       // Grana 1× = the old 0.25× (user-preferred); amount 1 = the calibrated Gold 200 grain (GRAIN_UNIT scales between them).
       grain: {
-        active: !noGrain && u.grain > 0, rng: 'hash', blur: GRAIN_BLUR, amount: u.grain * GRAIN_UNIT * grainFactor() * grainBoost, seed: photo.grainSeed,
+        active: !noGrain && u.grain > 0, rng: 'hash', blur: GRAIN_BLUR, amount: u.grain * GRAIN_UNIT * grainFactor(), seed: photo.grainSeed,
         origin_px: region ? [region.x0, region.y0] : [0, 0], frame_px: region ? [region.fw, region.fh] : [photo.preview.w, photo.preview.h],
       },
       // v2-calib: strength comes from the profile's antihalation; halation_amount is a multiplier on it (Halation slider).
@@ -549,7 +547,12 @@ if (V4) {
 
 let loadSeq = 0;
 async function loadPhoto(file) {
-  if (!file) return;
+  if (!file || exporting) return;   // a drop during an export would decode on top of it (memory) and race its finally
+  if (!engineReady) {
+    status('Caricamento motore…');
+    await booted;
+    if (!engineReady) return;   // boot failed: its error is on the status line
+  }
   const my = ++loadSeq, prev = photo;
   status('Decodifica…');
   // Nothing exportable until this photo has loaded and been auto-measured; stays disabled on error.
@@ -626,10 +629,11 @@ async function rotate(quarters) {
   if (rotBusy) return;   // folded into the running turn
   rotBusy = true;
   try {
+    const target = photo;
     while (rotPending) {
-      const q = rotPending; rotPending = 0;
       while (rendering || exporting || internoBusy) await sleep(20);
-      if (!photo) return;
+      if (photo !== target) return;   // a new photo arrived during the wait: the turn was for the old one
+      const q = rotPending; rotPending = 0;
       const rot = (photo.rot + q + 4) & 3;
       let preview;
       if (photo.preview.raw) {
@@ -706,13 +710,35 @@ async function runAuto() {
 // Each tile keeps the frame's physical pixel size (film_format_mm scaled to the
 // tile) and the same engine parameters as the preview, with an overlap margin cropped away.
 
-const encoder = new Worker('export-worker.js');
-let encoderError = null, encoderDone = null;
-encoder.onmessage = ({ data }) => {
-  if (data.cmd === 'error') { encoderError = data.error; log('jpegli error: ' + data.error); encoderDone?.reject(new Error(data.error)); }
-  else if (data.cmd === 'done') { log(`jpegli done ${data.width}x${data.height}, heap ${data.heapMB} MB`); encoderDone?.resolve(data); }
-};
-encoder.onerror = (e) => { encoderError = e.message || 'worker error'; log('jpegli worker error: ' + encoderError); encoderDone?.reject(new Error(encoderError)); };
+// The jpegli worker. A worker whose script or wasm failed to load never answers, and an export would wait on it for ever
+// (audit round 1, #5): it posts 'ready' once jpegli is up, an export waits for that (ENCODER_READY_MS), and a dead worker is
+// replaced by the next export.
+const ENCODER_READY_MS = 20000;
+let encoder = null, encoderReady = null, encoderError = null, encoderDone = null;
+function startEncoder() {
+  encoder?.terminate();
+  const w = encoder = new Worker('export-worker.js');
+  let ready;
+  encoderReady = new Promise((r) => { ready = r; });
+  w.onmessage = ({ data }) => {
+    if (data.cmd === 'ready') ready(true);
+    else if (data.cmd === 'error') { encoderError = data.error; log('jpegli error: ' + data.error); encoderDone?.reject(new Error(data.error)); }
+    else if (data.cmd === 'done') { log(`jpegli done ${data.width}x${data.height}, heap ${data.heapMB} MB`); encoderDone?.resolve(data); }
+  };
+  w.onerror = (e) => {
+    encoderError = e.message || 'worker error'; log('jpegli worker error: ' + encoderError);
+    encoderDone?.reject(new Error(encoderError));
+    if (encoder === w) encoder = null;   // the next export starts a fresh one
+  };
+}
+startEncoder();
+/** The encoder, up and answering, or an error after ENCODER_READY_MS (the worker is then replaced). */
+async function encoderUp() {
+  if (!encoder) startEncoder();
+  if (await Promise.race([encoderReady, sleep(ENCODER_READY_MS).then(() => false)])) return;
+  startEncoder();
+  throw new Error('encoder JPEG non disponibile, riprova');
+}
 
 // iOS Safari fetches a download's blob only after the user confirms the sheet,
 // which can take any time: keep the URL until the next export (or a minute).
@@ -738,8 +764,7 @@ function paperWhite(u) {
 
 // `ig`: Instagram export (v3.27, any orientation): an IG_W × IG_H (3:4) sRGB canvas, the whole photo fitted inside it (mat colour
 // around, so Instagram never crops it), rendered at IG_SUPER × the posted size, then Lanczos-downscaled in linear light and
-// output-sharpened for screen (lib/igout.js), like Lightroom's Resize to fit + Sharpen for Screen. Grain is boosted by
-// IG_GRAIN_BOOST at the supersampled render so it keeps its strength after the downscale.
+// output-sharpened for screen (lib/igout.js), like Lightroom's Resize to fit + Sharpen for Screen.
 async function exportFull(ig = false) {
   if (!photo || exporting) return;
   while (internoBusy) await sleep(20);   // a pending Interno toggle / AutoSetup must land before the snapshot
@@ -760,7 +785,7 @@ async function exportFull(ig = false) {
     const igFit = ig ? fitInside(fw, fh, IG_W, IG_H, Math.round(bFrac * IG_H)) : null;
     const scale = ig ? Math.min(1, IG_SUPER * Math.max(igFit.iw, igFit.ih) / Math.max(fw, fh))
       : Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (fw * fh)));
-    if (ig) { forceSRGB = true; grainBoost = IG_GRAIN_BOOST; }
+    if (ig) forceSRGB = true;
     const longCap = Math.round(Math.max(fw, fh) * scale);
     status('Esporto: decodifica…');
     let frame;   // { data (CPU path only), w, h, p3, raw }
@@ -793,6 +818,7 @@ async function exportFull(ig = false) {
     const strips = Math.ceil(h / EXPORT_TILE), cols = Math.ceil(w / EXPORT_TILE);
 
     let tileBuf = null;   // reused across tiles
+    await encoderUp();
     encoderError = null;
     const done = new Promise((resolve, reject) => { encoderDone = { resolve, reject }; });
     done.catch(() => {});
@@ -856,11 +882,11 @@ async function exportFull(ig = false) {
     status(`Esportata: ${result.width}×${result.height}, ${(blob.size / 1e6).toFixed(1)} MB in ${secs} s`);
     download(blob, `${base}_gold200${ig ? '_ig' : ''}${border || (ig && bFrac) ? '_bordo' : ''}.jpg`);
   } catch (e) {
-    encoder.postMessage({ cmd: 'abort' });
+    encoder?.postMessage({ cmd: 'abort' });
     log('export error: ' + (e?.stack || e));
     status('Export fallito: ' + (e?.message || e) + ' (tocca qui per il log)');
   } finally {
-    forceSRGB = false; grainBoost = 1;
+    forceSRGB = false;
     setBusy(null);
     exporting = false;
     if (dustStripCanvas) { dustStripCanvas.width = dustStripCanvas.height = 0; dustStripCanvas = null; }   // release the backing store
@@ -910,8 +936,6 @@ const FORMAT = {
   falloff: pct,
   texture: signPct, clarity: signPct, sharp: signPct, dust: pctOff, black: pctOff,
 };
-// v2-calib: contrast / highlight / black defaults are the lab's standard (0); the old look defaults (Contrasto .35, Alte luci .6, Nero .15) are gone with their stages.
-const DEFAULTS = { ev: 0, contrast: 0, highlight: 0, whites: 0, mshift: 0, yshift: 0, vibrance: 0, temp: 0, black: 0, grain: 2.5, halation: 1, texture: 0.2, clarity: 0, sharp: 0, ca: 1, vignette: 0.12, falloff: 0.18, dust: 0 };
 const DUST_RESEED = 0.27;   // Rimescola with Polvere off turns it on at this amount (the default before v3.33)
 const AUTO_EV_MIN = -2, AUTO_EV_MAX = 2.5;   // Auto's exposure range, see autoSetup
 // Double tap on a slider's thumb (or its label): back to 0 / off, whatever its default (like Azzera impostazioni for one slider).
@@ -988,6 +1012,7 @@ $('indoor').addEventListener('change', async () => {
 $('resetAll').addEventListener('click', () => {
   const ids = [...Object.keys(FORMAT), ...(V3 ? ['hlc', 'shadows'] : [])];
   for (const id of ids) $(id).value = 0;
+  if (V4 && photo) $('ev').value = photo.autoEv;   // v4: the exposure is the phone's (no Luce tab to bring it back)
   syncOutputs();
   if (V3) for (const id of ['hlc', 'shadows']) $(id).dispatchEvent(new Event('input'));
   resetTilt();
@@ -1058,8 +1083,11 @@ checkUpdate();
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
 addEventListener('pageshow', (e) => { if (e.persisted) checkUpdate(); });
 
-bootEngine().then(async (ok) => {
-  gpu = ok;
+// A photo picked or dropped while the engine still downloads waits for it (loadPhoto): decoding before the boot took the
+// CPU path for a GPU device and left the GPU frame unset (audit round 1, #1).
+let engineReady = false;
+const booted = bootEngine().then(async (ok) => {
+  gpu = ok; engineReady = true;
   log(`engine ready, gpu=${gpu}`);
   status(gpu ? 'Pronto. Scegli una foto.' : 'WebGPU non disponibile: userò la CPU (lento).');
 }).catch((e) => { log('boot error: ' + (e?.stack || e)); status('Errore avvio: ' + (e?.message || e)); });

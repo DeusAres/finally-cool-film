@@ -20,6 +20,7 @@ importScripts('vendor/jpegli_wasm2.js');
 const ROW_BATCH = 64;
 const WHITE = [255, 255, 255];
 const ready = JpegliModule();
+ready.then(() => self.postMessage({ cmd: 'ready' }));   // the app waits for this before an export (app.js encoderUp)
 let M = null, ctx = 0, width = 0, border = 0, borderY = 0, mat = WHITE, outW = 0, outH = 0, rowPtr = 0;
 let queue = Promise.resolve();
 

@@ -214,14 +214,14 @@ export function drawDust(ctx, marks, amount, W, H, x0 = 0, y0 = 0) {
   ctx.restore();
 }
 
-/** Mix an RGB strip (w×h, row stride w*3) towards white by the alpha of an RGBA overlay of the same size. */
+/** Mix an RGB strip (w×h, row stride w*3) towards an RGBA overlay of the same size (its colour, by its alpha). */
 export function compositeDust(rgb, overlay) {
   for (let p = 0, j = 0; p < overlay.length; p += 4, j += 3) {
     const a = overlay[p + 3];
     if (!a) continue;
-    const t = a / 255;
-    rgb[j] += (PAPER[0] - rgb[j]) * t;
-    rgb[j + 1] += (PAPER[1] - rgb[j + 1]) * t;
-    rgb[j + 2] += (PAPER[2] - rgb[j + 2]) * t;
+    const t = a / 255;   // towards the mark's own colour (PAPER, or a tinted scratch), as the preview canvas shows it
+    rgb[j] += (overlay[p] - rgb[j]) * t;
+    rgb[j + 1] += (overlay[p + 1] - rgb[j + 1]) * t;
+    rgb[j + 2] += (overlay[p + 2] - rgb[j + 2]) * t;
   }
 }

@@ -8,7 +8,7 @@
 import { LENS_CONST, lensGeometry } from './lens.js';
 import { P3_TO_REC2020, LUMA, RGB_TO_XYZ, inv3, displayGainWGSL, DISPLAY_GAIN_LUT } from './color.js';
 import { dodgeWGSL } from './dodge.js';
-import { FRAME_UM, wf, wv3 } from './util.js';
+import { FRAME_UM, PREVIEW_LONG_SIDE, wf, wv3 } from './util.js';
 import { tiltCoef } from './tilt.js';
 
 const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
@@ -29,7 +29,7 @@ const CLAR_UM = 500, CLAR_K = 1.0, CLAR_UP = 1.0, CLAR_DOWN = 0.6, CLAR_CAP = 0.
 //       grey up to x4, x the pixel pitch vs preview: finer export pixels are noisier), result clamped to the local min / max (+-SHARP_TOL):
 //       sharper edges, no halo, flat noisy areas untouched. No Amount / Radius / Detail / Masking to set.
 //  < 0: towards the base (soft lens), d x SHARP_SOFT x slider, no gate.
-const SHARP_UM = 25, SHARP_MAX = 2.2, SHARP_SOFT = 0.8, SHARP_T0 = 0.03, SHARP_TOL = 0.04, SHARP_KPX_REF = 2000 / 36000;
+const SHARP_UM = 25, SHARP_MAX = 2.2, SHARP_SOFT = 0.8, SHARP_T0 = 0.03, SHARP_TOL = 0.04, SHARP_KPX_REF = PREVIEW_LONG_SIDE / FRAME_UM;
 // Vividezza (manual only: the slider is the only input, 0..100 -> p.vib.x 0..1; 0 skips the stage, bit-identical to the app without
 // it). A vibrance on the scene light BEFORE the film, after the colour matrix and before the per-channel light gains (wb, so it acts
 // on the subject's colours, never on a light colour); the Gold 200 film and the Frontier keep their own look on a more colourful
@@ -279,11 +279,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   outBuf[i] = c.r * gainOut; outBuf[i + 1u] = c.g * gainOut; outBuf[i + 2u] = c.b * gainOut;
 }`;
 
-// Debug v3 (debugv3.html): the same pass with the automatic highlight dodging (dodge.js) before the
-// exposure gain; its base map rides after DISPLAY_GAIN_LUT in the same storage array.
-export const INPUT_WGSL_V3 = INPUT_WGSL
-  .replace('fn at(pos', `${dodgeWGSL('inv', DISPLAY_GAIN_LUT.length)}\nfn at(pos`)
-  .replace('\n  c *= p.expo;\n', '\n  c = dodge(c, pos);\n  c *= p.expo;\n');
+// v3 (default app): the same pass with the automatic highlight dodging (dodge.js) before the exposure gain; its base map
+// rides after DISPLAY_GAIN_LUT in the same storage array. Built by text substitution: both anchors must be found, or the
+// dodging would silently disappear.
+const patch = (src, from, to) => { if (!src.includes(from)) throw new Error(`INPUT_WGSL_V3: anchor not found: ${from.trim()}`); return src.replace(from, to); };
+export const INPUT_WGSL_V3 = patch(patch(INPUT_WGSL, 'fn at(pos', `${dodgeWGSL('inv', DISPLAY_GAIN_LUT.length)}\nfn at(pos`),
+  '\n  c *= p.expo;\n', '\n  c = dodge(c, pos);\n  c *= p.expo;\n');
 
 const IDENTITY = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
 const UNIFORM_FLOATS = 48;

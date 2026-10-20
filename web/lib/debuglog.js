@@ -15,11 +15,17 @@ write(PREV, prev);
 write(KEY, null);
 let lines = [];
 
+// The buffer (~30 KB) is persisted at most every PERSIST_MS, not on every line (a slider drag logs per render, and each
+// localStorage write is synchronous): a crash loses at most that much of the log; pagehide flushes it.
+const PERSIST_MS = 200;
+let persistTimer = 0;
+const persist = () => { persistTimer = 0; write(KEY, lines.join('\n')); };
+addEventListener('pagehide', () => { if (persistTimer) { clearTimeout(persistTimer); persist(); } });
 export function log(msg) {
   const line = `${new Date().toISOString().slice(11, 23)} ${msg}`;
   lines.push(line);
   if (lines.length > MAX_LINES) lines = lines.slice(-MAX_LINES);
-  write(KEY, lines.join('\n'));
+  if (!persistTimer) persistTimer = setTimeout(persist, PERSIST_MS);
   console.log(line);
 }
 

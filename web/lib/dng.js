@@ -155,6 +155,9 @@ function decodeLJ92(b, start, end, out) {
   if (NC > 4 || compTable.length < NC) throw new Error('LJ92: unsupported scan');
   for (let c = 0; c < NC; c++) if (!compTable[c]) throw new Error('LJ92: missing Huffman table');
   if (ri && ri % W) throw new Error('LJ92: restart interval not row-aligned');
+  // A corrupt SOF3 (e.g. 65535 x 65535) would loop ~1e10 times on zero bits, the writes silently dropped (audit round 1, #9).
+  if (W * NC * H > out.length) throw new Error('LJ92: frame larger than its tile');
+  end = Math.min(end, b.length);
   const rowRestart = ri ? ri / W : 0;
 
   const rowLen = W * NC;
@@ -727,6 +730,8 @@ export async function decodeDNG(arrayBuffer, { maxLongSide } = {}) {
   const tileBuf = new Uint16Array(segW * segH * 2);
   for (let t = 0; t < offs.length; t++) {
     const x0 = (t % across) * segW, y0 = Math.floor(t / across) * segH;
+    // a cut-short file (interrupted copy / download) would decode its missing bytes as zeros, without an error
+    if (offs[t] + cnts[t] > u8.length) throw new Error('DNG: file incompleto (troncato)');
     if (comp === 7) {
       const r = decodeLJ92(u8, offs[t], offs[t] + cnts[t], tileBuf);
       if (r.n < segW * segH && r.n < segW * Math.min(segH, H - y0)) throw new Error('LJ92: tile size mismatch');

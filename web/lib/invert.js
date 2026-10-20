@@ -13,19 +13,26 @@
 //
 // No DOM: shared by the GPU output pass (grain.js) and the CPU path (app.js).
 
-const LO_PCT = 0.005, HI_PCT = 0.998;   // black / white percentiles: robust to a few dust-like extremes
-const MID = 0.18;                       // display mid grey (linear)
-const BLACK = 0.004;                    // display black (linear, ~L* 3.6): not 0, so the deepest film shadows keep their shape
+import { srgbToLinear as srgbDec, linearToSrgb as srgbEnc } from './color.js';
+
+// Choices, not measurements (v4 prototype): black / white percentiles (a few extreme pixels, specular glints, do not set the
+// range; the soft ends below take them), display black (linear, ~L* 3.6: not 0, so the deepest film shadows keep their shape),
+// colour key per slider step in normalised density (±30 -> ±0.09 of the frame's range).
+const LO_PCT = 0.005, HI_PCT = 0.998;
+const MID = 0.18;                       // display mid grey (linear, 18 %)
+const BLACK = 0.004;
 const KEY = 0.003;
 // Soft ends in log display light: past the white / black anchors the frame still has a few pixels (the anchors are
 // percentiles), so instead of clipping them the curve approaches white (ln 1 = 0) and FLOOR asymptotically, with slope 1 at
 // the join. SOFT_W: width of the white roll-off in ln units (0.12: the white anchor lands at 0.957 linear, 250/255);
 // FLOOR = BLACK / 8 with the same width at the bottom (the deepest film shadows never reach 0).
-const SOFT_W = 0.12, FLOOR = Math.log(BLACK / 8);                      // colour key per slider step, in normalised density (±30 -> ±0.09 of the frame's range)
+const SOFT_W = 0.12, FLOOR = Math.log(BLACK / 8);
 const T_MIN = 1e-6;
+// Degenerate frames (audit round 1, #2): a channel whose black and white are closer than MIN_RANGE density (a flat or
+// near-flat frame) gets that range, so it is shown as a mid tone instead of being stretched; the mid-grey anchor is kept in
+// [XM_MIN, XM_MAX] of the range, or a frame half black / half white puts it on an end and the curve divides by zero.
+const MIN_RANGE = 0.05, XM_MIN = 0.1, XM_MAX = 0.9;
 
-const srgbDec = (v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
-const srgbEnc = (v) => (v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055);
 const pct = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))))];
 
 /** Inversion anchors from the engine's negative scan of a thumb (RGB, display-encoded): { lo[3], hi[3], xm }. */
@@ -36,20 +43,21 @@ export function invertAnchors(scan) {
   }
   const lo = [], hi = [];
   for (let c = 0; c < 3; c++) {
-    const s = Float32Array.from(d[c]).sort();
-    lo.push(pct(s, LO_PCT)); hi.push(pct(s, HI_PCT));
+    const s = Float32Array.from(d[c]).sort(), l = pct(s, LO_PCT), h = pct(s, HI_PCT);
+    const pad = Math.max(0, MIN_RANGE - (h - l)) / 2;
+    lo.push(l - pad); hi.push(h + pad);
   }
   for (let i = 0; i < n; i++) {
     let m = 0;
-    for (let c = 0; c < 3; c++) m += (d[c][i] - lo[c]) / Math.max(1e-4, hi[c] - lo[c]);
+    for (let c = 0; c < 3; c++) m += (d[c][i] - lo[c]) / (hi[c] - lo[c]);
     mean[i] = m / 3;
   }
-  return { lo, hi, xm: pct(mean.sort(), 0.5) };
+  return { lo, hi, xm: Math.min(XM_MAX, Math.max(XM_MIN, pct(mean.sort(), 0.5))) };
 }
 
 /** Uniform values for INVERT_WGSL: lo[3], 1 / range[3], xm, then the G / B key offsets. */
 export function invertUniform({ lo, hi, xm }, mshift = 0, yshift = 0) {
-  return [...lo, ...hi.map((h, c) => 1 / Math.max(1e-4, h - lo[c])), xm, mshift * KEY, yshift * KEY];
+  return [...lo, ...hi.map((h, c) => 1 / (h - lo[c])), xm, mshift * KEY, yshift * KEY];
 }
 
 /** Display light (linear) of normalised density x: log-linear through (0, BLACK), (xm, MID), (1, 1), soft at both ends. */
@@ -63,9 +71,8 @@ function displayLin(x, xm) {
 /** CPU twin of the output pass's inversion: `px` (one engine output pixel, display-encoded negative scan) -> display-encoded
  * positive, in place; `u` = invertUniform(...). */
 export function invertCPU(px, u) {
-  const off = [0, u[7], u[8]];
   for (let c = 0; c < 3; c++) {
-    const x = (-Math.log10(Math.max(T_MIN, srgbDec(px[c]))) - u[c]) * u[3 + c] + off[c];
+    const x = (-Math.log10(Math.max(T_MIN, srgbDec(px[c]))) - u[c]) * u[3 + c] + (c ? u[6 + c] : 0);   // keys: u[7] G, u[8] B
     px[c] = srgbEnc(displayLin(x, u[6]));
   }
 }
