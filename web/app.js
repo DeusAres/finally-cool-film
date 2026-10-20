@@ -121,11 +121,12 @@ const outSpace = () => (!V4 && !forceSRGB && photo?.preview.p3 ? 'p3' : 'srgb');
 const engineWide = () => V4 || outSpace() === 'p3';
 const packTo = () => (engineWide() ? outSpace() : null);
 
-// `region` {x0, y0, fw, fh}: the rendered region's origin and its frame's size, in px (the engine's grain
-// is a hash of the frame position, so every tile of an export gets the same grain as the whole frame).
-/** The engine's frame position params of a render: its top-left and the frame's size (the whole preview without `region`). */
-const framePos = (region) => ({
-  origin_px: region ? [region.x0, region.y0] : [0, 0], frame_px: region ? [region.fw, region.fh] : [photo.preview.w, photo.preview.h],
+// `region` {x0, y0, fw, fh, W, H}: the rendered region's origin in the frame, the size the engine's grain pitch is
+// relative to (fw, fh: the tile's own size in an export, see exportFull), and the whole frame's size (W, H), in px. The grain
+// is a hash of the frame position, so every tile of an export gets the same grain as the whole frame.
+/** Hyper Tone's frame position params: the render's top-left and the WHOLE frame's size (its map spans the frame). */
+const hyperPos = (region) => ({
+  origin_px: region ? [region.x0, region.y0] : [0, 0], frame_px: region ? [region.W, region.H] : [photo.preview.w, photo.preview.h],
 });
 function renderParams(u, { noGrain = false, region = null } = {}) {
   return {
@@ -146,7 +147,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     // the bands of the real Gold 200 reference scans, eval/V4.md), inverted in the output pass (lib/invert.js).
     scanner: neutralScan() ? { model: 'narrowband', unsharp_mask: [0, 0], hyper_tone: { amount: 0 } } : {
       model: 'frontier', black_correction: false, white_correction: false, unsharp_mask: [0, 0],
-      hyper_tone: { amount: u.hypertone * HYPER_MAX, ...framePos(region) },   // always sent: the engine merges updates
+      hyper_tone: { amount: u.hypertone * HYPER_MAX, ...hyperPos(region) },   // always sent: the engine merges updates
       frontier: {
         // v3.20: Alte luci / Bianchi below 0 darken the scene before the film (dodge.js, local, the negative keeps the detail); above 0 they
         // stay on the scanner curve (gentler than pushing the scene into the shoulder). v2 page: scanner only.
@@ -171,7 +172,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
       // Grana 1× = the old 0.25× (user-preferred); amount 1 = the calibrated Gold 200 grain (GRAIN_UNIT scales between them).
       grain: {
         active: !noGrain && u.grain > 0, rng: 'hash', blur: GRAIN_BLUR, amount: u.grain * GRAIN_UNIT * grainFactor(), seed: photo.grainSeed,
-        ...framePos(region),
+        origin_px: region ? [region.x0, region.y0] : [0, 0], frame_px: region ? [region.fw, region.fh] : [photo.preview.w, photo.preview.h],
       },
       // v2-calib: strength comes from the profile's antihalation; halation_amount is a multiplier on it (Halation slider).
       // v3.12: film scatter (core 2.2 / tail 9.3 µm) at half size: at full size it took ~35 % of the fine detail
@@ -324,7 +325,7 @@ async function render() {
       const pv = photo.preview, t0 = performance.now(), n = ++renderCount;
       // Breadcrumb: if iOS kills the tab mid-render, the next load says so.
       setBusy(`anteprima #${n} ${pv.w}x${pv.h} ${JSON.stringify(u)}`);
-      syncEngine(u, { region: { x0: 0, y0: 0, fw: pv.w, fh: pv.h } });
+      syncEngine(u, { region: { x0: 0, y0: 0, fw: pv.w, fh: pv.h, W: pv.w, H: pv.h } });
       const cs = outSpace() === 'p3' ? 'display-p3' : 'srgb';
       if (photo.after?.width !== pv.w || photo.after?.height !== pv.h || photo.after.colorSpace !== cs) photo.after = new ImageData(pv.w, pv.h, { colorSpace: cs });
       await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), u);
@@ -943,7 +944,7 @@ async function exportFull(ig = false) {
         status(`Esporto ${w}×${h}: tile ${s * cols + c + 1}/${strips * cols}…`);
         const x0 = Math.max(0, tx - EXPORT_PAD), y0 = Math.max(0, ty - EXPORT_PAD);
         const tw = Math.min(w, tx + EXPORT_TILE + EXPORT_PAD) - x0, th = Math.min(h, ty + EXPORT_TILE + EXPORT_PAD) - y0;
-        syncEngine(u, { tileMm: FILM_FORMAT_MM * Math.max(tw, th) / longSide, region: { x0, y0, fw: tw, fh: th } });   // frame_px = the tile's dims: film_format_mm is already scaled to the tile, the engine's grain pitch is film_format_mm / max(frame_px)
+        syncEngine(u, { tileMm: FILM_FORMAT_MM * Math.max(tw, th) / longSide, region: { x0, y0, fw: tw, fh: th, W: w, H: h } });   // frame_px = the tile's dims: film_format_mm is already scaled to the tile, the engine's grain pitch is film_format_mm / max(frame_px)
         const tile = (tileBuf = tileBuf?.length >= tw * th * 4 ? tileBuf : new Uint8Array(tw * th * 4)).subarray(0, tw * th * 4);
         await renderRegion(frame, x0, y0, tw, th, tile, u);
         const cw = Math.min(EXPORT_TILE, w - tx);
