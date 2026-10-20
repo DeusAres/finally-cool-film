@@ -137,9 +137,9 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     // preview size than on a 12 MP export) and inflated pixel-level detail
     // ×1.3–1.6 (measured): a phone's crunch, not film. Texture comes from the
     // film-adjacency clarity in the input pass instead (lens-gpu.js), in µm.
-    // v4: no scanner look, the engine returns the negative read in three narrow bands (engine narrowband.rs: the bands of
-    // the real Gold 200 reference scans, eval/V4.md), inverted in the output pass (lib/invert.js).
-    scanner: V4 ? { model: 'narrowband', unsharp_mask: [0, 0] } : {
+    // v4 Scanner 'Nessuno': no scanner look, the engine returns the negative read in three narrow bands (engine narrowband.rs:
+    // the bands of the real Gold 200 reference scans, eval/V4.md), inverted in the output pass (lib/invert.js).
+    scanner: neutralScan() ? { model: 'narrowband', unsharp_mask: [0, 0] } : {
       model: 'frontier', black_correction: false, white_correction: false, unsharp_mask: [0, 0],
       frontier: {
         // v3.20: Alte luci / Bianchi below 0 darken the scene before the film (dodge.js, local, the negative keeps the detail); above 0 they
@@ -264,7 +264,7 @@ function autoSetup(on, evIn = null) {
   // The meter sees the scene as shot: it never compensates Interno's U (the negative stays thin).
   // Auto keeps its own -2..+2.5 range (the slider's before v3.33, when it became -3..+3): a wider slider must not change what Auto picks.
   const ev = evIn !== null ? evIn : Math.max(AUTO_EV_MIN, Math.min(AUTO_EV_MAX, Math.round(eng.auto_exposure_ev(rgb.slice(), w, h) * 10) / 10));
-  if (V4) return { ev, auto: null };   // v4: no scanner AutoSetup (neutral inversion: invert.js, v4Anchors)
+  if (neutralScan()) return { ev, auto: null };   // no scanner AutoSetup: the neutral inversion has its own anchors (v4Anchors)
   scale(2 ** (ev - underEv(on)));
   // Engine.frontier_auto_setup takes linear RGBA f32 (w*h*4), not RGB.
   const rgba = new Float32Array(w * h * 4);
@@ -282,7 +282,7 @@ function v4Anchors(ev) {
   for (let i = 0; i < rgb.length; i++) rgb[i] *= g;
   return invertAnchors(syncEngine(ui(), { noGrain: true }).process(rgb, w, h));
 }
-const invUniform = (u) => (V4 ? invertUniform(photo.inv, u.mshift, u.yshift) : null);
+const invUniform = (u) => (neutralScan() ? invertUniform(photo.inv, u.mshift, u.yshift) : null);
 
 // ---------- preview ----------
 
@@ -538,6 +538,8 @@ grip.addEventListener('dblclick', () => {
 const V4_FILM = { grain: 3.1, halation: 1 };
 if (V4) {
   document.querySelector('#tabs [data-tab="light"]').remove();   // v4: the light is the phone's exposure
+  // Magenta ↔ Verde / Giallo ↔ Blu are the scanner's colour keys (the inversion's, or the Frontier's cmy): in the Scanner tab
+  for (const id of ['mshift', 'yshift']) document.querySelector('[data-pane="scanner"]').append($(id).closest('.row'));
   for (const id of ['texture', 'ca', 'vignette', 'falloff']) $(id).value = 0;
   for (const [id, v] of Object.entries(V4_FILM)) $(id).value = v;
 }
@@ -725,16 +727,50 @@ async function runAuto() {
   // render() returns early while another render / export is in flight: wait first (the engine is shared).
   while (rendering || exporting) await sleep(20);
   const on = $('indoor').checked, a = autoSetup(on);
-  photo.autoEv = a.ev; photo.autoCache = { [on]: a.auto };
-  $('ev').value = a.ev; photo.auto = a.auto;
+  photo.autoEv = a.ev; photo.autoCache = a.auto ? { [on]: a.auto } : {}; photo.inv = null;
+  $('ev').value = a.ev;
   syncOutputs();
-  if (V4) {
-    photo.inv = v4Anchors(a.ev);
-    const f = (v) => v.map((x) => x.toFixed(2)).join('/');
-    log(`auto v4: ev ${a.ev}, density black ${f(photo.inv.lo)} white ${f(photo.inv.hi)} mid ${photo.inv.xm.toFixed(2)}`);
-  } else log(`auto: ev ${a.ev}, scanner ${a.auto.map((v) => v.toFixed(3)).join(' ')}`);
+  log(`auto: ev ${a.ev}`);
+  prepareScanner();
   await render();
 }
+
+/** What the current scanner needs for this photo, measured once at the photo's auto exposure: the neutral inversion's anchors,
+ * or the Frontier's AutoSetup (per Interno state). */
+function prepareScanner() {
+  if (neutralScan()) {
+    if (photo.inv) return;
+    photo.inv = v4Anchors(photo.autoEv);
+    const f = (v) => v.map((x) => x.toFixed(2)).join('/');
+    log(`scanner none: density black ${f(photo.inv.lo)} white ${f(photo.inv.hi)} mid ${photo.inv.xm.toFixed(2)}`);
+  } else {
+    const on = $('indoor').checked;
+    photo.auto = photo.autoCache[on] ??= autoSetup(on, photo.autoEv).auto;
+    log(`scanner frontier: autosetup ${photo.auto.map((v) => v.toFixed(3)).join(' ')}`);
+  }
+}
+
+// ---------- scanner (v4 tab; v3 is always the Frontier) ----------
+// 'none': the negative read in narrow bands and inverted neutrally (the film alone); 'frontier': the Frontier SP-3000 model on
+// the same negative (v3's scanner and its Gold-look corrections). The choice is remembered.
+const SCANNERS = ['none', 'frontier'];
+let scanner = V4 && SCANNERS.includes(store.get('fcf_scanner')) ? store.get('fcf_scanner') : V4 ? 'none' : 'frontier';
+function neutralScan() { return scanner === 'none'; }
+async function setScanner(s) {
+  scanner = s; store.set('fcf_scanner', s);
+  for (const b of document.querySelectorAll('[data-scanner]')) b.setAttribute('aria-checked', String(b.dataset.scanner === s));
+  if (!photo || loadingPhoto) return;   // a photo still loading measures for this scanner in its own runAuto
+  internoBusy++;   // an export waits for the switch (same guard as Interno)
+  try {
+    while (rendering || exporting) await sleep(20);   // the engine is shared
+    prepareScanner();
+  } finally { internoBusy--; }
+  render();
+}
+if (V4) {
+  for (const b of document.querySelectorAll('[data-scanner]')) b.addEventListener('click', () => { if (b.dataset.scanner !== scanner) setScanner(b.dataset.scanner); });
+  setScanner(scanner);
+} else document.querySelector('#tabs [data-tab="scanner"]').remove();
 
 // ---------- export ----------
 // Full resolution rendered in tiles, one strip of tiles at a time; each strip

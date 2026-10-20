@@ -75,6 +75,15 @@
    "photo": "samples/kg200/IMG_1510.jpeg",
    "export": "exportIG",
    "ui": {}
+  },
+  "v4_sea_frontier": {
+   "photo": "samples/indigo/IDG_20261011_135459_749",
+   "query": "?v4",
+   "ui": {
+    "_click": [
+     "scanFrontier"
+    ]
+   }
   }
  }
 }

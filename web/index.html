@@ -49,6 +49,8 @@
   #tools[hidden] { display: none; }
   .chip { background: #000b; color: var(--fg); border: 1px solid #fff3; border-radius: 999px; padding: 7px 12px;
          font: 600 13px system-ui; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: pointer; }
+  .chip[aria-checked=true] { background: var(--accent); color: #1a1208; border-color: var(--accent); }
+  .row.seg { display: flex; gap: 8px; }
   #badge { top: 10px; left: 50%; transform: translateX(-50%); background: #000b; padding: 3px 10px;
          border-radius: 6px; font-size: 12px; display: none; }
   #zoomLabel { bottom: 16px; left: 14px; font: 12px ui-monospace, Menlo, monospace; color: var(--muted); }
@@ -225,6 +227,12 @@
   <div class="row"><label for="clarity">Chiarezza</label><input type="range" id="clarity" min="-1" max="1" step="0.01" value="0"><output for="clarity"></output></div>
   <div class="row"><label for="sharp">Nitidezza</label><input type="range" id="sharp" min="-1" max="1" step="0.01" value="0"><output for="sharp"></output></div>
   </div>
+  <div class="pane" data-pane="scanner" role="tabpanel" hidden>
+  <div class="row seg" role="radiogroup" aria-label="Scanner">
+    <button type="button" class="chip" role="radio" id="scanNone" data-scanner="none" aria-checked="true">Nessuno</button>
+    <button type="button" class="chip" role="radio" id="scanFrontier" data-scanner="frontier" aria-checked="false">Frontier</button>
+  </div>
+  </div>
   <div class="pane" data-pane="optics" role="tabpanel" hidden>
   <div class="row"><label for="ca">Aberrazione</label><input type="range" id="ca" min="0" max="1" step="0.01" value="1"><output for="ca"></output></div>
   <div class="row"><label for="vignette">Vignettatura</label><input type="range" id="vignette" min="0" max="1" step="0.01" value="0.12"><output for="vignette"></output></div>
@@ -241,6 +249,7 @@
   <button type="button" role="tab" data-tab="light" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></svg><span>Luce</span></button>
   <button type="button" role="tab" data-tab="color" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.2c3.6 4.2 6 7.2 6 10.3a6 6 0 0 1-12 0c0-3.1 2.4-6.1 6-10.300z"/><path d="M9 14a3 3 0 0 0 2.5 2.9"/></svg><span>Colore</span></button>
   <button type="button" role="tab" data-tab="film" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="2.5" width="16" height="19" rx="2"/><path d="M4 7h16M4 17h16M8 2.500v19M16 2.500v19"/></svg><span>Pellicola</span></button>
+  <button type="button" role="tab" data-tab="scanner" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="8" width="18" height="10" rx="2"/><path d="M6 13h12M8 5h8"/></svg><span>Scanner</span></button>
   <button type="button" role="tab" data-tab="optics" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M15.5 8.500l1.2-1.2"/></svg><span>Ottica</span></button>
   <button type="button" role="tab" data-tab="dust" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 5.200L19 10l-5.2 1.800L12 17l-1.8-5.200L5 10l5.2-1.800z"/><circle cx="18.5" cy="17.5" r="1"/><circle cx="5.5" cy="18" r=".8"/></svg><span>Polvere</span></button>
 </nav>
