@@ -51,6 +51,8 @@ const V3 = !new URLSearchParams(location.search).has('v2');
 // v4 (index.html?v4, in progress, eval/V4.md): what the DNG impresses on Gold 200, shown with a neutral inversion of the negative
 // (lib/invert.js), no scanner look and no Luce tab: exposure is the phone's (metered as v3 Auto).
 const V4 = V3 && new URLSearchParams(location.search).has('v4');
+// v3 highlight dodging (Luci auto, lib/dodge.js) changes the scene light before the film: off in v4 (the film alone).
+const DODGE = V3 && !V4;
 let photo = null;           // { file, bitmap, preview, after, auto: scanner AutoSetup [d, c, m, y], rot: quarter turns clockwise, ... }
 let rendering = false, dirty = false, exporting = false, renderCount = 0;
 
@@ -208,8 +210,8 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
   const lens = lensOf(u), expo = sceneGain(u);
   if (gpu) {
     const space = frame.raw ? 'rec2020' : frame.p3 ? 'p3' : 'srgb', wb = sceneWb(undefined, space === 'srgb' ? 'srgb' : 'rec2020', u.temp);
-    return engine.process_frame(V3 ? INPUT_WGSL_V3 : INPUT_WGSL, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb, u.sharp, u.vibrance / 100, !!interno(), u.tilt),
-      V3 ? v3Gain(u, space) : DISPLAY_GAIN_LUT, w, h, PACK_LUT,
+    return engine.process_frame(DODGE ? INPUT_WGSL_V3 : INPUT_WGSL, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb, u.sharp, u.vibrance / 100, !!interno(), u.tilt),
+      DODGE ? v3Gain(u, space) : DISPLAY_GAIN_LUT, w, h, PACK_LUT,
       GRAIN_WGSL, packParams(outP3(), invUniform(u)), target);
   }
   const map = tiltMap(frame.w, frame.h, u.tilt);   // Raddrizza (tilt.js); null at 0
@@ -220,7 +222,7 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
     const g = lightGains(u.temp, frame.p3 ? 'rec2020' : 'srgb');
     for (let i = 0; i < rgb.length; i += 3) { rgb[i] *= g[0]; rgb[i + 1] *= g[1]; rgb[i + 2] *= g[2]; }
   }
-  if (V3) dodgeCPU(rgb, w, h, x0, y0, frame.w, frame.h, expo, v3Gain(u, frame.p3 ? 'p3' : 'srgb'), DISPLAY_GAIN_LUT.length, LUMA[frame.p3 ? 'rec2020' : 'srgb'], map);
+  if (DODGE) dodgeCPU(rgb, w, h, x0, y0, frame.w, frame.h, expo, v3Gain(u, frame.p3 ? 'p3' : 'srgb'), DISPLAY_GAIN_LUT.length, LUMA[frame.p3 ? 'rec2020' : 'srgb'], map);
   const out = engine.process(rgb, w, h), d32 = new Uint32Array(target.buffer, target.byteOffset, w * h);
   const px = new Float32Array(3), p3 = outP3(), inv = invUniform(u);
   for (let p = 0, j = 0; p < w * h; p++, j += 3) {
@@ -520,7 +522,11 @@ grip.addEventListener('dblclick', () => {
 });
 
 // Bottom tab bar: one section of sliders at a time; tapping while collapsed expands the sheet.
-if (V4) document.querySelector('#tabs [data-tab="light"]').remove();   // v4: the light is automatic
+if (V4) {
+  document.querySelector('#tabs [data-tab="light"]').remove();   // v4: the light is the phone's exposure
+  // v4: the film alone. Pre-film modifiers that are not the film (Texture, the lens) start at 0; the user can still add them.
+  for (const id of ['texture', 'ca', 'vignette', 'falloff']) $(id).value = 0;
+}
 {
   const tabBtns = [...document.querySelectorAll('#tabs button')], panes = [...document.querySelectorAll('.pane')];
   const showTab = (t) => {
