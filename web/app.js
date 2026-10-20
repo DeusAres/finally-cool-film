@@ -526,6 +526,8 @@ if (V4) {
   document.querySelector('#tabs [data-tab="light"]').remove();   // v4: the light is the phone's exposure
   // v4: the film alone. Pre-film modifiers that are not the film (Texture, the lens) start at 0; the user can still add them.
   for (const id of ['texture', 'ca', 'vignette', 'falloff']) $(id).value = 0;
+  // Grana at the measured Gold 200 strength: the v3 default 2.5× is ~80 % of the full-frame Gold scans (README, v3.32).
+  $('grain').value = 3.1;
 }
 {
   const tabBtns = [...document.querySelectorAll('#tabs button')], panes = [...document.querySelectorAll('.pane')];

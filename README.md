@@ -41,7 +41,8 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   (b* +25 → +21, a Contrasto +50 +37 → +32, pelo non rosa: a* +3.5 → +4.0), +1.3 L*. La grana non cambia più con Interno (era ×1.41).
 - **v4 in prova** (`index.html?v4`, v3.40): la Gold 200 "nuda": esposizione dell'iPhone, negativo dal motore e inversione
   neutra (nero / bianco / grigio medio presi dal fotogramma, in mezzo solo la curva della pellicola), niente scanner, niente
-  scheda Luce. Dettagli in `eval/V4.md`. L'app normale resta la v3.
+  scheda Luce. Dettagli in `eval/V4.md`. L'app normale resta la v3. v3.41: solo la pellicola (niente Luci auto, Texture
+  e obiettivo a 0), Grana 3.1× = la Gold misurata.
 - **Drag & drop** (v3.35): trascina una foto in qualsiasi punto della pagina, come Scegli foto.
 - **ORF (v3.37)**: livello di saturazione del sensore misurato dall'istogramma (XZ-1: 3971, non 4095): le alte luci bruciate
   tornano neutre invece che magenta; file troncato → errore chiaro; aggiunti E-M10 (I–IIIS), OM-5, TG-5/6/7, Stylus 1, SH-2.
