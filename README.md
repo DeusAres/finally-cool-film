@@ -52,6 +52,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   v3.44: **Hyper Sharpness** (Scanner, solo Frontier, 0 = spento): nitidezza dello scanner solo sulle strutture, sopra una
   soglia che lascia stare la grana (anche nelle ombre); **AutoSetup** del Frontier robusto alle foto di un colore solo
   (prato, mare, muro): legge il colore dalle zone quasi neutre, una dominante vera viene ancora corretta.
+  v3.45: taratura sulla Gold vera, passo 2: strato rosso +0.75 EV (mezzitoni meno verdi / freddi; la curva dei toni coincide
+  già a parità di esposizione); Hyper Tone come recupero: lascia stare ±1 EV attorno al grigio medio, solleva come lo
+  scanner (uguale sui tre strati) e dove il negativo è vuoto (piede della pellicola) il sollevamento va verso il ciano.
 - **v3.42 (tutte le versioni)**: export raw meno pesante in memoria (strisce a mezza precisione dal worker, il file non è più
   copiato), una foto scelta sopra un'altra ancora in decodifica la annulla senza errori, l'export non si sovrappone più a un
   caricamento, gli export da JPEG non portano più la miniatura EXIF dell'originale, avvio / aggiornamento toccabili.
