@@ -189,17 +189,20 @@ pub struct ScannerParams {
     pub hyper_tone: HyperToneParams,
 }
 
-/// Hyper Tone (the Frontier's local tone control, in the scan): each pixel's film density is moved by `-amount * map(x, y)`
-/// EV worth of density (the grey ramp's mean density per EV), the same on the three layers, where `map` is the caller's
-/// low-resolution, edge-preserving base of the frame's log exposure (EV from the frame's median; bright areas positive). So
-/// large bright areas are scanned darker and large dark ones lighter, detail inside them kept; being a lift of the scan and
-/// not more exposure, a lifted area where the layers are unbalanced (the toe) turns cyan, as on the machine. The map's edges
-/// set where it changes (no halos when the map follows them). `amount` 0 = off (the scan is untouched). The map is sampled bilinearly in frame coordinates
-/// (`origin_px` = this render's top-left in the frame of `frame_px` pixels), so every export tile reads the same map.
+/// Hyper Tone (the Frontier's local tone control, in the scan; Fujifilm calls it automatic dodging): each pixel's film
+/// density is moved by `-k * map(x, y)` EV worth of density (the grey ramp's mean density per EV), the same on the three
+/// layers, where `map` is the caller's low-resolution, edge-preserving base of the frame's log exposure (bright areas
+/// positive) and k is `highlights` where the map is positive, `shadows` where it is negative (the machine's separate
+/// Highlight and Shadow levels). So large bright areas are scanned darker and large dark ones lighter, detail inside them
+/// kept; being a lift of the scan and not more exposure, a lifted area where the layers are unbalanced (the toe) turns cyan,
+/// as on the machine. The map's edges set where it changes (no halos when the map follows them). Both 0 = off (the scan is
+/// untouched). The map is sampled bilinearly in frame coordinates (`origin_px` = this render's top-left in the frame of
+/// `frame_px` pixels), so every export tile reads the same map.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HyperToneParams {
-    pub amount: f64,
+    pub highlights: f64,
+    pub shadows: f64,
     pub map: Vec<f32>,
     pub map_w: u32,
     pub map_h: u32,

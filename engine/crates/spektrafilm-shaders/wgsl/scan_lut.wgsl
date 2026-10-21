@@ -28,7 +28,7 @@ struct Hyper {
     on: u32,
     pad: u32,
     origin_frame: vec4<f32>,   // xy: this render's top-left in the frame (px), zw: the frame size (px)
-    gain: vec4<f32>,           // xyz: density per map EV (the same on the three layers)
+    gain: vec4<f32>,           // x: density per map EV where the map is positive (lights), y: negative (shadows)
     toe: vec4<f32>,            // x: the stock's toe end (G density), y: the red layer's shortfall there
 }
 @group(0) @binding(4) var<uniform> hyper: Hyper;
@@ -72,7 +72,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var cmy = vec3<f32>(density_cmy[base], density_cmy[base + 1u], density_cmy[base + 2u]);
     if hyper.on == 1u {
         // spektrafilm-gpu `hyper_apply`: a lift inside the toe gives the red layer less (cyan voids)
-        let delta = hyper.gain.x * hyper_map(pixel_idx % params.width, pixel_idx / params.width);
+        let m = hyper_map(pixel_idx % params.width, pixel_idx / params.width);
+        let delta = m * select(hyper.gain.y, hyper.gain.x, m > 0.0);   // spektrafilm-gpu hyper_delta
         var r = delta;
         if delta > 0.0 && hyper.toe.y > 0.0 && hyper.toe.x > 0.0 {
             let tt = clamp(cmy.y / hyper.toe.x, 0.0, 1.0);

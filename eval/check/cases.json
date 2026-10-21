@@ -90,7 +90,8 @@
    "query": "?v4",
    "export": "export",
    "ui": {
-    "hypertone": 1,
+    "htHi": 5,
+    "htLo": 5,
     "_click": [
      "scanFrontier"
     ]

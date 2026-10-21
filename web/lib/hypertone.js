@@ -2,8 +2,8 @@
 // frame's log exposure that is smooth inside regions and changes only at their edges, in EV from mid grey as the film is
 // exposed (0.18 x the exposure gain), beyond DEAD_EV: a recovery of the frame's extremes, not of what is dark or bright
 // relative to the rest (a frame that is mostly dark rock has its median there, and its shadows were left alone).
-// The engine moves each pixel's film density along the stock's grey ramp by -amount x this map, so large bright areas are
-// scanned darker and large dark ones lighter while the detail inside them stays (it is not in the map).
+// The engine moves each pixel's film density by -level x this map (the same on the three layers, as the scanner's signal), so
+// large bright areas are scanned darker and large dark ones lighter while the detail inside them stays (it is not in the map).
 //
 // Edges: a self-guided filter (He et al. 2010) on log2 luminance. Inside a window whose variance is below EDGE_EV² the
 // output is the window mean (texture and small detail are flattened out of the base); across a step much larger than that
@@ -15,8 +15,8 @@
 // so a step in the map is spread over frame / MAP_LONG pixels: at 96 that was a visible light rim on a 2000 px rock against
 // the sky; 512 keeps it to ~4 px; the map goes to the engine once per photo, Engine.set_hyper_tone_map).
 const RADIUS_FRAC = 1 / 10, EDGE_EV = 1, MAP_LONG = 512;
-// Recovery, not flattening (user, v4): areas within DEAD_EV of the median are left alone (the mids keep their contrast);
-// beyond it only the excess acts (a sky 2.5 EV over the median moves as if it were 1.5 EV over). A choice.
+// Recovery, not flattening (user, v4): areas within DEAD_EV of mid grey are left alone (the mids keep their contrast);
+// beyond it only the excess acts (a sky 2.5 EV over mid grey moves as if it were 1.5 EV over). A choice.
 const DEAD_EV = 1;
 const MID_GREY = 0.18;   // scene-linear mid grey (the engine's meter target)
 const Y_MIN = 1e-5;   // floor of the luminance before log2 (black pixels)

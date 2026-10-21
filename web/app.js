@@ -67,7 +67,7 @@ const ui = () => ({
   ev: +$('ev').value, contrast: +$('contrast').value, highlight: +$('highlight').value, whites: +$('whites').value,
   mshift: +$('mshift').value, yshift: +$('yshift').value, vibrance: +$('vibrance').value, temp: +$('temp').value, black: +$('black').value,
   grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value, sharp: +$('sharp').value,
-  ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value, tilt: +$('tilt').value, hypertone: +$('hypertone').value, hypersharp: +$('hypersharp').value,
+  ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value, tilt: +$('tilt').value, htHi: +$('htHi').value, htLo: +$('htLo').value, hypersharp: +$('hypersharp').value,
   ...(V3 ? { hlc: +$('hlc').value, shadows: +$('shadows').value, v3dodge: $('v3dodge').checked } : {}),   // v3: snapshotted with the rest (export tiles)
 });
 // CA slider is quadratic: realistic (subtle) amounts get most of the travel.
@@ -145,9 +145,9 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     // film-adjacency clarity in the input pass instead (lens-gpu.js), in µm.
     // v4 Scanner 'Nessuno': no scanner look, the engine returns the negative read in three narrow bands (engine narrowband.rs:
     // the bands of the real Gold 200 reference scans, eval/V4.md), inverted in the output pass (lib/invert.js).
-    scanner: neutralScan() ? { model: 'narrowband', unsharp_mask: [0, 0], hyper_tone: { amount: 0 } } : {
+    scanner: neutralScan() ? { model: 'narrowband', unsharp_mask: [0, 0], hyper_tone: { highlights: 0, shadows: 0 } } : {
       model: 'frontier', black_correction: false, white_correction: false,
-      hyper_tone: { amount: u.hypertone * HYPER_MAX, ...wholeFrame(region) },   // always sent: the engine merges updates
+      hyper_tone: { highlights: hyperLevel(u.htHi), shadows: hyperLevel(u.htLo), ...wholeFrame(region) },   // always sent: the engine merges updates
       ...hyperSharp(u, region),
       frontier: {
         // v3.20: Alte luci / Bianchi below 0 darken the scene before the film (dodge.js, local, the negative keeps the detail); above 0 they
@@ -282,11 +282,14 @@ function autoSetup(on, evIn = null) {
   return { ev, auto };
 }
 
-// Hyper Tone (Scanner, Frontier): a recovery for the extremes (user): the slider's 0..1 moves each area's density by up to
-// HYPER_MAX of its map EV beyond the mids' dead zone (lib/hypertone.js DEAD_EV), engine params.rs HyperToneParams. HYPER_MAX
-// 0.5: with the dead zone the mids are untouched (the first version flattened whole photos, user), so a shadow 3 EV under mid
-// grey is lifted 1 EV and a sky 3 EV over is brought down 1 EV; a choice.
-const HYPER_MAX = 0.5;
+// Hyper Tone (Scanner, Frontier): a recovery for the extremes (user), with the machine's separate Highlight and Shadow levels,
+// 5 steps each (SP-3000: Lower, Low, Normal, High, Higher; 0 here = off). Each level moves an area's density by level / 5 x
+// HYPER_MAX of its map EV beyond the mids' dead zone (lib/hypertone.js DEAD_EV), engine params.rs HyperToneParams. Fujifilm
+// publishes no gains: HYPER_MAX 0.5 (the top level) is a choice; with the dead zone the mids are untouched (the first version
+// flattened whole photos, user), so at the top a shadow 3 EV under mid grey is lifted 1 EV and a sky 3 EV over brought down 1.
+const HYPER_MAX = 0.5, HYPER_LEVELS = 5;
+const hyperLevel = (v) => (v / HYPER_LEVELS) * HYPER_MAX;
+const HYPER_NAMES = ['off', 'molto basso', 'basso', 'normale', 'alto', 'molto alto'];
 const HYPER_THUMB_PX = 512;   // the map's source thumb: its resolution is the map's (lib/hypertone.js MAP_LONG)
 // Hyper Sharpness (Scanner, Frontier; slider 0 = off): the engine's unsharp mask on the scan, gated by relative detail
 // (ScannerParams.unsharp_threshold) so the grain is left alone and only structure is sharpened (the real machine's version
@@ -304,7 +307,7 @@ function hyperSharp(u, region) {
 /** The photo's Hyper Tone map in the engine (built once per photo and turn, from its thumb at HYPER_THUMB_PX, lib/hypertone.js),
  * when Hyper Tone acts. */
 function syncHyperMap(u) {
-  if (!(u.hypertone > 0 && !neutralScan())) return;
+  if (!((u.htHi > 0 || u.htLo > 0) && !neutralScan())) return;
   if (!photo.hyper) {
     const { preview } = photo, raw = preview.raw, { rgb, w, h } = raw ? rawThumb(raw, HYPER_THUMB_PX) : jpegThumb(preview, HYPER_THUMB_PX);
     // the thumb as the film sees it (Auto's exposure + baseline: v4 has no exposure slider, so it is fixed per photo)
@@ -1062,7 +1065,7 @@ const FORMAT = {
   grain: mult2, halation: mult,
   ca: pctOff, vignette: pctOff,
   falloff: pct,
-  texture: signPct, clarity: signPct, sharp: signPct, dust: pctOff, black: pctOff, hypertone: pctOff, hypersharp: pctOff,
+  texture: signPct, clarity: signPct, sharp: signPct, dust: pctOff, black: pctOff, htHi: (v) => HYPER_NAMES[v], htLo: (v) => HYPER_NAMES[v], hypersharp: pctOff,
 };
 const DUST_RESEED = 0.27;   // Rimescola with Polvere off turns it on at this amount (the default before v3.33)
 const AUTO_EV_MIN = -2, AUTO_EV_MAX = 2.5;   // Auto's exposure range, see autoSetup

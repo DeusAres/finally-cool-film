@@ -125,11 +125,12 @@ struct HyperStock {
     toe_cyan: f64,
 }
 
-/// Hyper Tone for one render (spektrafilm-gpu `hyper_apply`): density per map EV on the three layers, the stock's toe end
-/// (G dye density) and the red layer's shortfall there.
+/// Hyper Tone for one render (spektrafilm-gpu `hyper_delta` / `hyper_apply`): density per map EV on the three layers where
+/// the map is positive (lights) and negative (shadows), the stock's toe end (G dye density) and the red layer's shortfall there.
 #[derive(Clone, Copy, Debug)]
 pub struct HyperFilm {
-    pub gain: f64,
+    pub gain_hi: f64,
+    pub gain_lo: f64,
     pub toe_density: f64,
     pub toe_cyan: f64,
 }
@@ -276,8 +277,10 @@ impl Pipeline {
         let h = &self.params.scanner.hyper_tone;
         let st = &self.cmy_per_ev.as_deref()?.0;
         let mean = (st.cmy_per_ev[0] + st.cmy_per_ev[1] + st.cmy_per_ev[2]) / 3.0;
-        (self.scan_lut().is_some() && h.amount != 0.0)
-            .then_some((h, HyperFilm { gain: -h.amount * mean, toe_density: st.toe_density, toe_cyan: st.toe_cyan }))
+        (self.scan_lut().is_some() && (h.highlights != 0.0 || h.shadows != 0.0)).then_some((
+            h,
+            HyperFilm { gain_hi: -h.highlights * mean, gain_lo: -h.shadows * mean, toe_density: st.toe_density, toe_cyan: st.toe_cyan },
+        ))
     }
 
     /// (Re)measure the stock's density change per EV at mid grey (grey ramp at 0.18 x 2^(+-1/2), developed on the CPU) when
@@ -285,7 +288,7 @@ impl Pipeline {
     fn refresh_hyper_tone(&mut self) {
         let p = &self.params;
         let h = &p.scanner.hyper_tone;
-        let valid = h.amount != 0.0 && h.map_w > 0 && h.map_h > 0 && h.map.len() == (h.map_w * h.map_h) as usize
+        let valid = (h.highlights != 0.0 || h.shadows != 0.0) && h.map_w > 0 && h.map_h > 0 && h.map.len() == (h.map_w * h.map_h) as usize
             && h.frame_px[0] > 0.0 && h.frame_px[1] > 0.0;
         if !(valid && p.io.scan_film && self.film.is_negative()) {
             self.cmy_per_ev = None;
@@ -1495,7 +1498,7 @@ impl Pipeline {
                     map_h: h.map_h,
                     origin_px: h.origin_px.map(|v| v as f32),
                     frame_px: h.frame_px.map(|v| v as f32),
-                    gain: [f.gain as f32; 3],
+                    gain: [f.gain_hi as f32, f.gain_lo as f32],
                     toe_density: f.toe_density as f32,
                     toe_cyan: f.toe_cyan as f32,
                 });

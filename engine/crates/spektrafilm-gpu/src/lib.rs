@@ -266,14 +266,20 @@ pub struct HyperToneGpu<'a> {
     pub map_h: u32,
     pub origin_px: [f32; 2],
     pub frame_px: [f32; 2],
-    /// Density per map EV (the same on the three layers, `-amount` x the grey ramp's mean density per EV).
-    pub gain: [f32; 3],
+    /// Density per map EV on the three layers where the map is positive (lights) and negative (shadows).
+    pub gain: [f32; 2],
     /// The stock's toe: G dye density where it ends, and the red layer's shortfall there (see `hyper_apply`).
     pub toe_density: f32,
     pub toe_cyan: f32,
 }
 
-/// Hyper Tone on one pixel's dye density `cmy`, moved by `delta` (gain x map). A lift (delta > 0: a dark area made lighter)
+/// Hyper Tone's density change for map value `m`: the lights' gain above mid grey, the shadows' below.
+/// `scan_lut.wgsl` is the same rule.
+pub fn hyper_delta(m: f32, gain_hi: f32, gain_lo: f32) -> f32 {
+    m * if m > 0.0 { gain_hi } else { gain_lo }
+}
+
+/// Hyper Tone on one pixel's dye density `cmy`, moved by `delta` (`hyper_delta`). A lift (delta > 0: a dark area made lighter)
 /// inside the stock's toe, where the negative holds little information, gives the red layer `toe_cyan` less of it in
 /// proportion to how deep in the toe the pixel is (1 - smoothstep(0, toe_density, G)): the red layer records less there,
 /// so lifting a void turns it cyan, as on the real machine. `scan_lut.wgsl` `hyper_apply` is the same maths.
