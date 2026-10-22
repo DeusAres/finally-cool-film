@@ -59,6 +59,10 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   Frontier vero** (chart Gold 200 di Color Precision, stessi negativi anche su Noritsu, `eval/frontier_cp`): contrasto più
   deciso con ombre e neri più profondi, colori meno saturi (il Frontier vero tiene l'80 % della croma della chart, noi
   eravamo al 112 %); errore sulle chart ΔE00 7.2 → 6.6, grigi 2.6 → 1.2 L*. Aperto: verdi / ciani saturi ancora più chiari.
+  v3.47: Frontier v4, colore per tinta come la 3D LUT del Frontier (luce, saturazione e tinta per rosso / giallo / verde /
+  ciano / blu / magenta): verdi e ciani saturi non più troppo chiari, rossi / magenta / blu non più troppo saturi; errore
+  sulle chart ΔE00 6.6 → 4.4 (le altre esposizioni 6.0–6.5 → 3.9–4.1). AutoSetup: compensa del tutto l'esposizione e
+  corregge di più le dominanti calde (come il Frontier vero sotto tungsteno); luminosità come prima.
 - **v3.42 (tutte le versioni)**: export raw meno pesante in memoria (strisce a mezza precisione dal worker, il file non è più
   copiato), una foto scelta sopra un'altra ancora in decodifica la annulla senza errori, l'export non si sovrappone più a un
   caricamento, gli export da JPEG non portano più la miniatura EXIF dell'originale, avvio / aggiornamento toccabili.
