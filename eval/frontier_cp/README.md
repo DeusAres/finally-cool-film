@@ -110,3 +110,26 @@ Run from a WORK directory (needs sf-eval, scripts/eval/build-sf-eval.sh; python 
     lightness +0.1 L* of the real; blues +1.8 L*; cyan hue -18 deg.
 - **Open questions.**
   - The cyan hue is still ~18 deg greener than real (7 patches) and violets -18 deg (3 patches).
+
+## Noritsu (app.js V4_NORITSU, V4_NORITSU_AUTO)
+The same frames on the tool's Noritsu, with the same method; the Frontier's scanner model takes the Noritsu's parameters.
+- **Tone.** `fit_tone.py Noritsu`: a 9.26, black 0.025, white 1.0 (opener whites than the Frontier); grey L* rms 1.25.
+- **Colour.**
+  - Start: `SCAN=Noritsu colour.py` with neutral colour (no v3 ops), dE00 6.4-6.7.
+  - `proto_all.py` fits the 18 per-hue values at 0 EV: dE00 4.3 / 4.5 / 4.5 / 4.5 in the engine (-1..+2 EV held out), chroma
+    1.06 of the real.
+  - The magenta rotation (31 deg) rests on 5 patches.
+- **Balance.** The Noritsu's greys are warm in the shadows / mids and neutral in the lights:
+  - chart frame: mid b* +13 (Frontier +4.5);
+  - outdoors: Spyder greys +7 to +11 in the mids / darks, ~0 in the lights.
+
+  So C M Y +0.02 / +0.05 / +0.075 over the Frontier's balance: the mean of the chart fit and about half of it outdoors.
+- **AutoSetup.** The Noritsu compensates exposure fully but barely lifts the frame on black (mid grey 67 vs 70 on the wall; the
+  Frontier 80 / 67).
+  - A lower density clamp reproduces the frame on black but breaks the exposure compensation (+2 EV: 72); trimming the dark
+    percentiles shifts every frame alike.
+  - What fits is a highlight-anchored setup, the engine's highlight guard: margin -0.08, target 0.15.
+  - Rebuilt frames, mid grey, wall / black / outdoors: 68.7 / 58.7 / 57.9 (real 69.7 / 66.9 / 54.0; the v3 setup 58.8 / 83.8 /
+    59.5). On the Frontier the same scheme makes outdoors brighter (61-66 vs real 53), so the Frontier keeps v3's level.
+  - Tungsten: the Noritsu leaves b* -3 / +7 / +5 over daylight. k_col 1.15 and clamp_colour 0.3 match (1.0 / 1.3 leave
+    +11 / +9 / +7 and +3 / -5 / -5).

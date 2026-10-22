@@ -147,8 +147,9 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     // the bands of the real Gold 200 reference scans, eval/V4.md), inverted in the output pass (lib/invert.js).
     scanner: neutralScan() ? { model: 'narrowband', unsharp_mask: [0, 0], hyper_tone: { highlights: 0, shadows: 0 } } : {
       model: 'frontier', black_correction: false, white_correction: false,
-      hyper_tone: { highlights: hyperLevel(u.htHi), shadows: hyperLevel(u.htLo), ...wholeFrame(region) },   // always sent: the engine merges updates
-      ...hyperSharp(u, region),
+      // always sent: the engine merges updates; the Noritsu has none (they are the Frontier's)
+      ...(scanner === 'noritsu' ? { hyper_tone: { highlights: 0, shadows: 0 }, unsharp_mask: [0, 0] }
+        : { hyper_tone: { highlights: hyperLevel(u.htHi), shadows: hyperLevel(u.htLo), ...wholeFrame(region) }, ...hyperSharp(u, region) }),
       frontier: {
         // v3.20: Alte luci / Bianchi below 0 darken the scene before the film (dodge.js, local, the negative keeps the detail); above 0 they
         // stay on the scanner curve (gentler than pushing the scene into the shoulder). v2 page: scanner only.
@@ -165,8 +166,8 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
         // the magenta key goes greener with Contrasto (-0.03 per unit): Contrasto amplifies the scene's red-magenta in the light mids (white
         // fur turned pink). warm_hue_shift / saturation_warm off for every photo (v3.19's sunset tuning turned yellow-orange fur pink).
         model: { saturation: 1.01, saturation_blue: 0.15, blue_hue_shift: 17, green_hue_shift: 24, saturation_warm: 0, warm_hue_shift: 0, cool_neutral_warm: interno() ? 0 : 1.0, highlight_neutral: 0.6, balance_cmy: interno() ? [0, -0.03 - 0.03 * Math.max(u.contrast, 0), 0.0] : [0, 0.005, 0.02], sensor_peak_nm: [650, 540, 450], sensor_fwhm_nm: [40, 50, 40],
-                 black_point: 0.012, gradation_a: 6.2, setup_toe_slope: interno() ? [1.4, 0.92] : [0.9, 1.0], setup_neutral_ev: interno() ? 2.0 : 1.5, auto: { k_col: 0.3, ...(V4 ? { neutral_sigma: V4_NEUTRAL_SIGMA, ...V4_AUTO } : {}) },
-                 ...(V4 ? V4_FRONTIER : {}) },
+                 black_point: 0.012, gradation_a: 6.2, setup_toe_slope: interno() ? [1.4, 0.92] : [0.9, 1.0], setup_neutral_ev: interno() ? 2.0 : 1.5, auto: { k_col: 0.3, ...(V4 ? { neutral_sigma: V4_NEUTRAL_SIGMA, ...(scanner === 'noritsu' ? V4_NORITSU_AUTO : V4_AUTO) } : {}) },
+                 ...(V4 ? (scanner === 'noritsu' ? V4_NORITSU : V4_FRONTIER) : {}) },
       },
     },
     film_render: {
@@ -308,7 +309,7 @@ function hyperSharp(u, region) {
 /** The photo's Hyper Tone map in the engine (built once per photo and turn, from its thumb at HYPER_THUMB_PX, lib/hypertone.js),
  * when Hyper Tone acts. */
 function syncHyperMap(u) {
-  if (!((u.htHi > 0 || u.htLo > 0) && !neutralScan())) return;
+  if (!((u.htHi > 0 || u.htLo > 0) && scanner === 'frontier')) return;
   if (!photo.hyper) {
     const { preview } = photo, raw = preview.raw, { rgb, w, h } = raw ? rawThumb(raw, HYPER_THUMB_PX) : jpegThumb(preview, HYPER_THUMB_PX);
     // the thumb as the film sees it (Auto's exposure + baseline: v4 has no exposure slider, so it is fixed per photo)
@@ -775,7 +776,7 @@ async function runAuto() {
   // render() returns early while another render / export is in flight: wait first (the engine is shared).
   while (rendering || exporting) await sleep(20);
   const on = $('indoor').checked, a = autoSetup(on);
-  photo.autoEv = a.ev; photo.autoCache = a.auto ? { [on]: a.auto } : {}; photo.inv = null;
+  photo.autoEv = a.ev; photo.autoCache = a.auto ? { [autoKey(on)]: a.auto } : {}; photo.inv = null;
   $('ev').value = a.ev;
   syncOutputs();
   log(`auto: ev ${a.ev}`);
@@ -793,21 +794,23 @@ function prepareScanner() {
     log(`scanner none: density black ${f(photo.inv.lo)} white ${f(photo.inv.hi)} mid ${photo.inv.xm.toFixed(2)}`);
   } else {
     const on = $('indoor').checked;
-    photo.auto = photo.autoCache[on] ??= autoSetup(on, photo.autoEv).auto;
-    log(`scanner frontier: autosetup ${photo.auto.map((v) => v.toFixed(3)).join(' ')}`);
+    photo.auto = photo.autoCache[autoKey(on)] ??= autoSetup(on, photo.autoEv).auto;
+    log(`scanner ${scanner}: autosetup ${photo.auto.map((v) => v.toFixed(3)).join(' ')}`);
   }
 }
 
 // ---------- scanner (v4 tab; v3 is always the Frontier) ----------
 // 'none': the negative read in narrow bands and inverted neutrally (the film alone); 'frontier': the Frontier SP-3000 model on
-// the same negative (v3's scanner and its Gold-look corrections). The choice is remembered.
-const SCANNERS = ['none', 'frontier'];
+// the same negative (v3's scanner and its Gold-look corrections); 'noritsu': the same scanner model with a Noritsu's tone, colour
+// and AutoSetup (V4_NORITSU, fitted on real Noritsu scans). The choice is remembered.
+const SCANNERS = ['none', 'frontier', 'noritsu'];
 let scanner = V4 && SCANNERS.includes(store.get('fcf_scanner')) ? store.get('fcf_scanner') : V4 ? 'none' : 'frontier';
 function neutralScan() { return scanner === 'none'; }
+const autoKey = (on) => `${scanner}:${on}`;   // AutoSetup depends on the scanner and on Interno
 async function setScanner(s) {
   scanner = s; store.set('fcf_scanner', s);
   for (const b of document.querySelectorAll('[data-scanner]')) b.setAttribute('aria-checked', String(b.dataset.scanner === s));
-  $('frontierRows').hidden = neutralScan();   // Hyper Tone / Hyper Sharpness are the Frontier's
+  $('frontierRows').hidden = scanner !== 'frontier';   // Hyper Tone / Hyper Sharpness are the Frontier's
   if (!photo || loadingPhoto) return;   // a photo still loading measures for this scanner in its own runAuto
   internoBusy++;   // an export waits for the switch (same guard as Interno)
   try {
@@ -1129,6 +1132,24 @@ const V4_AUTO = { strength: 1.0, k_col: 0.68 };
 const V4_FRONTIER = { gradation_a: 9.6, black_point: 0.023, white_point: 0.97, shoulder_start: 0.95, shoulder_sharpness: 0,
   saturation: 0.92, saturation_blue: 0.05, blue_hue_shift: 18, green_hue_shift: 20,
   hue_lightness: [0.91, 0.92, 0.46, 0.75, 0.9, 0.96], hue_saturation: [0.88, 1.06, 0.97, 1.04, 0.73, 0.64], hue_shift: [3, 1, 6, 7, -5, 12] };
+// v4 Noritsu (Scanner tab): the Frontier's scanner model with a Noritsu's tone, colour and AutoSetup, fitted as V4_FRONTIER on the
+// same Color Precision Gold 200 frames scanned on their Noritsu (eval/frontier_cp). It overrides every v3 Gold-look op (none of
+// them is the Noritsu's). Tone: a 9.26, black 0.025, white 1.0 (opener whites than the Frontier's 0.97), grey L* rms 1.25.
+// Colour: per-hue lightness / saturation / rotation (6 knots, proto_all.py then the engine): dE00 6.4-6.7 -> 4.3-4.5 over
+// -1..+2 EV, chroma 1.06 of the real. Balance: the Noritsu's greys are warm in the shadows / mids, neutral in the lights (mid b*
+// +13 on the chart frame, +7 outdoors, against the Frontier's +4.5 / +2): C M Y +0.02 / +0.05 / +0.075 over the Frontier's
+// balance, the mean of the chart-frame fit (0.03 / 0.068 / 0.103) and the outdoor frame's about half of it.
+const V4_NORITSU = { gradation_a: 9.26, black_point: 0.025, white_point: 1.0, shoulder_start: 0.95, shoulder_sharpness: 0,
+  saturation: 1.0, saturation_blue: 0, blue_hue_shift: 0, green_hue_shift: 0, saturation_warm: 0, warm_hue_shift: 0,
+  cool_neutral_warm: 0, highlight_neutral: 0, balance_cmy: [0.02, 0.055, 0.095],
+  hue_shift: [2, -4.8, 3.1, 1.8, 1.6, 30.8], hue_lightness: [1.16, 0.99, 0.69, 0.86, 0.91, 0.94], hue_saturation: [0.84, 0.94, 0.96, 0.91, 0.62, 0.87] };
+// Noritsu AutoSetup. Unlike the Frontier it barely lifts a dark frame (chart on black: mid grey 67 vs 70 on the grey wall, the
+// Frontier 80 / 67) while compensating exposure fully: a highlight-anchored setup. The engine's highlight guard (95th percentile
+// kept below the knee + margin) does that: margin -0.08 with the mean's target 0.15 gives, on scenes rebuilt from the real
+// Noritsu scans (recon.py / autorecon.py), wall / black / outdoors 68.7 / 58.7 / 57.9 (real 69.7 / 66.9 / 54.0; the v3 setup
+// 58.8 / 83.8 / 59.5). Colour: the tungsten frame keeps b* -3 / +7 / +5 (dark / mid / light) over daylight, much less than
+// the Frontier: k_col 1.15 (1.0 / 1.3 leave +11 / +9 / +7 and +3 / -5 / -5), clamp_colour 0.3 (0.15 bound it).
+const V4_NORITSU_AUTO = { strength: 1.0, target_offset: 0.15, highlight_margin: -0.08, k_col: 1.15, clamp_colour: 0.3 };
 const SCATTER_SCALE = 0.5;   // film scatter size multiplier (engine default 1), see renderParams
 // v3.32: dye-cloud blur 0.65 -> 0.45 (reference px, ~12 -> ~8 um): measured on 10 full-frame Gold 200 scans the grain has ~12 % of
 // its power below 40 um wavelength and r50 ~13.5 um; ours had 3 % / 18.6 um (soft). At 0.45
@@ -1178,8 +1199,7 @@ $('indoor').addEventListener('change', async () => {
     while (rendering || exporting) await sleep(20);
     if (photo !== target) return;   // a new photo arrived during the wait: it reset the switch, nothing to apply
     on = $('indoor').checked;   // the lab re-reads the (thin) negative; sliders are not touched
-    photo.autoCache[on] ??= autoSetup(on, photo.autoEv).auto;
-    photo.auto = photo.autoCache[on];
+    photo.auto = photo.autoCache[autoKey(on)] ??= autoSetup(on, photo.autoEv).auto;
   } catch (e) {   // the switch goes back to what is applied
     log('interno error: ' + (e?.stack || e)); status('Errore: ' + (e?.message || e));
     $('indoor').checked = !on;

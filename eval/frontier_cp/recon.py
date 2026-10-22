@@ -45,8 +45,10 @@ def build(setname, scanner='Frontier'):
     lin = dec(small / 255.0); ly = lin @ [0.2126, 0.7152, 0.0722]
     scene = lin * (Y / np.maximum(ly, 1e-5))[..., None]   # scan chromaticity, reconstructed luminance
     scene = scene @ (np.linalg.inv(BT2020) @ SRGB).T
-    np.save(f'recon_{setname}.npy', np.clip(scene, 0, None).astype(np.float32))
+    tag = '' if scanner == 'Frontier' else '_' + scanner
+    np.save(f'recon_{setname}{tag}.npy', np.clip(scene, 0, None).astype(np.float32))
     pts_s = [(int(p[0]) // s, int(p[1]) // s) for p, k in zip(pts, sel) if k]
-    json.dump({'pts': pts_s, 'refL': list(map(float, np.asarray(refL)[sel])), 'realL': list(map(float, np.asarray(realL)[sel]))}, open(f'recon_{setname}.json', 'w'))
+    json.dump({'pts': pts_s, 'refL': list(map(float, np.asarray(refL)[sel])), 'realL': list(map(float, np.asarray(realL)[sel]))}, open(f'recon_{setname}{tag}.json', 'w'))
     print(setname, scene.shape, 'grey refL', np.round(np.asarray(refL)[sel][:8], 1), 'realL', np.round(np.asarray(realL)[sel][:8], 1))
-for s_ in sys.argv[1:] or ['Charts', 'Studio', 'Daylight']: build(s_)
+SCANNER = os.environ.get('SCAN', 'Frontier')
+for s_ in sys.argv[1:] or ['Charts', 'Studio', 'Daylight']: build(s_, SCANNER)

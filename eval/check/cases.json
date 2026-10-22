@@ -85,6 +85,15 @@
     ]
    }
   },
+  "v4_sea_noritsu": {
+   "photo": "samples/indigo/IDG_20261011_135459_749",
+   "query": "?v4",
+   "ui": {
+    "_click": [
+     "scanNoritsu"
+    ]
+   }
+  },
   "v4_rock_hypertone": {
    "photo": "samples/indigo/IDG_20261011_134131_210",
    "query": "?v4",
