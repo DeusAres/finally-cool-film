@@ -72,13 +72,21 @@ Run from a WORK directory (needs sf-eval, scripts/eval/build-sf-eval.sh; python 
   chroma 1.05 of the real overall.
 - **AutoSetup (density and colour).** The PNGs' Lightroom settings (XMP) are all 0, with a linear curve and white balance as
   shot. So brightness and casts are the lab's, not a post adjustment.
-  - Density. The real Frontier lands the SG mid grey at L* 67.9 / 66.8 / 69.2 / 68.6 for -1 / 0 / +1 / +2 EV: full compensation,
-    a bright level. Ours, on a reconstructed frame (`SIM_SURROUND=55,2.5,0` the wall, `SIM_BOARD=1` the white board;
-    `autolevel.py`), gave 45.1 / 50.0 / 52.9 / 57.2.
-  - With strength 1.0 (full; 0.85 leaves 62 -> 72 over the EVs) and target_offset 0.16: 67.4 / 68.3 / 68.0 / 69.3. The
-    clamp_density 0.45 does not bind.
-  - The target lifts the density key of every frame by 0.93 EV. The thin-negative ramp moves by as much (0.8 / 1.6 -> 1.73 /
-    2.53); otherwise it switched the colour correction off on every frame.
+  - Density, exposure. Over -1..+2 EV the real Frontier keeps the SG mid grey at L* 66.8-69.2: full compensation. v4 uses
+    strength 1.0; v3's 0.85 drifted ~+11 L*.
+  - Density, level: kept at v3's (target_offset 0.0109).
+    - A first fit on the Charts frame alone (target 0.16, `autolevel.py` on a synthetic frame with the wall and the board)
+      matched its 67 L* but made outdoor photos washed out (user; sea / rock mean L* 51 / 47 -> 67 / 60).
+    - The other frames with charts show the lab's level depends on the scene. Mid grey: grey wall 67, black studio 80
+      (`SET=Studio measure_real.py`), outdoors 53 (Spyder greys; their reflectance read off the Charts frame).
+    - `recon.py` rebuilds each frame's scene from the scan through its own grey patches; `autorecon.py` runs our Auto on it:
+      | AutoSetup | wall | black | outdoors |
+      |---|---|---|---|
+      | target 0.16 | 75 | 86 | 76 |
+      | v3 target, strength 1.0 | 58 | 86 | 59 |
+    - Ours tells the wall frame from the outdoor one much less than the lab does. The outdoor scan's clipped background hides
+      how bright it really was, so the reconstruction is weakest there. The v3 level is the one closest outdoors, the app's
+      use.
   - Colour, from the tungsten frame. Real Frontier, tungsten over daylight, greys dark / mid / light: b* +12 / +25 / +14, a* -4
     at mid (the red goes). The Noritsu corrects more. Ours, under a simulated 3200 K (`sim.run(..., gains=(1.486, 1, 0.439))`,
     the Planckian / D65 ratio in Rec.2020), with k_col x strength:
@@ -86,6 +94,8 @@ Run from a WORK directory (needs sf-eval, scripts/eval/build-sf-eval.sh; python 
     - 0.6 leaves +24 / +24 / +12;
     - 0.85 leaves +19 / +18 / +6.
   - v4 uses 0.68 (app.js V4_AUTO), a lower bound: the light's temperature is not known.
+  - Open: our AutoSetup does not separate a bright outdoor frame from a grey-wall frame as the lab's does (a darker outdoor
+    level by ~14 L*).
 - **Step 4: lightness and hue by hue.** After step 3, saturated colours of every hue were still lighter than real (blues
   +4.8 L*), and the cyans were 24 deg greener.
   - Engine `hue_lightness` (6 knots, the same chroma ramp 0.19-0.66) replaces `cyan_green_darken`; `hue_shift` (6 knots, deg,
