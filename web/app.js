@@ -1121,15 +1121,15 @@ const V4_AUTO = { strength: 1.0, target_offset: 0.16, thin_ev_lo: 1.73, thin_ev_
 // the real scans (both machines: a 9.6 / 9.3) have firmer mids and deeper lower mids / blacks than the guessed curve (a 6.2,
 // v3.16 by eye), no shoulder (start 0.95 = the same fit, and AutoSetup's highlight cap at the knee, frontier.rs, then no longer
 // darkens whole frames: at 0.69 the sky of the rock went grey, mean L* -11), white 0.97. Colour: the real Frontier is less
-// saturated (chroma 0.80 of the chart's, Noritsu 0.90, ours was 1.12), more so in reds / blues / magentas (hue_saturation:
-// red, yellow, green, cyan, blue, magenta), and renders saturated greens / cyans much darker than a grey of the same luminance
-// (up to 21 L*; Fujifilm documents its 3D LUT acting on "highly saturated cyan/green"): cyan_green_darken 0.46 (engine
-// frontier.rs cyan_green_weight), saturation 0.92, the cyan-blue boost nearly off; v3's hue rotations hold (blue 18 / green 20
-// deg fitted vs 17 / 24). Chart dE00 7.2 -> 5.3 at 0 EV (the fit), 7.5 / 7.2 / 7.6 -> 4.5 / 4.8 / 5.1 at -1 / +1 / +2 EV; chroma
-// 1.05 of the real. Left: the cyan hue is ~24 deg greener than real, blues +5 L*.
+// saturated (chroma 0.80 of the chart's, Noritsu 0.90, ours was 1.12) and renders saturated colours darker than a grey of the
+// same luminance, greens / cyans most (up to 21 L*): per-hue lightness, saturation and rotation (engine hue_lightness /
+// hue_saturation / hue_shift, knots red yellow green cyan blue magenta; Fujifilm documents its 3D LUT acting by hue: "blue sky,
+// ... highly saturated cyan/green, and luminosity of reds"), saturation 0.92, the cyan-blue boost nearly off; v3's hue
+// rotations hold (blue 18 / green 20 deg fitted vs 17 / 24). Chart dE00 7.2 -> 4.4 at 0 EV (the fit), 7.5 / 7.2 / 7.6 -> 4.0 /
+// 3.9 / 4.1 at -1 / +1 / +2 EV; chroma 1.06 and lightness +0.1 L* of the real. Left: the cyan hue ~18 deg greener than real.
 const V4_FRONTIER = { gradation_a: 9.6, black_point: 0.023, white_point: 0.97, shoulder_start: 0.95, shoulder_sharpness: 0,
-  saturation: 0.92, saturation_blue: 0.05, blue_hue_shift: 18, green_hue_shift: 20, cyan_green_darken: 0.46,
-  hue_saturation: [0.88, 1.06, 0.97, 1.04, 0.73, 0.64] };
+  saturation: 0.92, saturation_blue: 0.05, blue_hue_shift: 18, green_hue_shift: 20,
+  hue_lightness: [0.91, 0.92, 0.46, 0.75, 0.9, 0.96], hue_saturation: [0.88, 1.06, 0.97, 1.04, 0.73, 0.64], hue_shift: [3, 1, 6, 7, -5, 12] };
 const SCATTER_SCALE = 0.5;   // film scatter size multiplier (engine default 1), see renderParams
 // v3.32: dye-cloud blur 0.65 -> 0.45 (reference px, ~12 -> ~8 um): measured on 10 full-frame Gold 200 scans the grain has ~12 % of
 // its power below 40 um wavelength and r50 ~13.5 um; ours had 3 % / 18.6 um (soft). At 0.45

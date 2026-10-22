@@ -58,13 +58,13 @@ Run from a WORK directory (needs sf-eval, scripts/eval/build-sf-eval.sh; python 
     - a steeper short-wavelength flank of the green layer only moves the cyans 9.9 -> 8.2 and makes greens / blues worse;
     - a green sensor band at 559 nm fits better with fixed keys, but with refitted keys the gain is only 0.3-0.5 dE00, the
       blue gets worse, and the second-hand LED graph says 537 nm.
-  - Fix: a scanner-stage op, `cyan_green_darken` (engine frontier.rs `cyan_green_weight`). It darkens opponent hues ~112-214
-    deg in proportion to relative chroma (0.19-0.66), with the chromaticity kept. Fujifilm documents its 3D LUT acting on
+  - Fix: a scanner-stage op that darkens saturated colours, chromaticity kept. Fujifilm documents its 3D LUT acting on
     "highly saturated cyan/green" (IS&T ICIS 2006).
-  - Prototyped in Python on the rendered patches (`proto.py col_X.json`), then fitted with the engine: 0.46, refitted
-    together with saturation 0.92, blue 18 / green 20 deg.
-  - Result: greens / cyans lightness +3.8 / +9.9 -> +2.0 / +0.2 L*. dE00 at 0 / -1 / +1 / +2 EV: 5.7 / 4.8 / 5.2 / 5.4
-    (step 1: 6.6 / 6.0 / 6.4 / 6.5).
+    - First version: `cyan_green_darken`, opponent hues ~112-214 deg, in proportion to relative chroma (0.19-0.66),
+      prototyped with `proto.py`, fitted 0.46.
+    - It is now `hue_lightness` (step 4).
+  - Result with that first version: greens / cyans lightness +3.8 / +9.9 -> +2.0 / +0.2 L*. dE00 at 0 / -1 / +1 / +2 EV:
+    5.7 / 4.8 / 5.2 / 5.4 (step 1: 6.6 / 6.0 / 6.4 / 6.5).
 - **Step 3: chroma by hue.** After step 2 reds / skin / magentas / blues were 1.2-1.4x the real chroma, yellows / greens 1.0.
   Engine `hue_saturation` adds a saturation gain per hue (6 knots on the opponent hue: red, yellow, green, cyan, blue, magenta).
   It was prototyped on the rendered patches (`proto_hs.py`, fit at 0 EV, tested on the others), then refitted with the engine:
@@ -86,5 +86,14 @@ Run from a WORK directory (needs sf-eval, scripts/eval/build-sf-eval.sh; python 
     - 0.6 leaves +24 / +24 / +12;
     - 0.85 leaves +19 / +18 / +6.
   - v4 uses 0.68 (app.js V4_AUTO), a lower bound: the light's temperature is not known.
+- **Step 4: lightness and hue by hue.** After step 3, saturated colours of every hue were still lighter than real (blues
+  +4.8 L*), and the cyans were 24 deg greener.
+  - Engine `hue_lightness` (6 knots, the same chroma ramp 0.19-0.66) replaces `cyan_green_darken`; `hue_shift` (6 knots, deg,
+    luminance kept) is added.
+  - Prototyped with `proto_hl.py` on renders without the old op (fit at 0 EV, tested on the others):
+    - lightness 0.91 / 0.92 / 0.46 / 0.75 / 0.90 / 0.96;
+    - rotation 3 / 1 / 6 / 7 / -5 / 12 deg.
+  - Engine, keys refitted: dE00 0 / -1 / +1 / +2 EV 4.4 / 4.0 / 3.9 / 4.1 (step 3: 5.3 / 4.5 / 4.8 / 5.1). Chroma 1.06 and
+    lightness +0.1 L* of the real; blues +1.8 L*; cyan hue -18 deg.
 - **Open questions.**
-  - The cyan hue is ~24 deg greener than real; the blues are +5 L*.
+  - The cyan hue is still ~18 deg greener than real (7 patches) and violets -18 deg (3 patches).

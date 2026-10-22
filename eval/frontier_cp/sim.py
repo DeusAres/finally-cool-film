@@ -10,12 +10,15 @@ NAMES = [f"{'ABCDEFGHIJKLMN'[c]}{r + 1}" for c in range(14) for r in range(10)]
 W, H, PITCH, PATCH, R = 1564, 1041, 38, 30, 7
 # Choices: the SG body is its own black (A2, L* 8); the surround a neutral L* 70 (the wall's true colour is unknown);
 # Kodak Q-13 steps 0.05 + 0.10 i reflection density (nominal, unverified).
-# SIM_SURROUND: L* of the surround (70 = the fits; the wall reads ~55 against the SG greys); SIM_DATA: another web/data (experiments).
-SURROUND, BODY = float(os.environ.get("SIM_SURROUND", 70.0)), 8.05
+# SIM_SURROUND: surround L* or "L,a,b" (70 = the colour / tone fits; the real wall reads ~55, 2.5, 0); SIM_DATA: another web/data.
+_S = [float(v) for v in os.environ.get("SIM_SURROUND", "70").split(",")]
+SURROUND, BODY = (_S + [0.0, 0.0])[:3], 8.05   # surround Lab (L or "L,a,b"); the SG body is its own black
+BOARD = os.environ.get("SIM_BOARD") == "1"   # the real frame's white board: bottom right, ~10 % of the frame, L* 92 (a choice)
 RAMP_LOG = np.linspace(-2.8, 0.1, 59)
 def lab_lin(L): return lab2lin(np.array([L, 0, 0]))
 def scene():
-    img = np.tile(lab_lin(SURROUND), (H, W, 1))
+    img = np.tile(lab2lin(np.array(SURROUND)), (H, W, 1))
+    if BOARD: img[int(0.68 * H):, int(0.62 * W):int(0.95 * W)] = lab_lin(92.0)
     x0, y0 = 120, 250
     img[y0 - 40:y0 + 10 * PITCH + 20, x0 - 40:x0 + 14 * PITCH + 20] = lab_lin(BODY)
     cen = {}
