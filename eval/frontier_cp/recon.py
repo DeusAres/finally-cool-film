@@ -9,7 +9,7 @@ from sgref import REF
 R = os.environ.get('CP_SLIDER', 'slider')   # the Color Precision tool's slider/ folder (Charts, Studio, Daylight, ...)
 real = json.load(open('real.json')); studio = json.load(open('real_studio.json')); names = real['names']
 ref = np.array([REF[n] for n in names]); neu = np.hypot(ref[:, 1], ref[:, 2]) < 3
-ch = json.load(open('charts_measure.json'))   # Spyder patches of the Charts frames (the research script measure_charts, as in the session notes)
+ch = json.load(open('charts_measure.json'))   # Spyder (and Kodak) patches of the Charts frames: measure_charts.py
 SPY_C = [(2425, 465), (2425, 590), (2425, 717), (2425, 845), (2425, 970), (2425, 1095)]   # Charts frame, Spyder grey column E1-E6
 SPY_D = [(2465, 807), (2465, 927), (2465, 1047), (2465, 1167), (2465, 1287), (2465, 1407)]   # Daylight frame
 def curve(realL, refL):   # monotone map scan L* -> reference L*
