@@ -70,17 +70,21 @@ Run from a WORK directory (needs sf-eval, scripts/eval/build-sf-eval.sh; python 
   It was prototyped on the rendered patches (`proto_hs.py`, fit at 0 EV, tested on the others), then refitted with the engine:
   0.88 / 1.06 / 0.97 / 1.04 / 0.73 / 0.64. dE00 0 / -1 / +1 / +2 EV: 5.3 / 4.5 / 4.8 / 5.1 (step 2: 5.7 / 4.8 / 5.2 / 5.4);
   chroma 1.05 of the real overall.
-- **AutoSetup colour strength (tungsten frame).**
-  - Real Frontier, tungsten over daylight, greys dark / mid / light: b* +12 / +25 / +14, a* -4 at mid (the red goes). The
-    Noritsu corrects more.
-  - Ours, under a simulated 3200 K (`sim.run(..., gains=(1.486, 1, 0.439))`, the Planckian / D65 ratio in Rec.2020):
-    - k_col 0.3 (v3): +29 / +35 / +26, a* +9;
-    - k_col 0.7: +24 / +24 / +12;
-    - k_col 1.0: +19 / +18 / +6.
-  - v4 now uses k_col 0.8 (app.js V4_K_COL). The light's temperature is not known: warmer than 3200 K would need more.
+- **AutoSetup (density and colour).** The PNGs' Lightroom settings (XMP) are all 0, with a linear curve and white balance as
+  shot. So brightness and casts are the lab's, not a post adjustment.
+  - Density. The real Frontier lands the SG mid grey at L* 67.9 / 66.8 / 69.2 / 68.6 for -1 / 0 / +1 / +2 EV: full compensation,
+    a bright level. Ours, on a reconstructed frame (`SIM_SURROUND=55,2.5,0` the wall, `SIM_BOARD=1` the white board;
+    `autolevel.py`), gave 45.1 / 50.0 / 52.9 / 57.2.
+  - With strength 1.0 (full; 0.85 leaves 62 -> 72 over the EVs) and target_offset 0.16: 67.4 / 68.3 / 68.0 / 69.3. The
+    clamp_density 0.45 does not bind.
+  - The target lifts the density key of every frame by 0.93 EV. The thin-negative ramp moves by as much (0.8 / 1.6 -> 1.73 /
+    2.53); otherwise it switched the colour correction off on every frame.
+  - Colour, from the tungsten frame. Real Frontier, tungsten over daylight, greys dark / mid / light: b* +12 / +25 / +14, a* -4
+    at mid (the red goes). The Noritsu corrects more. Ours, under a simulated 3200 K (`sim.run(..., gains=(1.486, 1, 0.439))`,
+    the Planckian / D65 ratio in Rec.2020), with k_col x strength:
+    - 0.26 (v3) leaves +29 / +35 / +26, a* +9;
+    - 0.6 leaves +24 / +24 / +12;
+    - 0.85 leaves +19 / +18 / +6.
+  - v4 uses 0.68 (app.js V4_AUTO), a lower bound: the light's temperature is not known.
 - **Open questions.**
   - The cyan hue is ~24 deg greener than real; the blues are +5 L*.
-  - The real scans are brighter at Auto: SG mid grey L* 67 F / 70 N, ours ~51 with a surround of the wall's measured
-    brightness. How much of that is the "minor exposure adjustment" in post is unknown, so the level is not changed.
-  - AutoSetup compensates the exposure fully on the real machines (Kodak mid step within 2-3 L* over -1..+2 EV); ours drifts
-    ~+11 L*. In the app Auto meters the scene first, so this only shows when Esposizione is moved after Auto.

@@ -165,7 +165,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
         // the magenta key goes greener with Contrasto (-0.03 per unit): Contrasto amplifies the scene's red-magenta in the light mids (white
         // fur turned pink). warm_hue_shift / saturation_warm off for every photo (v3.19's sunset tuning turned yellow-orange fur pink).
         model: { saturation: 1.01, saturation_blue: 0.15, blue_hue_shift: 17, green_hue_shift: 24, saturation_warm: 0, warm_hue_shift: 0, cool_neutral_warm: interno() ? 0 : 1.0, highlight_neutral: 0.6, balance_cmy: interno() ? [0, -0.03 - 0.03 * Math.max(u.contrast, 0), 0.0] : [0, 0.005, 0.02], sensor_peak_nm: [650, 540, 450], sensor_fwhm_nm: [40, 50, 40],
-                 black_point: 0.012, gradation_a: 6.2, setup_toe_slope: interno() ? [1.4, 0.92] : [0.9, 1.0], setup_neutral_ev: interno() ? 2.0 : 1.5, auto: { k_col: 0.3, ...(V4 ? { neutral_sigma: V4_NEUTRAL_SIGMA, k_col: V4_K_COL } : {}) },
+                 black_point: 0.012, gradation_a: 6.2, setup_toe_slope: interno() ? [1.4, 0.92] : [0.9, 1.0], setup_neutral_ev: interno() ? 2.0 : 1.5, auto: { k_col: 0.3, ...(V4 ? { neutral_sigma: V4_NEUTRAL_SIGMA, ...V4_AUTO } : {}) },
                  ...(V4 ? V4_FRONTIER : {}) },
       },
     },
@@ -1104,12 +1104,17 @@ const V4_STOCK = { film_render: { layer_speed_ev: [0.75, 0, 0] } };
 // green park ORF Y key -0.065 -> -0.018 (its grey path no longer pink), tungsten cat C +0.035 -> +0.024 (a real cast still read),
 // neutral frames within 0.01. 0.03 / 0.1 bracket it (-0.014 / -0.023 on the park); 0.06 is the middle, a choice.
 const V4_NEUTRAL_SIGMA = 0.06;
-// v4 Frontier AutoSetup colour strength (engine FrontierAutoParams.k_col; v3 0.3, a choice: "a lab corrects part of a tungsten
-// cast"). The real Frontier's tungsten chart frame (eval/frontier_cp) keeps b* +12 / +25 / +14 over its daylight frame (dark /
-// mid / light greys) and takes the red out (a* -4); ours at 0.3 under a 3200 K simulation kept +29 / +35 / +26 and a* +9. 0.7 /
-// 1.0 leave +24 / +24 / +12 and +19 / +18 / +6: 0.8 matches the mean. The studio light's temperature is not known (3200 K
-// assumed): warmer light would mean an even stronger correction, so 0.8 is a lower bound.
-const V4_K_COL = 0.8;
+// v4 Frontier AutoSetup, from the real Frontier's Gold 200 chart frames (eval/frontier_cp; their Lightroom export has every
+// setting at 0, so brightness and casts are the lab's). Density: the real machine lands the chart's mid grey at L* 67.9 / 66.8 /
+// 69.2 / 68.6 for -1 / 0 / +1 / +2 EV (full compensation); ours (v3 strength 0.85, target 0.0109) gave 45.1 / 50.0 / 52.9 /
+// 57.2 on the reconstructed frame (wall L* 55, white board): strength 1.0 (full) and target_offset 0.16 give 67.4 / 68.3 /
+// 68.0 / 69.3. The target lifts every frame's density key by 0.93 EV (measured), so the thin-negative ramp (thin_ev_lo / hi,
+// colour reading of Interno's thin negatives) moves by as much: 0.8 / 1.6 -> 1.73 / 2.53. Colour: k_col x strength 0.68 (v3
+// 0.3 x 0.85). The tungsten frame keeps b* +12 / +25 / +14 over daylight (dark / mid / light greys) and takes the red out (a*
+// -4); ours at v3's 0.26 kept +29 / +35 / +26 and a* +9 under a simulated 3200 K; 0.6 / 0.85 leave +24 / +24 / +12 and
+// +19 / +18 / +6: 0.68 matches the mean. The light's temperature is not known (3200 K assumed): warmer light would mean an
+// even stronger correction, so this is a lower bound.
+const V4_AUTO = { strength: 1.0, target_offset: 0.16, thin_ev_lo: 1.73, thin_ev_hi: 2.53, k_col: 0.68 };
 // v4 Frontier tone and colour, fitted to a real Frontier (eval/frontier_cp, eval/V4.md): the Color Precision film comparison tool's
 // Gold 200 chart frames (ColorChecker SG + Kodak grey scale, -1..+2 EV; the same negatives also on a Noritsu), our v4 Frontier
 // rendering the same patches on CPU with the operator's density / C M Y keys as free nuisances. Tone: grey L* rms 2.6 -> 1.2;
