@@ -21,6 +21,8 @@ Run from a WORK directory (needs sf-eval, scripts/eval/build-sf-eval.sh; python 
     python3 -I fit_tone.py Frontier gradation_a,black_point,white_point '{"shoulder_sharpness":0,"shoulder_start":0.95}'
     python3 -I fit_colour.py NAME '{tone}' '[density,c,m,y]' saturation,saturation_blue,blue_hue_shift,green_hue_shift
     python3 -I colour.py NAME '{model}' EV        # nuisance keys fitted on the greys, then chroma / hue / L by hue family
+    python3 -I probe.py NAME '{sf-eval overrides}'  # one render, fixed keys: lightness vs the grey of the same reference L*, by family
+    python3 -I proto_hs.py col_0.json:Gold-0EV-Frontier col_m1.json:Gold-minus1EV-Frontier ...   # per-hue saturation prototype
     python3 -I grid.py out.png Gold-0EV-Frontier col_A.json col_B.json   # split patches: real | renders
 
 ## Method
@@ -49,9 +51,35 @@ Run from a WORK directory (needs sf-eval, scripts/eval/build-sf-eval.sh; python 
 - **Colour.** The real Frontier keeps 0.80 of the chart's chroma (Noritsu 0.90, the old v4 1.12): saturation 0.84. The cyan-blue
   boost of v3.16 goes (0.15 -> 0.05). v3's hue rotations are confirmed (fitted 22 / 20 deg vs 17 / 24). dE00 7.2 -> 6.6
   (0 EV, fitted), 7.5 / 7.2 / 7.6 -> 6.0 / 6.4 / 6.5 (-1 / +1 / +2 EV, held out).
+- **Step 2: saturated greens and cyans.** After step 1 they were 5-11 L* (vivid greens up to 21 L*) lighter than on the real
+  Frontier, measured against a grey of the same reference L* (`probe.py`, so the keys do not matter).
+  - Ruled out by experiment:
+    - DIR inhibition 0.6 helps but is film stage, and gold200 wants 1.0;
+    - a steeper short-wavelength flank of the green layer only moves the cyans 9.9 -> 8.2 and makes greens / blues worse;
+    - a green sensor band at 559 nm fits better with fixed keys, but with refitted keys the gain is only 0.3-0.5 dE00, the
+      blue gets worse, and the second-hand LED graph says 537 nm.
+  - Fix: a scanner-stage op, `cyan_green_darken` (engine frontier.rs `cyan_green_weight`). It darkens opponent hues ~112-214
+    deg in proportion to relative chroma (0.19-0.66), with the chromaticity kept. Fujifilm documents its 3D LUT acting on
+    "highly saturated cyan/green" (IS&T ICIS 2006).
+  - Prototyped in Python on the rendered patches (`proto.py col_X.json`), then fitted with the engine: 0.46, refitted
+    together with saturation 0.92, blue 18 / green 20 deg.
+  - Result: greens / cyans lightness +3.8 / +9.9 -> +2.0 / +0.2 L*. dE00 at 0 / -1 / +1 / +2 EV: 5.7 / 4.8 / 5.2 / 5.4
+    (step 1: 6.6 / 6.0 / 6.4 / 6.5).
+- **Step 3: chroma by hue.** After step 2 reds / skin / magentas / blues were 1.2-1.4x the real chroma, yellows / greens 1.0.
+  Engine `hue_saturation` adds a saturation gain per hue (6 knots on the opponent hue: red, yellow, green, cyan, blue, magenta).
+  It was prototyped on the rendered patches (`proto_hs.py`, fit at 0 EV, tested on the others), then refitted with the engine:
+  0.88 / 1.06 / 0.97 / 1.04 / 0.73 / 0.64. dE00 0 / -1 / +1 / +2 EV: 5.3 / 4.5 / 4.8 / 5.1 (step 2: 5.7 / 4.8 / 5.2 / 5.4);
+  chroma 1.05 of the real overall.
+- **AutoSetup colour strength (tungsten frame).**
+  - Real Frontier, tungsten over daylight, greys dark / mid / light: b* +12 / +25 / +14, a* -4 at mid (the red goes). The
+    Noritsu corrects more.
+  - Ours, under a simulated 3200 K (`sim.run(..., gains=(1.486, 1, 0.439))`, the Planckian / D65 ratio in Rec.2020):
+    - k_col 0.3 (v3): +29 / +35 / +26, a* +9;
+    - k_col 0.7: +24 / +24 / +12;
+    - k_col 1.0: +19 / +18 / +6.
+  - v4 now uses k_col 0.8 (app.js V4_K_COL). The light's temperature is not known: warmer than 3200 K would need more.
 - **Open questions.**
-  - Saturated greens and cyans are 5-11 L* lighter than the real machine: a stage that keeps luminance, as saturation does,
-    cannot fix it.
+  - The cyan hue is ~24 deg greener than real; the blues are +5 L*.
   - The real scans are brighter at Auto: SG mid grey L* 67 F / 70 N, ours ~51 with a surround of the wall's measured
     brightness. How much of that is the "minor exposure adjustment" in post is unknown, so the level is not changed.
   - AutoSetup compensates the exposure fully on the real machines (Kodak mid step within 2-3 L* over -1..+2 EV); ours drifts

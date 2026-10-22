@@ -358,6 +358,13 @@ pub struct FrontierModelParams {
     /// Share (0..1) of the chroma removed from pale, light, yellow-orange tones (see `pale_light_neutral`): whites that
     /// come out cream. Luminance kept; mids, saturated yellows, skin untouched. 0 = off.
     pub highlight_neutral: f64,
+    /// Share (0..1) of the light taken from saturated green-cyan tones (see `cyan_green_weight`), chromaticity kept: the real
+    /// Frontier renders them darker than a neutral of the same luminance (Fujifilm, IS&T ICIS 2006: its 3D LUT handles
+    /// "highly saturated cyan/green"; measured on Gold 200 charts, eval/frontier_cp). 0 = off.
+    pub cyan_green_darken: f64,
+    /// Saturation gain per hue on top of `saturation`, at the opponent hues of red, yellow, green, cyan, blue, magenta
+    /// (30, 90, ... 330 deg), smooth in between (see `hue_gain`). All 1 = off.
+    pub hue_saturation: [f64; 6],
     /// Film-type balance of this stock (Fuji "film master" setup): fixed C, M, Y
     /// offset in logD, same sign as `FrontierParams::cmy` (+ = more of that
     /// colour). Applied with the keys but outside AutoSetup, which keeps
@@ -394,6 +401,8 @@ impl Default for FrontierModelParams {
             warm_hue_shift: 0.0,
             cool_neutral_warm: 0.0,
             highlight_neutral: 0.0,
+            cyan_green_darken: 0.0,
+            hue_saturation: [1.0; 6],
             balance_cmy: [0.0, 0.0, 0.02],
             auto: FrontierAutoParams::default(),
         }

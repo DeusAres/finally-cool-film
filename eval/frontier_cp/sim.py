@@ -10,6 +10,7 @@ NAMES = [f"{'ABCDEFGHIJKLMN'[c]}{r + 1}" for c in range(14) for r in range(10)]
 W, H, PITCH, PATCH, R = 1564, 1041, 38, 30, 7
 # Choices: the SG body is its own black (A2, L* 8); the surround a neutral L* 70 (the wall's true colour is unknown);
 # Kodak Q-13 steps 0.05 + 0.10 i reflection density (nominal, unverified).
+# SIM_SURROUND: L* of the surround (70 = the fits; the wall reads ~55 against the SG greys); SIM_DATA: another web/data (experiments).
 SURROUND, BODY = float(os.environ.get("SIM_SURROUND", 70.0)), 8.05
 RAMP_LOG = np.linspace(-2.8, 0.1, 59)
 def lab_lin(L): return lab2lin(np.array([L, 0, 0]))
@@ -35,7 +36,7 @@ def scene():
     return img.astype(np.float32), cen, kd, ramp
 def openblas():
     return os.path.dirname(subprocess.run(f'find {ROOT}/engine/target/release/build -name "libopenblas*.so*"', shell=True, capture_output=True, text=True).stdout.split()[0])
-def run(name, overrides, evs):
+def run(name, overrides, evs, gains=(1.0, 1.0, 1.0)):   # gains: the illuminant, per channel (tungsten: 1.486, 1, 0.439)
     import mkfrontier
     from PIL import Image
     img, cen, kd, ramp = scene(); np.save(f'scene_{name}.npy', img)
@@ -44,7 +45,7 @@ def run(name, overrides, evs):
     for ev in evs:
         k = 2 ** ev; out = f'sim_{name}_{ev:+g}.png'
         r = subprocess.run([f'{ROOT}/engine/target/release/sf-eval', 'image', '--params', f'p_{name}.json', '--in', f'scene_{name}.npy', '--out', out,
-                            '--output-space', 'bt2020', '--under', '0', '--gains', f'{k},{k},{k}', '--data', f'{ROOT}/web/data'],
+                            '--output-space', 'bt2020', '--under', '0', '--gains', ','.join(str(k * g) for g in gains), '--data', os.environ.get('SIM_DATA', f'{ROOT}/web/data')],
                            env=dict(os.environ, LD_LIBRARY_PATH=openblas()), capture_output=True, text=True)
         if r.returncode: sys.exit(r.stderr)
         enc = np.asarray(Image.open(out).convert('RGB')).astype(float) / 255

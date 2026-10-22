@@ -389,6 +389,8 @@ impl FrontierBase {
             warm_shift: m.warm_hue_shift,
             cool_warm: m.cool_neutral_warm,
             hl_neutral: m.highlight_neutral,
+            cg_darken: m.cyan_green_darken.clamp(0.0, 0.95),
+            hue_sat: m.hue_saturation.map(|g| g.max(0.0)),
             whites: (keys.whites as f64).clamp(-1.0, 1.0),
             whites_x0: Gradation::solve(m.gradation_a, sh, m).knee_x() - WHITES_REACH,
             out: IDENTITY,
@@ -613,6 +615,10 @@ pub struct Stage {
     cool_warm: f64,
     /// Share of the warm chroma removed from pale light tones (see `FrontierModelParams::highlight_neutral`).
     hl_neutral: f64,
+    /// Share of the light taken from saturated green-cyan tones (see `FrontierModelParams::cyan_green_darken`).
+    cg_darken: f64,
+    /// Saturation gain per hue (see `FrontierModelParams::hue_saturation`).
+    hue_sat: [f64; 6],
     /// Encoded slope of the gradation at mid grey (the film's mid-tone density -> level slope).
     mid_slope: f64,
     /// Linear sRGB (the model's working primaries) -> linear output primaries.
@@ -789,6 +795,10 @@ impl Stage {
         if self.hl_neutral != 0.0 {
             lin = pale_light_neutral(&lin, l, self.hl_neutral);
         }
+        if self.cg_darken != 0.0 {
+            let k = 1.0 - self.cg_darken * cyan_green_weight(&lin, l);
+            lin = lin.map(|v| v * k);
+        }
         let sat = if self.sat_blue != 0.0 {
             // cyan-blue hues, light ones only: the gain fades out below SAT_BLUE_L (linear luma), so dark blues (the chart's
             // blue sky, deep shadows) keep their chroma while a bright sky gets the full boost
@@ -796,13 +806,52 @@ impl Stage {
             self.sat * (1.0 + self.sat_blue * blue_weight(&lin) * t * t * (3.0 - 2.0 * t))
         } else {
             self.sat
-        } * (1.0 + self.sat_warm * ww);
+        } * (1.0 + self.sat_warm * ww)
+            * if self.hue_sat == [1.0; 6] { 1.0 } else { hue_gain(&lin, &self.hue_sat) };
         let lin = lin.map(|v| (l + sat * (v - l)).clamp(0.0, 1.0));
         // Working space = sRGB primaries, whatever the output: only this last matrix
         // (and the sRGB transfer) knows the output space.
         let o = |r: &[f64; 3]| (r[0] * lin[0] + r[1] * lin[1] + r[2] * lin[2]).clamp(0.0, 1.0);
         [srgb_encode(o(&self.out[0])), srgb_encode(o(&self.out[1])), srgb_encode(o(&self.out[2]))]
     }
+}
+
+/// Opponent hue band (soft edges: up from .0, full at .1; down from .2, none at .3) and relative chroma ramp (opponent
+/// chroma / linear luma) of `cyan_green_darken`. Fitted on the Gold 200 chart frames of a real Frontier (eval/frontier_cp,
+/// v4 at 0 EV, with the hue band's edges ±15 deg): the excess lightness is on greens to cyans (hue ~115-240, up to 21 L* on
+/// vivid greens), none on pastels (relative chroma < 0.1) or other hues.
+const CG_HUE: (f64, f64, f64, f64) = (97.0, 127.0, 199.0, 229.0);
+const CG_CHROMA: (f64, f64) = (0.19, 0.66);
+
+/// Weight (0..1) of the saturated green-cyan tones darkened by `cyan_green_darken` (see `CG_HUE`, `CG_CHROMA`).
+fn cyan_green_weight(lin: &[f64; 3], l: f64) -> f64 {
+    let o1 = (lin[0] - lin[1]) * std::f64::consts::FRAC_1_SQRT_2;
+    let o2 = (lin[0] + lin[1] - 2.0 * lin[2]) / 6f64.sqrt();
+    let c = (o1 * o1 + o2 * o2).sqrt();
+    if c < 1e-9 || l <= 1e-6 {
+        return 0.0;
+    }
+    let h = o2.atan2(o1).to_degrees().rem_euclid(360.0);
+    smooth(CG_HUE.0, CG_HUE.1, h) * (1.0 - smooth(CG_HUE.2, CG_HUE.3, h)) * smooth(CG_CHROMA.0, CG_CHROMA.1, c / l)
+}
+
+/// `hue_saturation` at the pixel's opponent hue: each knot (red 30, yellow 90, ... magenta 330 deg) weighs smoothstep(1 - |d| / 60)
+/// of its hue distance d, normalised; greys (no hue) get 1.
+fn hue_gain(lin: &[f64; 3], g: &[f64; 6]) -> f64 {
+    let o1 = (lin[0] - lin[1]) * std::f64::consts::FRAC_1_SQRT_2;
+    let o2 = (lin[0] + lin[1] - 2.0 * lin[2]) / 6f64.sqrt();
+    if o1 * o1 + o2 * o2 < 1e-12 {
+        return 1.0;
+    }
+    let h = o2.atan2(o1).to_degrees().rem_euclid(360.0);
+    let (mut sw, mut sg) = (0.0, 0.0);
+    for (i, gi) in g.iter().enumerate() {
+        let d = ((h - (30.0 + 60.0 * i as f64) + 180.0).rem_euclid(360.0) - 180.0).abs();
+        let w = smooth(0.0, 1.0, 1.0 - d / 60.0);
+        sw += w;
+        sg += w * gi;
+    }
+    if sw > 0.0 { sg / sw } else { 1.0 }
 }
 
 /// Linear-luma ramp (full below, none above) of the `blue_hue_shift` rotation.
@@ -1392,6 +1441,29 @@ mod tests {
         for px in ends.data.chunks(3) {
             assert!((px[0] - px[2]).abs() < 0.08, "ramp ends far from neutral: {px:?}");
         }
+    }
+
+    #[test]
+    fn cyan_green_weight_takes_saturated_greens_and_cyans_only() {
+        let w = |lin: [f64; 3]| super::cyan_green_weight(&lin, super::LUMA[0] * lin[0] + super::LUMA[1] * lin[1] + super::LUMA[2] * lin[2]);
+        assert!(w([0.03, 0.25, 0.04]) > 0.99, "vivid green");
+        assert!(w([0.02, 0.2, 0.16]) > 0.99, "teal");
+        assert!(w([0.02, 0.2, 0.25]) > 0.0, "cyan (hue 222: on the band's falling edge)");
+        assert_eq!(w([0.18, 0.18, 0.18]), 0.0, "grey");
+        assert_eq!(w([0.5, 0.05, 0.03]), 0.0, "red");
+        assert_eq!(w([0.5, 0.35, 0.05]), 0.0, "yellow-orange");
+        assert_eq!(w([0.06, 0.06, 0.4]), 0.0, "deep blue");
+        assert!(w([0.55, 0.62, 0.6]) < 1e-9, "pale cyan-green (relative chroma < 0.19)");
+    }
+
+    #[test]
+    fn hue_gain_hits_the_knots_and_is_one_on_grey() {
+        let g = [0.8, 1.1, 0.9, 1.0, 0.7, 0.6];
+        assert_eq!(super::hue_gain(&[0.2, 0.2, 0.2], &g), 1.0);
+        // red (opponent hue ~30) and pure blue (~270)
+        assert!((super::hue_gain(&[0.5, 0.05, 0.03], &g) - 0.8).abs() < 0.05);
+        assert!((super::hue_gain(&[0.06, 0.06, 0.4], &g) - 0.7).abs() < 1e-6);
+        assert_eq!(super::hue_gain(&[0.5, 0.05, 0.03], &[1.0; 6]), 1.0);
     }
 
     #[test]
