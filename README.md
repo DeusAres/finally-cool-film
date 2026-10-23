@@ -63,6 +63,13 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   ciano / blu / magenta): verdi e ciani saturi non più troppo chiari, rossi / magenta / blu non più troppo saturi; errore
   sulle chart ΔE00 6.6 → 4.4 (le altre esposizioni 6.0–6.5 → 3.9–4.1). AutoSetup: compensa del tutto l'esposizione e
   corregge di più le dominanti calde (come il Frontier vero sotto tungsteno); luminosità come prima.
+  v3.48: scheda Scanner con **Noritsu** (tarato sulle scansioni Noritsu vere di Color Precision: bianchi più aperti, ombre
+  calde, AutoSetup che non schiarisce le scene scure) e i **controlli del laboratorio** per Frontier e Noritsu (Densità D,
+  Gradazione Soft3…Hard2, Tono luci / ombre, Saturazione, Bright, livelli dal manuale SP-3000). Hyper Tone lavora
+  sull'immagine scansionata (prima non agiva sulle foto che l'AutoSetup schiarisce, es. controluce). **Nessuno**: la
+  scansione è sull'asse dei grigi della Gold e l'inversione ha un solo nero / bianco: i tramonti non diventano più ciano
+  (il cielo resta grigio-azzurro come nel DNG), rocce in ombra e pelo bianco tornano neutri. Crediti e licenze nella
+  scheda File.
 - **v3.42 (tutte le versioni)**: export raw meno pesante in memoria (strisce a mezza precisione dal worker, il file non è più
   copiato), una foto scelta sopra un'altra ancora in decodifica la annulla senza errori, l'export non si sovrappone più a un
   caricamento, gli export da JPEG non portano più la miniatura EXIF dell'originale, avvio / aggiornamento toccabili.
