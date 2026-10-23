@@ -94,6 +94,39 @@
     ]
    }
   },
+  "v4_sky": {
+   "photo": "samples/indigo/IDG_20261022_182651_466",
+   "query": "?v4",
+   "ui": {}
+  },
+  "v4_sky_frontier": {
+   "photo": "samples/indigo/IDG_20261022_182651_466",
+   "query": "?v4",
+   "ui": {
+    "_click": [
+     "scanFrontier"
+    ]
+   }
+  },
+  "v4_sky_noritsu": {
+   "photo": "samples/indigo/IDG_20261022_182651_466",
+   "query": "?v4",
+   "ui": {
+    "_click": [
+     "scanNoritsu"
+    ]
+   }
+  },
+  "v4_sky_frontier_ht": {
+   "photo": "samples/indigo/IDG_20261022_182651_466",
+   "query": "?v4",
+   "ui": {
+    "htHi": 5,
+    "_click": [
+     "scanFrontier"
+    ]
+   }
+  },
   "v4_rock_hypertone": {
    "photo": "samples/indigo/IDG_20261011_134131_210",
    "query": "?v4",

@@ -1,6 +1,6 @@
 // Hyper Tone map (the Frontier scanner's local tone control; engine params.rs HyperToneParams): a low-resolution base of the
-// frame's log exposure that is smooth inside regions and changes only at their edges, in EV from mid grey as the film is
-// exposed (0.18 x the exposure gain), beyond DEAD_EV: a recovery of the frame's extremes, not of what is dark or bright
+// frame's log exposure that is smooth inside regions and changes only at their edges, in EV from mid grey as the scanner
+// renders it (0.18 x the gain: the film's exposure and the AutoSetup's density key, app.js syncHyperMap), beyond DEAD_EV: a recovery of the frame's extremes, not of what is dark or bright
 // relative to the rest (a frame that is mostly dark rock has its median there, and its shadows were left alone).
 // The engine moves each pixel's film density by -level x this map (the same on the three layers, as the scanner's signal), so
 // large bright areas are scanned darker and large dark ones lighter while the detail inside them stays (it is not in the map).

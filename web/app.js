@@ -306,14 +306,17 @@ function hyperSharp(u, region) {
   return { unsharp_mask: [HS_UM * kpx, u.hypersharp * HS_MAX], unsharp_threshold: [HS_T0 * gate, HS_T1 * gate] };
 }
 
-/** The photo's Hyper Tone map in the engine (built once per photo and turn, from its thumb at HYPER_THUMB_PX, lib/hypertone.js),
- * when Hyper Tone acts. */
+/** The photo's Hyper Tone map in the engine (built once per photo, turn and scanner density, from its thumb at HYPER_THUMB_PX,
+ * lib/hypertone.js), when Hyper Tone acts. */
 function syncHyperMap(u) {
   if (!((u.htHi > 0 || u.htLo > 0) && scanner === 'frontier')) return;
-  if (!photo.hyper) {
+  // The thumb as the scanner renders it, as on the machine (Hypertone dodges the scanned image): Auto's exposure + baseline (v4 has
+  // no exposure slider) and the AutoSetup's density key (EV). Without the key a dark backlit frame that AutoSetup lifts by 2 EV
+  // left its sky outside the map's dead zone: Hyper Tone luci 5 did nothing while the sky lost its blue (sunset, measured).
+  const gain = 2 ** (photo.autoEv + baselineEv() + (photo.auto?.[0] ?? 0));
+  if (photo.hyper?.gain !== gain) {
     const { preview } = photo, raw = preview.raw, { rgb, w, h } = raw ? rawThumb(raw, HYPER_THUMB_PX) : jpegThumb(preview, HYPER_THUMB_PX);
-    // the thumb as the film sees it (Auto's exposure + baseline: v4 has no exposure slider, so it is fixed per photo)
-    photo.hyper = hyperToneMap(rgb, w, h, LUMA[raw || preview.p3 ? 'rec2020' : 'srgb'], 2 ** (photo.autoEv + baselineEv()));   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
+    photo.hyper = { ...hyperToneMap(rgb, w, h, LUMA[raw || preview.p3 ? 'rec2020' : 'srgb'], gain), gain };   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
     log(`hyper tone map ${photo.hyper.w}x${photo.hyper.h}`);
   }
   if (engine.hyperFor !== photo.hyper) {

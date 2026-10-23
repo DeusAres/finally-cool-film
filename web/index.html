@@ -77,6 +77,8 @@
   .row.act { display: flex; justify-content: flex-end; }
   .row.act .btn { min-width: 96px; }
   .row label { font-size: 14px; color: var(--muted); }
+  .credits { margin: 14px 4px 4px; font-size: 12px; line-height: 1.5; color: var(--muted); }
+  .credits a { color: var(--muted); }
   .row output { font: 12px ui-monospace, Menlo, monospace; text-align: right; color: var(--muted); }
   .mouse-hint { display: none; }
   @media (hover: hover) and (pointer: fine) { .touch-hint { display: none; } .mouse-hint { display: inline; } }
@@ -191,6 +193,10 @@
   <div class="row"><label for="quality">Qualità JPEG</label><input type="range" id="quality" min="10" max="100" step="1" value="90"><output for="quality"></output></div>
   <div class="row toggle"><label for="border">Bordo bianco (1% del lato lungo)</label><input type="checkbox" id="border" role="switch" checked></div>
   <div class="filebtns"><button class="btn ghost wide" id="resetAll">Azzera impostazioni</button></div>
+  <p class="credits">Motore derivato da <a href="https://github.com/andreavolpato/spektrafilm" target="_blank" rel="noopener">spektrafilm</a> di Andrea Volpato
+    (via <a href="https://github.com/turbasvin/spektrafilm-rs" target="_blank" rel="noopener">spektrafilm-rs</a>), GPL-3.0; profili pellicola e LUT spettrale
+    di Andrea Volpato, <a href="data/SPEKTRAFILM_LICENSE.txt" target="_blank">CC BY-SA 4.0</a>, non modificati.
+    <a href="https://github.com/DeusAres/finally-cool-film" target="_blank" rel="noopener">Codice sorgente</a> (GPL-3.0).</p>
   </div>
   <div class="pane" data-pane="transform" role="tabpanel" hidden>
   <div class="filebtns">
