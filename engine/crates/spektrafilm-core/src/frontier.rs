@@ -376,7 +376,7 @@ impl FrontierBase {
             shift,
             curve: Gradation::solve(m.gradation_a, sh, m).with_highlight(h),
             tone: Tone::new(a / m.gradation_a, m, keys.debug_contrast_mode),
-            lift: keys.black_lift.clamp(0.0, 1.0) as f64 * m.black_lift_max,
+            lift: keys.black_lift.clamp(-1.0, 1.0) as f64 * m.black_lift_max,
             mid_slope: {
                 let g = Gradation::solve(m.gradation_a, m.shoulder_sharpness, m);
                 (g.curve(0.52) - g.curve(0.48)) / 0.04
@@ -741,7 +741,7 @@ impl Stage {
             x = x.map(|v| (v + d).clamp(0.0, 1.0));
         }
         for c in 0..3 {
-            y[c] = self.lift + (1.0 - self.lift) * self.curve.curve(x[c]);
+            y[c] = (self.lift + (1.0 - self.lift) * self.curve.curve(x[c])).max(0.0);   // a negative lift clips the deepest tones
         }
         // Chroma-preserving highlights. The sigmoid and its shoulder flatten the density
         // differences between the channels, so bright saturated colours come out pale.

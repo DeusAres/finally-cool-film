@@ -267,7 +267,7 @@ pub struct FrontierParams {
     pub whites: f32,
     /// Debug v3 only: contrast curve, 0 = highlight-locked (default), 1 = free sigmoid, 2 = rational remap.
     pub debug_contrast_mode: u32,
-    /// 0..1, raises black equally in R, G, B (scanner space, hue-neutral).
+    /// -1..1, raises (lowers, below 0: firmer, crushed shadows) black equally in R, G, B (scanner space, hue-neutral).
     pub black_lift: f32,
     /// AutoSetup result `[density_ev, c, m, y]` (set by the app from
     /// `Engine.frontier_auto_setup`), same units as `density` and `cmy`.
@@ -331,7 +331,7 @@ pub struct FrontierModelParams {
     /// Encoded black / white points of the curve.
     pub black_point: f64,
     pub white_point: f64,
-    /// Encoded black raised by `black_lift = 1`.
+    /// Encoded black raised by `black_lift = 1` (lowered by as much at -1, the deepest tones clipping at 0).
     pub black_lift_max: f64,
     /// Saturation about Rec.709 luminance (linear light) at `saturation = 1`.
     pub saturation: f64,

@@ -68,6 +68,7 @@ const ui = () => ({
   mshift: +$('mshift').value, yshift: +$('yshift').value, vibrance: +$('vibrance').value, temp: +$('temp').value, black: +$('black').value,
   grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value, sharp: +$('sharp').value,
   ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value, tilt: +$('tilt').value, htHi: +$('htHi').value, htLo: +$('htLo').value, hypersharp: +$('hypersharp').value,
+  labD: +$('labD').value, labGrad: +$('labGrad').value, labHi: +$('labHi').value, labLo: +$('labLo').value, labSat: +$('labSat').value, labBright: +$('labBright').value,
   ...(V3 ? { hlc: +$('hlc').value, shadows: +$('shadows').value, v3dodge: $('v3dodge').checked } : {}),   // v3: snapshotted with the rest (export tiles)
 });
 // CA slider is quadratic: realistic (subtle) amounts get most of the travel.
@@ -154,6 +155,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
         // v3.20: Alte luci / Bianchi below 0 darken the scene before the film (dodge.js, local, the negative keeps the detail); above 0 they
         // stay on the scanner curve (gentler than pushing the scene into the shoulder). v2 page: scanner only.
         cmy: frontierCmy(u), contrast: u.contrast, highlight: V3 ? Math.max(u.highlight, 0) : u.highlight, whites: V3 ? Math.max(u.whites, 0) : u.whites, black_lift: u.black,
+        ...(V4 ? labKeys(u) : {}),
         auto: photo.auto, ...(V3 ? { debug_contrast_mode: 3 } : {}),
         // v3.16 Gold 200 look (tuned on 3 samples with a Gold 200 reviewer; chart 96.9): saturation_blue lifts cyan / sky hues (215-243 deg in the LUT) only where light (linear luma 0.22-0.36), so the
         // dark chart blues and the skin / greens stay put; Y 0.02 (no C) warms midtones and lights; narrower B / farther R sensors;
@@ -167,7 +169,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
         // fur turned pink). warm_hue_shift / saturation_warm off for every photo (v3.19's sunset tuning turned yellow-orange fur pink).
         model: { saturation: 1.01, saturation_blue: 0.15, blue_hue_shift: 17, green_hue_shift: 24, saturation_warm: 0, warm_hue_shift: 0, cool_neutral_warm: interno() ? 0 : 1.0, highlight_neutral: 0.6, balance_cmy: interno() ? [0, -0.03 - 0.03 * Math.max(u.contrast, 0), 0.0] : [0, 0.005, 0.02], sensor_peak_nm: [650, 540, 450], sensor_fwhm_nm: [40, 50, 40],
                  black_point: 0.012, gradation_a: 6.2, setup_toe_slope: interno() ? [1.4, 0.92] : [0.9, 1.0], setup_neutral_ev: interno() ? 2.0 : 1.5, auto: { k_col: 0.3, ...(V4 ? { neutral_sigma: V4_NEUTRAL_SIGMA, ...(scanner === 'noritsu' ? V4_NORITSU_AUTO : V4_AUTO) } : {}) },
-                 ...(V4 ? (scanner === 'noritsu' ? V4_NORITSU : V4_FRONTIER) : {}) },
+                 ...(V4 ? labModel(u, scanner === 'noritsu' ? V4_NORITSU : V4_FRONTIER) : {}) },
       },
     },
     film_render: {
@@ -293,6 +295,26 @@ const HYPER_MAX = 0.5, HYPER_LEVELS = 5;
 const hyperLevel = (v) => (v / HYPER_LEVELS) * HYPER_MAX;
 const HYPER_NAMES = ['off', 'molto basso', 'basso', 'normale', 'alto', 'molto alto'];
 const HYPER_THUMB_PX = 512;   // the map's source thumb: its resolution is the map's (lib/hypertone.js MAP_LONG)
+// The lab operator's keys (Scanner tab, Frontier and Noritsu; SP-3000 manual, "Condition Setup and Maintenance" PP3-B1271E2:
+// density key, Gradation Selection Hard2..Soft3, Tone Adjustment highlight / shadow hard / soft, Saturation -9..+9, Bright Mode
+// colour intensity -2..+4). The manual gives the levels, not what a step does: the step sizes below are choices.
+// Densità: + = denser print (darker), the lab's sign; 1/4 EV per step (FrontierParams.density, EV, + = brighter).
+const LAB_D_EV = 0.25;
+// Gradazione: about 14 % of mid-tone slope per level (contrast key: slope x (1 + 1.9 c) up, x (1 + 0.85 c) down, frontier.rs).
+const GRAD_C = [-0.383, -0.271, -0.145, 0, 0.074, 0.157], GRAD_NAMES = ['Soft3', 'Soft2', 'Soft1', 'Normal', 'Hard1', 'Hard2'];
+// Tono luci / ombre (Tone Adjustment, one level each way): highlight key +-0.5 (Hard: opener, brighter lights; Soft: held down);
+// black lift +-0.15 of black_lift_max (Soft: lifted blacks; Hard: deeper, the darkest tones clip).
+const TONE_HI = 0.5, TONE_LO = 0.15, TONE_NAMES = ['Soft', 'Standard', 'Hard'];
+// Saturazione: 5 % per step on the scanner's saturation. Bright (Fujifilm: "saturation of primary colors ... without affecting
+// the saturation of neutral colors or skin tones", IS&T ICIS 2006): +8 % per step on the green, cyan, blue and magenta knots of
+// hue_saturation (red / yellow, where skin sits, untouched; greys have no hue).
+const LAB_SAT = 0.05, LAB_BRIGHT = 0.08;
+const labKeys = (u) => ({
+  density: -u.labD * LAB_D_EV, contrast: u.contrast + GRAD_C[u.labGrad + 3], highlight: u.highlight + u.labHi * TONE_HI,
+  black_lift: u.black - u.labLo * TONE_LO, saturation: 1 + u.labSat * LAB_SAT,
+});
+const labModel = (u, model) => (u.labBright === 0 ? model
+  : { ...model, hue_saturation: model.hue_saturation.map((g, i) => (i >= 2 ? g * (1 + u.labBright * LAB_BRIGHT) : g)) });
 // Hyper Sharpness (Scanner, Frontier; slider 0 = off): the engine's unsharp mask on the scan, gated by relative detail
 // (ScannerParams.unsharp_threshold) so the grain is left alone and only structure is sharpened (the real machine's version
 // fried the grain). Radius HS_UM on the film: about one Frontier scanner pixel (36 mm / ~3000 px; a choice). Amount at the
@@ -311,9 +333,9 @@ function hyperSharp(u, region) {
 function syncHyperMap(u) {
   if (!((u.htHi > 0 || u.htLo > 0) && scanner === 'frontier')) return;
   // The thumb as the scanner renders it, as on the machine (Hypertone dodges the scanned image): Auto's exposure + baseline (v4 has
-  // no exposure slider) and the AutoSetup's density key (EV). Without the key a dark backlit frame that AutoSetup lifts by 2 EV
+  // no exposure slider), the AutoSetup's density key (EV) and the operator's (Densità). Without the key a dark backlit frame that AutoSetup lifts by 2 EV
   // left its sky outside the map's dead zone: Hyper Tone luci 5 did nothing while the sky lost its blue (sunset, measured).
-  const gain = 2 ** (photo.autoEv + baselineEv() + (photo.auto?.[0] ?? 0));
+  const gain = 2 ** (photo.autoEv + baselineEv() + (photo.auto?.[0] ?? 0) - u.labD * LAB_D_EV);   // the operator's density key too
   if (photo.hyper?.gain !== gain) {
     const { preview } = photo, raw = preview.raw, { rgb, w, h } = raw ? rawThumb(raw, HYPER_THUMB_PX) : jpegThumb(preview, HYPER_THUMB_PX);
     photo.hyper = { ...hyperToneMap(rgb, w, h, LUMA[raw || preview.p3 ? 'rec2020' : 'srgb'], gain), gain };   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
@@ -814,6 +836,7 @@ async function setScanner(s) {
   scanner = s; store.set('fcf_scanner', s);
   for (const b of document.querySelectorAll('[data-scanner]')) b.setAttribute('aria-checked', String(b.dataset.scanner === s));
   $('frontierRows').hidden = scanner !== 'frontier';   // Hyper Tone / Hyper Sharpness are the Frontier's
+  $('labRows').hidden = neutralScan();   // the operator's keys of a lab scanner (Frontier, Noritsu)
   if (!photo || loadingPhoto) return;   // a photo still loading measures for this scanner in its own runAuto
   internoBusy++;   // an export waits for the switch (same guard as Interno)
   try {
@@ -1073,6 +1096,8 @@ const FORMAT = {
   ca: pctOff, vignette: pctOff,
   falloff: pct,
   texture: signPct, clarity: signPct, sharp: signPct, dust: pctOff, black: pctOff, htHi: (v) => HYPER_NAMES[v], htLo: (v) => HYPER_NAMES[v], hypersharp: pctOff,
+  labD: (v) => `${sign(v)}${v}`, labGrad: (v) => GRAD_NAMES[v + 3], labHi: (v) => TONE_NAMES[v + 1], labLo: (v) => TONE_NAMES[v + 1],
+  labSat: (v) => `${sign(v)}${v}`, labBright: (v) => `${sign(v)}${v}`,
 };
 const DUST_RESEED = 0.27;   // Rimescola with Polvere off turns it on at this amount (the default before v3.33)
 const AUTO_EV_MIN = -2, AUTO_EV_MAX = 2.5;   // Auto's exposure range, see autoSetup

@@ -239,6 +239,14 @@
     <button type="button" class="chip" role="radio" id="scanFrontier" data-scanner="frontier" aria-checked="false">Frontier</button>
     <button type="button" class="chip" role="radio" id="scanNoritsu" data-scanner="noritsu" aria-checked="false">Noritsu</button>
   </div>
+  <div id="labRows">
+  <div class="row"><label for="labD">Densità (D)</label><input type="range" id="labD" min="-9" max="9" step="1" value="0"><output for="labD"></output></div>
+  <div class="row"><label for="labGrad">Gradazione</label><input type="range" id="labGrad" min="-3" max="2" step="1" value="0"><output for="labGrad"></output></div>
+  <div class="row"><label for="labHi">Tono luci</label><input type="range" id="labHi" min="-1" max="1" step="1" value="0"><output for="labHi"></output></div>
+  <div class="row"><label for="labLo">Tono ombre</label><input type="range" id="labLo" min="-1" max="1" step="1" value="0"><output for="labLo"></output></div>
+  <div class="row"><label for="labSat">Saturazione</label><input type="range" id="labSat" min="-9" max="9" step="1" value="0"><output for="labSat"></output></div>
+  <div class="row"><label for="labBright">Bright</label><input type="range" id="labBright" min="-2" max="4" step="1" value="0"><output for="labBright"></output></div>
+  </div>
   <div id="frontierRows">
   <div class="row"><label for="htHi">Hyper Tone luci</label><input type="range" id="htHi" min="0" max="5" step="1" value="0"><output for="htHi"></output></div>
   <div class="row"><label for="htLo">Hyper Tone ombre</label><input type="range" id="htLo" min="0" max="5" step="1" value="0"><output for="htLo"></output></div>

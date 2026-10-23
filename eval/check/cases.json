@@ -127,6 +127,16 @@
     ]
    }
   },
+  "v4_sky_frontier_d": {
+   "photo": "samples/indigo/IDG_20261022_182651_466",
+   "query": "?v4",
+   "ui": {
+    "labD": 4,
+    "_click": [
+     "scanFrontier"
+    ]
+   }
+  },
   "v4_rock_hypertone": {
    "photo": "samples/indigo/IDG_20261011_134131_210",
    "query": "?v4",
