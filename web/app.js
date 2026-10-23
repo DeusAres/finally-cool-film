@@ -47,12 +47,13 @@ const ctx = view.getContext('2d', { colorSpace: 'display-p3' });
 let gpu = false;
 let engine = null;          // sf.Engine for the current photo (its input colour space is fixed at construction)
 let engineParams = '';      // JSON last given to `engine.update` (re-sending it is a no-op)
-// v3 (default; index.html?v2 = the previous app): Luce has Esposizione, Contrasto, Contrasto luci,
-// automatic highlight dodging (lib/dodge.js, eval/V3.md) and the free contrast curve.
-const V3 = !new URLSearchParams(location.search).has('v2');
-// v4 (index.html?v4, in progress, eval/V4.md): what the DNG impresses on Gold 200, shown with a neutral inversion of the negative
-// (lib/invert.js), no scanner look and no Luce tab: exposure is the phone's (metered as v3 Auto).
-const V4 = V3 && new URLSearchParams(location.search).has('v4');
+// v4 (the default since 4.0, user's decision; eval/V4.md): what the DNG impresses on Gold 200, shown with a neutral inversion of the
+// negative (lib/invert.js) or through a Frontier / Noritsu (Scanner tab), no Luce tab: exposure is the phone's (metered as v3 Auto).
+// index.html?v3: the previous app (Luce has Esposizione, Contrasto, Contrasto luci, automatic highlight dodging, lib/dodge.js,
+// eval/V3.md, and the free contrast curve); ?v2 the one before. ?v4 still opens v4 (old links).
+const QUERY = new URLSearchParams(location.search);
+const V3 = !QUERY.has('v2');
+const V4 = V3 && !QUERY.has('v3');
 // v3 highlight dodging (Luci auto, lib/dodge.js) changes the scene light before the film: off in v4 (the film alone).
 const DODGE = V3 && !V4;
 let photo = null;           // { file, size: { w, h } of the full decode, preview, after, auto: scanner AutoSetup [d, c, m, y], rot: quarter turns clockwise, ... }

@@ -6,7 +6,8 @@ The user writes Italian; answer in Italian, short, human bullet points.
 ## Branches and publishing
 - `claude/spektrafilm-mobile-web-har40e` is the deploy branch (GitHub Pages). There is no `main`.
 - Work on a side branch; publish (push to the deploy branch, bump `VERSION`) only with the user's explicit OK for that release.
-- v4 work lives on `claude/v4` and ships behind `index.html?v4` until it wins a blind test against v3.
+- v4 is the default app since 4.0 (user's decision, without the planned blind test); v3 stays at `index.html?v3`.
+  Work on `claude/v4`.
 
 ## How to change existing code
 1. Read it all first (code, comments, `eval/*.md`, README entry). Many numbers have a measured reason; find it.

@@ -12,7 +12,11 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 | `web/data/` | profili Gold 200 / Portra Endura, LUT spettrale, filtri neutri (CC BY-SA 4.0) |
 | `spike/` | report della spike, patch, harness di benchmark |
 
-## App (v2.0)
+## App (v4.0)
+
+- **v4.0: la v4 è l'app ufficiale** (decisione dell'utente, senza il test alla cieca previsto): si apre `index.html`;
+  `index.html?v3` = la v3 (Luci auto, scheda Luce, Frontier v3), `index.html?v2` = quella prima; `?v4` funziona ancora.
+  Nessun cambio di immagine: la v4 è identica alla 3.48 `?v4`, la v3 identica alla 3.48 senza parametri.
 
 - Scegli foto → **input**: JPEG → decode EOTF → un'unica inversa generica display→scena (`web/lib/color.js`), nessuna
   misura della pipeline. DNG → luce lineare Rec.2020 con ColorMatrix + ForwardMatrix quando presente.
@@ -39,9 +43,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 - **Interno più morbido (v3.39)**: piede della pellicola R/B 1.9/0.85 → 1.4/0.92, tasti scanner M −0.02 → −0.03 e Y 0.04 → 0:
   ombre profonde ancora teal-verdi ma circa un terzo in meno (gatto a*/b* −9.8/+0.1 → −6.3/+0.1), chiari meno caldi
   (b* +25 → +21, a Contrasto +50 +37 → +32, pelo non rosa: a* +3.5 → +4.0), +1.3 L*. La grana non cambia più con Interno (era ×1.41).
-- **v4 in prova** (`index.html?v4`, v3.40): la Gold 200 "nuda": esposizione dell'iPhone, negativo dal motore e inversione
+- **v4** (default da v4.0; in prova come `index.html?v4` da v3.40): la Gold 200 "nuda": esposizione dell'iPhone, negativo dal motore e inversione
   neutra (nero / bianco / grigio medio presi dal fotogramma, in mezzo solo la curva della pellicola), niente scanner, niente
-  scheda Luce. Dettagli in `eval/V4.md`. L'app normale resta la v3. v3.41: solo la pellicola (niente Luci auto, Texture
+  scheda Luce. Dettagli in `eval/V4.md`. Fino alla 3.48 l'app normale era la v3. v3.41: solo la pellicola (niente Luci auto, Texture
   e obiettivo a 0), Grana 3.1× = la Gold misurata. v3.42: confrontata con Gold 200 vera (scansioni a LED R/G/B del dataset
   gold200, `eval/gold200`): il negativo ora è letto a bande strette (625 / 522 / 455 nm) invece che con le curve CIE, e
   l'inibizione DIR è tarata sulla pellicola vera (saturazione 0.84–0.88 → 0.91–0.97 di quella reale); uscita sempre sRGB;
@@ -214,7 +218,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## Versione
 
-Il numero mostrato nell'app (`v2.0 · dd/mm hh:mm`, es. `v2.0 · 09/10 14:30`) viene dal file `VERSION` (`index.html?v2` riapre l'app precedente, con Alte luci / Bianchi / Nero): si alza la seconda cifra a ogni rilascio; all’avvio e al ritorno in primo piano l’app legge `version.txt` (senza cache) e si ricarica da sola se c’è un deploy nuovo (con una foto aperta: “tocca per aggiornare”)
+Il numero mostrato nell'app (`v4.0 · dd/mm hh:mm`) viene dal file `VERSION` (`index.html?v3` riapre la v3, `index.html?v2` quella prima, con Alte luci / Bianchi / Nero): si alza la seconda cifra a ogni rilascio; all’avvio e al ritorno in primo piano l’app legge `version.txt` (senza cache) e si ricarica da sola se c’è un deploy nuovo (con una foto aperta: “tocca per aggiornare”)
 (v1.1, v1.2…) e la prima per i cambi grossi. L'id del commit resta solo nei parametri anti-cache dei file.
 
 ## Build locale

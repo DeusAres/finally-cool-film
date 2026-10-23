@@ -1,12 +1,14 @@
 {
- "_doc": "Regression cases for scripts/eval/check.py: photo (repo-relative) + app sliders (render.cjs keys). Keep it small: each case is one headless render (~30-60 s on SwiftShader). Optional \"query\" (e.g. \"?v4\") is appended to index.html: the v4 cases render the preview page. Optional \"export\" (\"export\" or \"exportIG\"): the case also exports and measures the JPEG (check.py).",
+ "_doc": "Regression cases for scripts/eval/check.py: photo (repo-relative) + app sliders (render.cjs keys). Keep it small: each case is one headless render (~30-60 s on SwiftShader). Optional \"query\" (\"?v3\": the previous app; v4, the default since 4.0, also as \"?v4\") is appended to index.html. Optional \"export\" (\"export\" or \"exportIG\"): the case also exports and measures the JPEG (check.py).",
  "cases": {
   "wall_default": {
    "photo": "samples/indigo/IDG_20261016_100312_440",
+   "query": "?v3",
    "ui": {}
   },
   "wall_burn": {
    "photo": "samples/indigo/IDG_20261016_100312_440",
+   "query": "?v3",
    "ui": {
     "ev": 1.4,
     "highlight": -1
@@ -14,14 +16,17 @@
   },
   "rock_default": {
    "photo": "samples/indigo/IDG_20261011_134131_210",
+   "query": "?v3",
    "ui": {}
   },
   "sea_default": {
    "photo": "samples/indigo/IDG_20261011_135459_749",
+   "query": "?v3",
    "ui": {}
   },
   "cat_contrast": {
    "photo": "samples/indigo/IDG_20261008_154915_529",
+   "query": "?v3",
    "ui": {
     "ev": 0.5,
     "contrast": 0.83
@@ -29,12 +34,14 @@
   },
   "cat2_interno": {
    "photo": "samples/indigo/IDG_20261008_160856_907",
+   "query": "?v3",
    "ui": {
     "indoor": true
    }
   },
   "cat2_interno_c50": {
    "photo": "samples/indigo/IDG_20261008_160856_907",
+   "query": "?v3",
    "ui": {
     "indoor": true,
     "contrast": 0.5
@@ -42,10 +49,12 @@
   },
   "orf_landscape": {
    "photo": "samples/olympus/P6090399.ORF",
+   "query": "?v3",
    "ui": {}
   },
   "rock_sharp": {
    "photo": "samples/indigo/IDG_20261011_134131_210",
+   "query": "?v3",
    "ui": {
     "sharp": 1
    }
@@ -73,6 +82,7 @@
   },
   "jpeg_export_ig": {
    "photo": "samples/kg200/IMG_1510.jpeg",
+   "query": "?v3",
    "export": "exportIG",
    "ui": {}
   },
