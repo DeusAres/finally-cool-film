@@ -9,7 +9,7 @@ const [h, w] = hdr.match(/\((\d+), (\d+), 3\)/).slice(1).map(Number);
 const enc = new Float32Array(b.buffer.slice(b.byteOffset + 10 + hl, b.byteOffset + 10 + hl + h * w * 12));
 const thumb = [];
 for (let y = 0; y < h; y += 4) for (let x = 0; x < w; x += 4) { const i = (y * w + x) * 3; thumb.push(enc[i], enc[i + 1], enc[i + 2]); }
-const u = invertUniform(invertAnchors(Float32Array.from(thumb)));
+const u = invertUniform(invertAnchors(Float32Array.from(thumb), { shared: true }));
 const out = Buffer.alloc(w * h * 3), px = new Float32Array(3);
 for (let i = 0; i < w * h; i++) {
   px[0] = enc[3 * i]; px[1] = enc[3 * i + 1]; px[2] = enc[3 * i + 2];

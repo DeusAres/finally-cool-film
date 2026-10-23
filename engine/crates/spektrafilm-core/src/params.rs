@@ -219,11 +219,18 @@ pub struct HyperToneParams {
 pub struct NarrowbandParams {
     pub peak_nm: [f64; 3],
     pub fwhm_nm: [f64; 3],
+    /// Film-type setup (as the Frontier's `setup_lut`): instead of the band transmittance, the scan returns `10^-D'`, `D'` the
+    /// base-removed band density mapped per level onto G's along the stock's own grey ramp (every grey neutral, within
+    /// `setup_ev` of mid grey; beyond, the end slopes). A neutral inversion then needs one black / white for the three
+    /// channels, not one per channel from the frame (which stretched a channel with little range: a sunset's blue).
+    pub setup: bool,
+    /// Half range (EV about mid grey) of the setup's grey ramp, 2 * setup_ev + 1 points.
+    pub setup_ev: f64,
 }
 
 impl Default for NarrowbandParams {
     fn default() -> Self {
-        Self { peak_nm: [625.0, 522.0, 455.0], fwhm_nm: [20.0, 20.0, 20.0] }
+        Self { peak_nm: [625.0, 522.0, 455.0], fwhm_nm: [20.0, 20.0, 20.0], setup: false, setup_ev: 6.0 }
     }
 }
 

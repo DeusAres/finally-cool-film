@@ -13,7 +13,7 @@ const out = Buffer.alloc(n * 6);
 for (const side of [0, 1]) {
   const enc = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) for (let c = 0; c < 3; c++) enc[3 * i + c] = linearToSrgb(10 ** -P[6 * i + 3 * side + c]);
-  const u = invertUniform(invertAnchors(enc)), px = new Float32Array(3);
+  const u = invertUniform(invertAnchors(enc, { shared: true })), px = new Float32Array(3);
   for (let i = 0; i < n; i++) {
     px.set(enc.subarray(3 * i, 3 * i + 3)); invertCPU(px, u); toSpaceCPU(px, 'srgb');
     for (let c = 0; c < 3; c++) out[6 * i + 3 * side + c] = Math.round(255 * Math.min(1, Math.max(0, px[c])));

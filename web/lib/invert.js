@@ -1,11 +1,15 @@
 // v4: what is impressed on the Gold 200 negative, shown as a positive with a neutral inversion (no paper, no scanner look).
 //
-// The engine returns the developed negative as a scan (`scanner.model = null`: transmittance through the film, orange
-// mask included, display-encoded). Per channel the density d = -log10(T) is, along the film's straight line, its gamma times
-// the scene's log exposure; the toe and shoulder are the film's own. The inversion is the one a camera scan of a negative
-// gets, with every number taken from the frame itself:
-//   - black / white: per-channel density at the frame's thinnest / densest points (percentiles), so the brightest
-//     highlight the film recorded lands exactly on white (nothing clips) and the orange mask and any overall cast go;
+// The engine returns the developed negative as a scan (`scanner.model = "narrowband"`, display-encoded). Per channel the density
+// d = -log10(T) is, along the film's straight line, its gamma times the scene's log exposure; the toe and shoulder are the film's
+// own. Two kinds of scan:
+//   - shared (the app, `narrowband.setup`): the engine has already put each channel on the stock's grey axis (film-type setup,
+//     engine narrowband.rs: a grey the film recorded is equal in the three channels, base and mask removed), so one black and
+//     one white for the three channels: the frame's thinnest / densest channel (percentiles), nothing clips and the film's
+//     colours stay as it recorded them, less the overall cast read on near-neutral pixels (NEUTRAL_SIGMA);
+//   - per channel (raw scans of a real negative, eval/gold200: their stock's grey axis is not known): each channel's own black /
+//     white from the frame, so the orange mask and any overall cast go. On a frame with a strong cast this stretches the channel
+//     with the least range: a sunset (IDG_20261022_182651_466) came out with a cyan sky the DNG does not have (v4 until 3.48);
 //   - mid grey: the frame's median density lands on display mid grey (0.18 linear);
 //   - between the anchors, density maps linearly to log display light (density is log exposure): the film's toe and
 //     shoulder shape the shadows and highlights, nothing else does.
@@ -32,20 +36,47 @@ const T_MIN = 1e-6;
 // near-flat frame) gets that range, so it is shown as a mid tone instead of being stretched; the mid-grey anchor is kept in
 // [XM_MIN, XM_MAX] of the range, or a frame half black / half white puts it on an end and the curve divides by zero.
 const MIN_RANGE = 0.05, XM_MIN = 0.1, XM_MAX = 0.9;
+// Shared scans: the overall cast (light, white balance) is read from near-neutral pixels and taken out, as a lab's colour
+// setup does: each pixel's weight is 1 / (1 + (chroma / NEUTRAL_SIGMA)^2), chroma = its largest |D_c - D_G| (density), so a
+// sunset's saturated sky and clouds barely count while a rock in blue shade, near grey, does. 0.06: the v4 Frontier AutoSetup's
+// (app.js V4_NEUTRAL_SIGMA, same role). Measured: the rock (IDG_20261011_134131_210) read B-G +0.076 / R-G -0.022 and came out
+// blue-violet without it, grey with it as in the DNG; the sunset's cast 0.034 / 0.016 (its sky stays grey-blue, clouds red).
+const NEUTRAL_SIGMA = 0.06;
 
 const pct = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))))];
 
-/** Inversion anchors from the engine's negative scan of a thumb (RGB, display-encoded): { lo[3], hi[3], xm }. */
-export function invertAnchors(scan) {
+/** Inversion anchors from the engine's negative scan of a thumb (RGB, display-encoded): { lo[3], hi[3], xm }; `shared`: one
+ * black / white for the three channels (a scan on the stock's grey axis, see above). */
+export function invertAnchors(scan, { shared = false } = {}) {
   const n = scan.length / 3, d = [0, 1, 2].map(() => new Float32Array(n)), mean = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     for (let c = 0; c < 3; c++) d[c][i] = -Math.log10(Math.max(T_MIN, srgbDec(scan[3 * i + c])));
   }
+  const range = (sLo, sHi) => {
+    const l = pct(sLo, LO_PCT), h = pct(sHi, HI_PCT), pad = Math.max(0, MIN_RANGE - (h - l)) / 2;
+    return [l - pad, h + pad];
+  };
   const lo = [], hi = [];
-  for (let c = 0; c < 3; c++) {
-    const s = Float32Array.from(d[c]).sort(), l = pct(s, LO_PCT), h = pct(s, HI_PCT);
-    const pad = Math.max(0, MIN_RANGE - (h - l)) / 2;
-    lo.push(l - pad); hi.push(h + pad);
+  if (shared) {
+    const cast = [0, 0, 0];
+    let wsum = 0;
+    for (let i = 0; i < n; i++) {
+      const r = d[0][i] - d[1][i], b = d[2][i] - d[1][i], w = 1 / (1 + (Math.max(Math.abs(r), Math.abs(b)) / NEUTRAL_SIGMA) ** 2);
+      cast[0] += w * r; cast[2] += w * b; wsum += w;
+    }
+    cast[0] /= wsum; cast[2] /= wsum;
+    const dmin = new Float32Array(n), dmax = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const r = d[0][i] - cast[0], g = d[1][i], bl = d[2][i] - cast[2];
+      dmin[i] = Math.min(r, g, bl); dmax[i] = Math.max(r, g, bl);
+    }
+    const [l, h] = range(dmin.sort(), dmax.sort());
+    for (let c = 0; c < 3; c++) { lo.push(l + cast[c]); hi.push(h + cast[c]); }   // the cast as each channel's offset
+  } else {
+    for (let c = 0; c < 3; c++) {
+      const s = Float32Array.from(d[c]).sort(), [l, h] = range(s, s);
+      lo.push(l); hi.push(h);
+    }
   }
   for (let i = 0; i < n; i++) {
     let m = 0;

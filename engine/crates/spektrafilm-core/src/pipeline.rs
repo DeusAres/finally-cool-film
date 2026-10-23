@@ -299,36 +299,53 @@ impl Pipeline {
         if self.cmy_per_ev.as_ref().is_some_and(|c| c.1 == key) {
             return;
         }
-        let mut q = p.clone();
-        q.film_render.grain.active = false;
-        q.camera.auto_exposure = false;
-        q.camera.exposure_compensation_ev = 0.0;
-        let grey = |ev: f64| {
-            let v = spektrafilm_math::precision::from_f64(0.18 * 2f64.powf(ev));
-            let d = self.film_density(&ImageBuf::from_data(8, 8, vec![v; 8 * 8 * 3]), &q);
-            let i = (4 * 8 + 4) * 3;
-            [d.data[i] as f64, d.data[i + 1] as f64, d.data[i + 2] as f64]
-        };
-        let (lo, hi) = (grey(-0.5), grey(0.5));
+        let ramp = self.grey_ramp_cmy(p, &[-0.5, 0.5]);
+        let (lo, hi) = (ramp[0], ramp[1]);
         let (toe_density, toe_cyan) = self.toe;
         self.cmy_per_ev = Some(Arc::new((HyperStock { cmy_per_ev: [0, 1, 2].map(|c| hi[c] - lo[c]), toe_density, toe_cyan }, key)));
     }
 
-    /// (Re)build the narrowband scan LUT when `scanner.model = "narrowband"` and its inputs changed.
+    /// (Re)build the narrowband scan LUT when `scanner.model = "narrowband"` and its inputs changed (with the film-type setup,
+    /// also when the film's development changed: the setup is fitted on the stock's grey ramp).
     fn refresh_narrowband(&mut self) {
         let p = &self.params;
         if !(p.io.scan_film && self.film.is_negative() && p.scanner.model.as_deref() == Some("narrowband")) {
             self.narrowband = None;
             return;
         }
-        let key = serde_json::to_string(&(&p.scanner.narrowband, p.film_render.grain.density_min, p.settings.lut_resolution))
-            .unwrap_or_default();
+        let nb = &p.scanner.narrowband;
+        let development = nb.setup.then(|| (&p.film_render.dir_couplers, p.film_render.density_curve_gamma, &p.io.input_color_space, &p.film_render.halation));
+        let key = serde_json::to_string(&(nb, p.film_render.grain.density_min, p.settings.lut_resolution, development)).unwrap_or_default();
         if self.narrowband.as_ref().is_some_and(|n| n.1 == key) {
             return;
         }
         let (dmin, dmax) = stages::scanning::scanner_lut_bounds(&self.film, p);
-        let lut = crate::narrowband::scan_lut(&self.film, &p.scanner.narrowband, dmin, dmax, p.settings.lut_resolution as usize);
+        let steps = p.settings.lut_resolution as usize;
+        let lut = if nb.setup {
+            let model = crate::narrowband::setup_model(nb);
+            let base = crate::frontier::FrontierBase::new(&self.film, &model, &self.grey_ramp_cmy(p, &crate::frontier::ramp_evs(&model)));
+            crate::narrowband::setup_scan_lut(&base, dmin, dmax, steps)
+        } else {
+            crate::narrowband::scan_lut(&self.film, nb, dmin, dmax, steps)
+        };
         self.narrowband = Some(Arc::new((lut, key)));
+    }
+
+    /// Developed film density of a uniform grey (0.18 x 2^ev, no grain, the given development) at each of `evs`: the stock's
+    /// grey ramp, as the scanners' film-type setups and Hyper Tone measure it.
+    fn grey_ramp_cmy(&self, params: &RuntimeParams, evs: &[f64]) -> Vec<[f64; 3]> {
+        let mut p = params.clone();
+        p.film_render.grain.active = false;
+        p.camera.auto_exposure = false;
+        p.camera.exposure_compensation_ev = 0.0;
+        evs.iter()
+            .map(|ev| {
+                let v = spektrafilm_math::precision::from_f64(0.18 * 2f64.powf(*ev));
+                let d = self.film_density(&ImageBuf::from_data(8, 8, vec![v; 8 * 8 * 3]), &p);
+                let i = (4 * 8 + 4) * 3;
+                [d.data[i] as f64, d.data[i + 1] as f64, d.data[i + 2] as f64]
+            })
+            .collect()
     }
 
     /// The frontier scanner state, when active.
@@ -355,21 +372,7 @@ impl Pipeline {
     /// Film-type setup: fit the sensor/setup on the stock's grey ramp.
     fn build_frontier_base(&self, params: &RuntimeParams) -> crate::frontier::FrontierBase {
         let model = &params.scanner.frontier.model;
-        let mut p = params.clone();
-        p.film_render.grain.active = false;
-        p.camera.auto_exposure = false;
-        p.camera.exposure_compensation_ev = 0.0;
-        let ramp: Vec<[f64; 3]> = crate::frontier::ramp_evs(model)
-            .iter()
-            .map(|ev| {
-                let v = spektrafilm_math::precision::from_f64(0.18 * 2f64.powf(*ev));
-                let img = ImageBuf::from_data(8, 8, vec![v; 8 * 8 * 3]);
-                let d = self.film_density(&img, &p);
-                let i = (4 * 8 + 4) * 3;
-                [d.data[i] as f64, d.data[i + 1] as f64, d.data[i + 2] as f64]
-            })
-            .collect();
-        crate::frontier::FrontierBase::new(&self.film, model, &ramp)
+        crate::frontier::FrontierBase::new(&self.film, model, &self.grey_ramp_cmy(params, &crate::frontier::ramp_evs(model)))
     }
 
     /// (Re)build the Frontier state for `self.params`, reusing what the changed

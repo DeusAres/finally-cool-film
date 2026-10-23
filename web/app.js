@@ -146,7 +146,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     // film-adjacency clarity in the input pass instead (lens-gpu.js), in µm.
     // v4 Scanner 'Nessuno': no scanner look, the engine returns the negative read in three narrow bands (engine narrowband.rs:
     // the bands of the real Gold 200 reference scans, eval/V4.md), inverted in the output pass (lib/invert.js).
-    scanner: neutralScan() ? { model: 'narrowband', unsharp_mask: [0, 0], hyper_tone: { highlights: 0, shadows: 0 } } : {
+    scanner: neutralScan() ? { model: 'narrowband', narrowband: NARROWBAND, unsharp_mask: [0, 0], hyper_tone: { highlights: 0, shadows: 0 } } : {
       model: 'frontier', black_correction: false, white_correction: false,
       // always sent: the engine merges updates; the Noritsu has none (they are the Frontier's)
       ...(scanner === 'noritsu' ? { hyper_tone: { highlights: 0, shadows: 0 }, unsharp_mask: [0, 0] }
@@ -354,7 +354,7 @@ function v4Anchors(ev) {
   const { rgb, w, h } = raw ? rawThumb(raw, THUMB_PX) : jpegThumb(preview);
   const g = 2 ** (ev + baselineEv());
   for (let i = 0; i < rgb.length; i++) rgb[i] *= g;
-  return invertAnchors(syncEngine(ui(), { noGrain: true }).process(rgb, w, h));
+  return invertAnchors(syncEngine(ui(), { noGrain: true }).process(rgb, w, h), { shared: true });   // the scan is on the stock's grey axis (NARROWBAND)
 }
 const invUniform = (u) => (neutralScan() ? invertUniform(photo.inv, u.mshift, u.yshift) : null);
 
@@ -1124,6 +1124,13 @@ function onThumbDoubleTap(input, fn) {
 // film's; 1.2 overshoots the film's strongest colours. The old values had no Gold data behind them (eval/calib/CALIB.md).
 // First calibration step, to be refined as more references come in. v3 keeps the engine's defaults (its look was tuned on them).
 const V4_DIR = { inhibition_samelayer: 1.0, inhibition_interlayer: 1.0 };
+// v4 Scanner 'Nessuno': the narrowband scan with the film-type setup (engine NarrowbandParams.setup: each channel on the stock's
+// grey axis, per level of its grey ramp, base and mask removed), inverted with one black / white for the three channels (invert.js,
+// shared). The per-channel inversion it replaces took each channel's range from the frame and stretched the one with the least:
+// on a sunset (IDG_20261022_182651_466) the grey-blue sky between the clouds came out cyan and the red clouds orange-pale
+// (blue share of the upper sky 69 % vs the DNG's 19 %); on the barn of the gold200 dataset the white wall came out cyan. With the
+// setup, both follow the DNG (the film's own rendering stays: Gold reads a blue sky deeper than its RGB, by its spectral layers).
+const NARROWBAND = { setup: true };
 // v4 film layer speeds (engine FilmRenderingParams.layer_speed_ev, a calibration input: set when the engine is built). Real Gold
 // 200 (eval/gold200, two scenes, each at the film exposure that best explains its negative: -0.5 / -2 EV) has its red layer
 // relatively faster than the datasheet curves: red +0.75 EV takes the mids' green / cool cast down (mean |a*| over tones
