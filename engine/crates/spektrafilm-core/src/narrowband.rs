@@ -47,8 +47,13 @@ pub fn setup_model(bands: &NarrowbandParams) -> FrontierModelParams {
 /// The narrowband scan with the film-type setup: per channel `10^-D'` (`D'` the base-removed band density on G's axis,
 /// `FrontierBase::setup_density`), encoded as `scan_lut`'s output. Equal channels = a grey the stock recorded as grey.
 pub fn setup_scan_lut(base: &FrontierBase, data_min: [f64; 3], data_max: [f64; 3], steps: usize) -> FrontierLut {
-    FrontierLut::from_fn(
-        |cmy| base.setup_density(cmy).map(|d| srgb_encode(from_f64(10f64.powf(-d).clamp(0.0, 1.0))) as f64),
+    // the band densities of the nodes are cached (FrontierBase::raw_density_nodes): a rebuild is the setup map only
+    let raw = [steps, 3 * (steps - 1) + 1].map(|n| (n, base.raw_density_nodes(data_min, data_max, n)));
+    FrontierLut::from_node_fn(
+        |n, idx, _| {
+            let t = &raw.iter().find(|r| r.0 == n).expect("a grid of from_node_fn").1;
+            base.setup_density_of_raw(t[idx]).map(|d| srgb_encode(from_f64(10f64.powf(-d).clamp(0.0, 1.0))) as f64)
+        },
         data_min,
         data_max,
         steps,

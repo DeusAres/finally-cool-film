@@ -6,7 +6,7 @@
 ///   3. Compute print exposure normalization factor from midgray spectral density
 ///   4. Pass all calibration data to the pipeline stages
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use web_time::Instant;
 
 use spektrafilm_gpu::ComputeBackend;
@@ -179,8 +179,21 @@ fn stock_toe(film: &Profile) -> (f64, f64) {
 pub struct FrontierRuntime {
     pub base: Arc<crate::frontier::FrontierBase>,
     base_key: String,
-    pub lut: crate::frontier::FrontierLut,
+    /// Built on first use (`lut()`): an update only followed by AutoSetup (which needs the base) or by another update never
+    /// pays for it (~0.2 s of desktop wasm; the app used to build it twice on every switch to a lab scanner).
+    lut: OnceLock<crate::frontier::FrontierLut>,
+    /// The LUT's inputs: the keys, the density domain, the node count, the output matrix.
+    lut_in: (crate::params::FrontierParams, [f64; 3], [f64; 3], usize, [[f64; 3]; 3]),
     lut_key: String,
+}
+
+impl FrontierRuntime {
+    pub fn lut(&self) -> &crate::frontier::FrontierLut {
+        self.lut.get_or_init(|| {
+            let (keys, dmin, dmax, steps, out) = &self.lut_in;
+            crate::frontier::FrontierLut::build(&self.base, keys, *dmin, *dmax, *steps, *out)
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -266,7 +279,12 @@ impl Pipeline {
 
     /// The scan LUT the scan stage uses instead of the spectral scan: the Frontier's or the narrowband scan's.
     fn scan_lut(&self) -> Option<&crate::frontier::FrontierLut> {
-        self.frontier.as_deref().map(|f| &f.lut).or(self.narrowband.as_deref().map(|n| &n.0))
+        self.frontier.as_deref().map(|f| f.lut()).or(self.narrowband.as_deref().map(|n| &n.0))
+    }
+
+    /// Whether the scan stage uses a scan LUT (without building the Frontier's).
+    fn has_scan_lut(&self) -> bool {
+        self.frontier.is_some() || self.narrowband.is_some()
     }
 
     /// Hyper Tone, when it acts: its params and the density gain per map EV, the same on the three layers (`-amount` x the
@@ -277,7 +295,7 @@ impl Pipeline {
         let h = &self.params.scanner.hyper_tone;
         let st = &self.cmy_per_ev.as_deref()?.0;
         let mean = (st.cmy_per_ev[0] + st.cmy_per_ev[1] + st.cmy_per_ev[2]) / 3.0;
-        (self.scan_lut().is_some() && (h.highlights != 0.0 || h.shadows != 0.0)).then_some((
+        (self.has_scan_lut() && (h.highlights != 0.0 || h.shadows != 0.0)).then_some((
             h,
             HyperFilm { gain_hi: -h.highlights * mean, gain_lo: -h.shadows * mean, toe_density: st.toe_density, toe_cyan: st.toe_cyan },
         ))
@@ -411,15 +429,14 @@ impl Pipeline {
             _ => Arc::new(self.build_frontier_base(&self.params)),
         };
         let (dmin, dmax) = stages::scanning::scanner_lut_bounds(&self.film, &self.params);
-        let lut = crate::frontier::FrontierLut::build(
-            &base,
-            &self.params.scanner.frontier,
+        let lut_in = (
+            self.params.scanner.frontier.clone(),
             dmin,
             dmax,
             self.params.settings.lut_resolution as usize,
             stages::scanning::frontier_output_matrix(&self.params.io.output_color_space),
         );
-        self.frontier = Some(Arc::new(FrontierRuntime { base, base_key, lut, lut_key }));
+        self.frontier = Some(Arc::new(FrontierRuntime { base, base_key, lut: OnceLock::new(), lut_in, lut_key }));
     }
 
     /// Frontier AutoSetup on a thumbnail (linear RGB in the engine's input
@@ -1362,7 +1379,7 @@ impl Pipeline {
             &self.params.print_render.glare
         };
         // A scan LUT (Frontier positive, narrowband scan) has no viewing glare (as on the CPU path).
-        let glare = if self.scan_lut().is_none() && glare_params.active && glare_params.percent > 0.0 {
+        let glare = if !self.has_scan_lut() && glare_params.active && glare_params.percent > 0.0 {
             let g = glare_params;
             // LogNormal parameters (same derivation as `compute_random_glare_amount`).
             let m = g.percent as f64;

@@ -37,6 +37,9 @@
 //! LUT over the film density, like the legacy scanner LUT; a 3*(steps-1)+1
 //! node table (49^3 at the default) is also baked for the GPU trilinear lookup.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
 use rayon::prelude::*;
 use spektrafilm_math::pchip3d::{PreparedPchip3d, pchip_interp, prepare_pchip_3d};
 use spektrafilm_math::spectral::N_WAVELENGTHS;
@@ -230,6 +233,45 @@ impl FrontierBase {
     /// Film-type-setup density `D'_c`, before the keys.
     pub fn setup_density(&self, cmy: [f64; 3]) -> [f64; 3] {
         self.map_setup(self.normalised_density(cmy))
+    }
+
+    /// `setup_density` from the sensor density `raw` (`raw_density`) of the same film density.
+    pub fn setup_density_of_raw(&self, raw: [f64; 3]) -> [f64; 3] {
+        self.map_setup([raw[0] - self.dmin[0], raw[1] - self.dmin[1], raw[2] - self.dmin[2]])
+    }
+
+    /// `raw_density` at every node of an `n`^3 grid (`lut_node`). The sum over wavelengths with a power each is most of a
+    /// narrowband LUT build (~0.75 s on desktop wasm) and depends only on the film's spectra, the bands and the domain, not on
+    /// the film-type setup (which the halation and the development change): cached process-wide by those inputs, so a
+    /// Halation step or the next photo's engine only redo the setup map. Values are the uncached ones bit for bit.
+    pub fn raw_density_nodes(&self, data_min: [f64; 3], data_max: [f64; 3], n: usize) -> Arc<Vec<[f64; 3]>> {
+        use std::hash::{Hash, Hasher};
+        static CACHE: OnceLock<Mutex<HashMap<u64, Arc<Vec<[f64; 3]>>>>> = OnceLock::new();
+        // a handful of entries in the app (one film, one domain, two grids); bounded anyway
+        const MAX_ENTRIES: usize = 8;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        let bits = |v: &[f64], h: &mut std::collections::hash_map::DefaultHasher| v.iter().for_each(|x| x.to_bits().hash(h));
+        self.cd.iter().for_each(|c| bits(c, &mut h));
+        bits(&self.base, &mut h);
+        self.weights.iter().for_each(|w| bits(w, &mut h));
+        bits(&[self.model.tmin_floor], &mut h);
+        bits(&data_min, &mut h);
+        bits(&data_max, &mut h);
+        n.hash(&mut h);
+        let key = h.finish();
+        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        if let Some(t) = cache.lock().unwrap().get(&key) {
+            return t.clone();
+        }
+        let mut t = vec![[0.0f64; 3]; n * n * n];
+        t.par_iter_mut().enumerate().for_each(|(idx, d)| *d = self.raw_density(lut_node(data_min, data_max, n, idx)));
+        let t = Arc::new(t);
+        let mut c = cache.lock().unwrap();
+        if c.len() >= MAX_ENTRIES {
+            c.clear();
+        }
+        c.insert(key, t.clone());
+        t
     }
 
     /// Film-type setup map of normalised densities `Dn` (linear fit or LUT).
@@ -1006,6 +1048,12 @@ fn rotate_hue(lin: &[f64; 3], l: f64, deg: f64) -> [f64; 3] {
     }
     out
 }
+/// Film density at node `idx` (r-major: R slowest) of an `n`^3 grid over `data_min..data_max`: the scan LUTs' layout.
+pub fn lut_node(data_min: [f64; 3], data_max: [f64; 3], n: usize, idx: usize) -> [f64; 3] {
+    let at = |a: usize, i: usize| data_min[a] + (data_max[a] - data_min[a]) * i as f64 / (n - 1) as f64;
+    [at(0, idx / (n * n)), at(1, (idx / n) % n), at(2, idx % n)]
+}
+
 
 /// The baked scanner LUT: film density (cmy) -> encoded output (the Frontier's sRGB-encoded positive, or the
 /// narrowband scan's encoded band transmittance).
@@ -1059,12 +1107,16 @@ impl FrontierLut {
     /// A scan LUT of any density -> encoded-output function `f` (the narrowband scan), with the same
     /// node layout, interpolation and GPU table density as the Frontier's.
     pub fn from_fn(f: impl Fn([f64; 3]) -> [f64; 3] + Sync, data_min: [f64; 3], data_max: [f64; 3], steps: usize) -> Self {
+        Self::from_node_fn(|_, _, cmy| f(cmy), data_min, data_max, steps)
+    }
+
+    /// As `from_fn`, with `f(n, idx, cmy)` also told the grid (`n` nodes per axis) and the node's index in it (r-major,
+    /// `lut_nodes`), for callers with per-node tables. The two grids are `steps` and the GPU's `3 * (steps - 1) + 1`.
+    pub fn from_node_fn(f: impl Fn(usize, usize, [f64; 3]) -> [f64; 3] + Sync, data_min: [f64; 3], data_max: [f64; 3], steps: usize) -> Self {
         let nodes = |n: usize| -> Vec<f64> {
-            let at = |a: usize, i: usize| data_min[a] + (data_max[a] - data_min[a]) * i as f64 / (n - 1) as f64;
             let mut out = vec![0.0f64; n * n * n * 3];
             out.par_chunks_exact_mut(3).enumerate().for_each(|(idx, dst)| {
-                let (i, j, k) = (idx / (n * n), (idx / n) % n, idx % n);
-                dst.copy_from_slice(&f([at(0, i), at(1, j), at(2, k)]));
+                dst.copy_from_slice(&f(n, idx, lut_node(data_min, data_max, n, idx)));
             });
             out
         };
@@ -1487,7 +1539,7 @@ mod tests {
     fn gpu_trilinear_matches_direct_evaluation() {
         let Some(p) = pipeline() else { return };
         let fr = p.frontier().unwrap();
-        let (table, steps, dmin, inv) = fr.lut.gpu_table();
+        let (table, steps, dmin, inv) = fr.lut().gpu_table();
         let stage = fr.base.stage(&p.params.scanner.frontier);
         let (mut seed, mut max_err, mut n_over) = (12345u64, 0f64, 0u32);
         let mut rnd = || {

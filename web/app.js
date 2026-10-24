@@ -141,7 +141,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     // to P3 with a soft gamut compression (output.js toP3); plain P3 output
     // hard-clipped dark warm browns (B = 0, hue swung red).
     // v2-calib: the engine now returns a positive, so its own gamut compression could be back on for sRGB.
-    io: { output_color_space: engineWide() ? 'ITU-R BT.2020' : 'sRGB', output_gamut_compress: { algorithm: 'off' }, scan_film: true },
+    io: { output_color_space: engineWide() ? 'ITU-R BT.2020' : 'sRGB', output_gamut_compress: NO_GAMUT, scan_film: true },
     // The engine's scanner unsharp mask works in pixels (0.7 px: crisper at
     // preview size than on a 12 MP export) and inflated pixel-level detail
     // ×1.3–1.6 (measured): a phone's crunch, not film. Texture comes from the
@@ -200,9 +200,13 @@ function renderParamsJson(u, noGrain = false, tileMm = 0, region = null) {
  * render params; the parse / merge / rebuild is skipped when they did not change (most sliders are ours: exposure, lens,
  * grain, texture). Calibration inputs (camera EV, enlarger filters, ... see spektrafilm-wasm Engine.update) are ignored by
  * update: none of ours change after the build. */
+// The engine's output gamut compression stays off (renderParams). Also at construction: the engine would otherwise build its
+// default compressor's table first (~0.55 s of desktop wasm, once per session), which the first update then drops.
+const NO_GAMUT = { algorithm: 'off' };
 function syncEngine(u, { noGrain = false, tileMm = 0, region = null } = {}) {
   if (!engine) {
-    engine = new sf.Engine(FILM, PAPER, JSON.stringify(deepMerge(BASE_PARAMS, inputParams(photo.preview.p3), V4 ? V4_STOCK : {})));
+    engine = new sf.Engine(FILM, PAPER, JSON.stringify(deepMerge(BASE_PARAMS, inputParams(photo.preview.p3), V4 ? V4_STOCK : {},
+      { io: { output_gamut_compress: NO_GAMUT } })));
     engineParams = '';
   }
   const json = renderParamsJson(u, noGrain, tileMm, region);
