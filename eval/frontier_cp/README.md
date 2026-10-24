@@ -130,7 +130,14 @@ Run from a WORK directory (needs sf-eval, scripts/eval/build-sf-eval.sh; python 
   - Engine, keys refitted: dE00 0 / -1 / +1 / +2 EV 4.4 / 4.0 / 3.9 / 4.1 (step 3: 5.3 / 4.5 / 4.8 / 5.1). Chroma 1.06 and
     lightness +0.1 L* of the real; blues +1.8 L*; cyan hue -18 deg.
 - **Open questions.**
-  - The cyan hue is still ~18 deg greener than real (7 patches) and violets -18 deg (3 patches).
+  - Cyan, per patch (`colour.py` at the 4 EVs, sim - real hue): the "cyan family -18 deg" median was set by the dark /
+    low-chroma patches (B7, E9, J2: chroma 7-18, their hue swings -63..+2 deg with EV) and by D9. Consistent errors: green-cyans
+    C9 / D9 / F9 (opponent hue 155 / 169 / 183) -12 / -19 / -7 deg; the greens below 146 and the cyans / blues from 215 are within
+    5 deg. `proto_rot.py` (an extra rotation, 12 knots, fit at 0 EV): all knots free -> dE00 -0.06..-0.17, D9 -20 -> -16; only the
+    150 / 180 / 210 knots -> -0.03..-0.11, F9 overshoots before D9 is fixed. D9 sits 49 deg from C8 in our render, ~28 on both
+    real machines and on the reference: an error of our film / sensor chain on that dye, not a hue-smooth scanner trait. Left as
+    is (a scanner-stage patch would be the wrong stage and buys <= 0.1 dE00).
+  - Violets -16..-27 deg (3-4 patches).
 
 ## Noritsu (app.js V4_NORITSU, V4_NORITSU_AUTO)
 The same frames on the tool's Noritsu, with the same method; the Frontier's scanner model takes the Noritsu's parameters.

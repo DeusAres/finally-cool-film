@@ -1169,7 +1169,9 @@ const V4_AUTO = { strength: 1.0, k_col: 0.68, highlight_weight: 0.6, target_offs
 // hue_saturation / hue_shift, knots red yellow green cyan blue magenta; Fujifilm documents its 3D LUT acting by hue: "blue sky,
 // ... highly saturated cyan/green, and luminosity of reds"), saturation 0.92, the cyan-blue boost nearly off; v3's hue
 // rotations hold (blue 18 / green 20 deg fitted vs 17 / 24). Chart dE00 7.2 -> 4.4 at 0 EV (the fit), 7.5 / 7.2 / 7.6 -> 4.0 /
-// 3.9 / 4.1 at -1 / +1 / +2 EV; chroma 1.06 and lightness +0.1 L* of the real. Left: the cyan hue ~18 deg greener than real.
+// 3.9 / 4.1 at -1 / +1 / +2 EV; chroma 1.06 and lightness +0.1 L* of the real. Left: the saturated green-cyan D9 is ~19 deg greener
+// than real at every EV (pure cyans / blues within 5 deg); its neighbours in hue are right, both real machines put it ~28 deg from
+// cyan C8 (we 49): an error of our spectral chain on that dye, not the scanner's LUT (proto_rot.py: 12 knots gain <= 0.1 dE00).
 const V4_FRONTIER = { gradation_a: 9.6, black_point: 0.023, white_point: 0.97, shoulder_start: 0.95, shoulder_sharpness: 0,
   saturation: 0.92, saturation_blue: 0.05, blue_hue_shift: 18, green_hue_shift: 20,
   hue_lightness: [0.91, 0.92, 0.46, 0.75, 0.9, 0.96], hue_saturation: [0.88, 1.06, 0.97, 1.04, 0.73, 0.64], hue_shift: [3, 1, 6, 7, -5, 12] };
