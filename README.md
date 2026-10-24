@@ -14,6 +14,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.2**: **spiegazioni sui controlli**: tieni premuta l'etichetta (sul telefono) o passaci sopra col mouse: cosa fa e dove
+  agisce (scena, pellicola, scanner). Un tap e il doppio tap (= 0) restano come prima. Immagini identiche alla 4.1. Numeri della
+  4.1 corretti con una misura che rispetta l'esposizione del negativo: errore di luminosità sui 20 fotogrammi veri 8.2 → 2.8 L*.
 - **v4.1**: **AutoSetup del Frontier** tarato su tutti i fotogrammi Gold del Frontier vero di Color Precision (5 scene × 4
   esposizioni): il livello si legge per il 60 % dalle grandi zone chiare, non solo dalla media; errore di luminosità 8.2 → 2.8 L*
   (porto −12.4 → +2.0, notte +8.6 → +0.5; il ritratto all'aperto resta ~4 L* più chiaro del vero). **Nessuno: Luminosità**
