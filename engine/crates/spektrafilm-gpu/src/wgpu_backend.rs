@@ -31,11 +31,22 @@ fn wgsl_for_target(src: &'static str) -> Cow<'static, str> {
 /// (~400 MB/frame at 3 MP while a slider moves) outruns it until iOS kills
 /// the tab. So on wasm a frame's buffers are POOLED: at frame end
 /// (`release_frame_buffers`) they become free for the next frame, which
-/// takes same-size/same-usage ones back (cleared on the GPU first, so they
-/// read exactly like fresh zero-initialised buffers). Pooled buffers the
-/// next frame does not reuse (size changed: another photo, export tiles)
-/// are destroyed then. Small init-with-contents buffers (uniforms, LUTs,
-/// kernels) are created and destroyed per frame.
+/// takes same-usage ones of at least the asked size back (cleared on the GPU
+/// first, so they read exactly like fresh zero-initialised buffers). A reused
+/// buffer can be larger than asked (export tiles differ in size, see
+/// `POOL_MAX_SLACK`): bindings and maps use only the asked part
+/// (`UsedRange`). Pooled buffers the next frame does not reuse (size grew:
+/// another photo) are destroyed then. Small init-with-contents buffers
+/// (uniforms, LUTs, kernels) are created and destroyed per frame. Poolable:
+/// COPY_DST (a reused buffer may be cleared by a copy command) and not mapped
+/// at creation.
+///
+/// A request takes back first the buffer that had its role (its label) last
+/// frame, whatever its size, then the smallest other one within
+/// `POOL_MAX_SLACK`. Roles keep their buffers so that a mid-size request
+/// does not take a smaller role's buffer and leave a large one unused (the
+/// packed RGBA8 output has the image buffers' usage: by size alone, export
+/// tiles traded buffers between roles and reallocated some).
 #[cfg(feature = "wgpu-backend")]
 trait TrackedCreate {
     fn create_buffer_t(&self, desc: &wgpu::BufferDescriptor<'_>) -> wgpu::Buffer;
@@ -45,21 +56,39 @@ trait TrackedCreate {
     fn create_buffer_init_t(&self, desc: &wgpu::util::BufferInitDescriptor<'_>) -> wgpu::Buffer;
 }
 
+/// Another role's free buffer is reused for a request of at least
+/// 1 / POOL_MAX_SLACK of its size: it bounds what a small request (a
+/// downsampled grid, a 16-byte stand-in) can take of a full-frame buffer.
+/// A role's own buffer has no such bound: it is the same stage at another
+/// size, and holds no more than the pool already held. The export renders
+/// 1024 px tiles plus a 128 px overlap (web/app.js EXPORT_TILE, EXPORT_PAD),
+/// so consecutive tiles differ in size (1152 to 1280 px a side, edge tiles
+/// down to 129) and an exact-size pool reused none of their buffers (~11
+/// full-frame ones allocated per tile); now every tile reuses the preview's
+/// (2000 px long side, web/lib/util.js PREVIEW_LONG_SIDE). A choice, not a
+/// measurement.
+#[cfg(all(feature = "wgpu-backend", target_arch = "wasm32"))]
+const POOL_MAX_SLACK: u64 = 4;
+
 #[cfg(all(feature = "wgpu-backend", target_arch = "wasm32"))]
 #[derive(Default)]
 struct BufferPool {
     queue: Option<wgpu::Queue>,
     /// Created with contents or not poolable: destroyed at frame end.
     transient: Vec<wgpu::Buffer>,
-    /// Poolable buffers handed out during the current frame.
-    used: Vec<wgpu::Buffer>,
-    /// Left by the previous frame, available for reuse.
-    free: Vec<wgpu::Buffer>,
+    /// Poolable buffers handed out during the current frame, with their role
+    /// (the label asked).
+    used: Vec<(wgpu::Buffer, String)>,
+    /// Those of `used` larger than asked, with the asked size (`UsedRange`).
+    larger: Vec<(wgpu::Buffer, u64)>,
+    /// Left by the previous frame with their roles, available for reuse.
+    free: Vec<(wgpu::Buffer, String)>,
     /// While `batching`, reused buffers that must read as zero are queued here
-    /// and cleared inside the frame's command encoder (`flush_pending_clears`)
-    /// instead of one submit each.
+    /// (with the asked size of a larger one, see `asked_size`) and cleared
+    /// inside the frame's command encoder (`flush_pending_clears`) instead of
+    /// one submit each.
     batching: bool,
-    pending_clears: Vec<wgpu::Buffer>,
+    pending_clears: Vec<(wgpu::Buffer, Option<u64>)>,
 }
 
 #[cfg(all(feature = "wgpu-backend", target_arch = "wasm32"))]
@@ -92,24 +121,47 @@ fn create_buffer_pooled(device: &wgpu::Device, desc: &wgpu::BufferDescriptor<'_>
         return POOL.with(|p| {
             let mut p = p.borrow_mut();
             if poolable {
-                if let Some(i) = p.free.iter().position(|b| b.size() == desc.size && b.usage() == desc.usage) {
-                    let buf = p.free.swap_remove(i);
-                    // A fresh WebGPU buffer reads as zero; a reused one is cleared to match.
+                let role = desc.label.unwrap_or_default();
+                let fits = |(b, r): &(wgpu::Buffer, String)| {
+                    b.usage() == desc.usage
+                        && b.size() >= desc.size
+                        && (r == role || b.size() <= desc.size * POOL_MAX_SLACK)
+                };
+                // Its role's buffer first, then the smallest that fits.
+                let best = p
+                    .free
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| fits(e))
+                    .min_by_key(|(_, (b, r))| (r != role, b.size()))
+                    .map(|(i, _)| i);
+                if let Some(i) = best {
+                    let (buf, _) = p.free.swap_remove(i);
+                    let asked = (buf.size() > desc.size).then_some(desc.size);
+                    if let Some(size) = asked {
+                        p.larger.push((buf.clone(), size));
+                    }
+                    // A fresh WebGPU buffer reads as zero; a reused one is cleared to
+                    // match (its asked part: all a binding sees).
                     if zero {
                         if p.batching {
-                            p.pending_clears.push(buf.clone());
+                            p.pending_clears.push((buf.clone(), asked));
                         } else if let Some(q) = p.queue.as_ref() {
                             let mut enc = device.create_command_encoder(&Default::default());
-                            enc.clear_buffer(&buf, 0, None);
+                            enc.clear_buffer(&buf, 0, asked);
                             q.submit(Some(enc.finish()));
                         }
                     }
-                    p.used.push(buf.clone());
+                    p.used.push((buf.clone(), role.to_owned()));
                     return buf;
                 }
             }
             let buf = device.create_buffer(desc);
-            if poolable { p.used.push(buf.clone()) } else { p.transient.push(buf.clone()) }
+            if poolable {
+                p.used.push((buf.clone(), desc.label.unwrap_or_default().to_owned()))
+            } else {
+                p.transient.push(buf.clone())
+            }
             buf
         });
     }
@@ -117,6 +169,46 @@ fn create_buffer_pooled(device: &wgpu::Device, desc: &wgpu::BufferDescriptor<'_>
     {
         let _ = zero;
         device.create_buffer(desc)
+    }
+}
+
+/// The part of a buffer its frame asked for: all of it, except a pooled
+/// buffer reused for a smaller request (`create_buffer_pooled`). Every
+/// binding and map goes through these, so a shader or a readback sees
+/// exactly the size asked, whatever buffer the pool handed out.
+#[cfg(feature = "wgpu-backend")]
+trait UsedRange {
+    fn used_binding(&self) -> wgpu::BindingResource<'_>;
+    fn used_slice(&self) -> wgpu::BufferSlice<'_>;
+}
+
+#[cfg(feature = "wgpu-backend")]
+impl UsedRange for wgpu::Buffer {
+    fn used_binding(&self) -> wgpu::BindingResource<'_> {
+        wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+            buffer: self,
+            offset: 0,
+            size: asked_size(self).and_then(wgpu::BufferSize::new),
+        })
+    }
+    fn used_slice(&self) -> wgpu::BufferSlice<'_> {
+        match asked_size(self) {
+            Some(size) => self.slice(..size),
+            None => self.slice(..),
+        }
+    }
+}
+
+/// The asked size of a buffer handed out larger than asked this frame; None:
+/// the whole buffer.
+#[cfg(feature = "wgpu-backend")]
+fn asked_size(buf: &wgpu::Buffer) -> Option<u64> {
+    #[cfg(target_arch = "wasm32")]
+    return POOL.with(|p| p.borrow().larger.iter().find(|(b, _)| b == buf).map(|&(_, size)| size));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = buf;
+        None
     }
 }
 
@@ -135,8 +227,8 @@ fn flush_pending_clears(encoder: &mut wgpu::CommandEncoder) {
     #[cfg(target_arch = "wasm32")]
     POOL.with(|p| {
         let mut p = p.borrow_mut();
-        for b in p.pending_clears.drain(..) {
-            encoder.clear_buffer(&b, 0, None);
+        for (b, size) in p.pending_clears.drain(..) {
+            encoder.clear_buffer(&b, 0, size);
         }
         p.batching = false;
     });
@@ -153,10 +245,11 @@ fn release_frame_buffers() {
         for b in p.transient.drain(..) {
             b.destroy();
         }
-        for b in p.free.drain(..) {
+        for (b, _) in p.free.drain(..) {
             b.destroy();
         }
         p.free = std::mem::take(&mut p.used);
+        p.larger.clear();
     });
 }
 
@@ -611,9 +704,9 @@ impl WgpuBackend {
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
-                wgpu::BindGroupEntry { binding: 2, resource: uni.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: out.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: gain_lut.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: uni.used_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: out.used_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: gain_lut.used_binding() },
             ],
         });
         let mut pass = encoder.begin_compute_pass(&Default::default());
@@ -645,11 +738,12 @@ impl WgpuBackend {
         let groups = n.div_ceil(256);
         let gx = groups.min(65535);
         let gy = groups.div_ceil(gx);
-        // Every pixel of `dst` is written by the pack pass.
+        // Every pixel of `dst` is written by the pack pass. COPY_DST: poolable
+        // (`TrackedCreate`); without it a new one was created every frame.
         let dst = self.device.create_buffer_overwritten_t(&wgpu::BufferDescriptor {
             label: Some("packed"),
             size: n as u64 * 4,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let lut_buf = self.static_storage("pack_lut", bytemuck::cast_slice(&req.lut));
@@ -664,10 +758,10 @@ impl WgpuBackend {
             label: None,
             layout: &pipe.get_bind_group_layout(0),
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: src.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: lut_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: dst.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: dims.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 0, resource: src.used_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: lut_buf.used_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: dst.used_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: dims.used_binding() },
             ],
         });
         let mut pass = encoder.begin_compute_pass(&Default::default());
@@ -710,7 +804,7 @@ impl WgpuBackend {
             release_frame_buffers();
             return None;
         }
-        let slice = pending.buffer.slice(..);
+        let slice = pending.buffer.used_slice();
         let out: Vec<f32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
         pending.buffer.unmap();
         release_frame_buffers();
@@ -823,7 +917,7 @@ impl WgpuBackend {
             .enumerate()
             .map(|(i, buf)| wgpu::BindGroupEntry {
                 binding: i as u32,
-                resource: buf.as_entire_binding(),
+                resource: buf.used_binding(),
             })
             .collect();
 
@@ -860,7 +954,7 @@ impl WgpuBackend {
         self.queue.submit(Some(encoder.finish()));
 
         // Read back
-        let slice = readback.slice(..);
+        let slice = readback.used_slice();
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
             tx.send(r).unwrap();
@@ -970,19 +1064,19 @@ impl WgpuBackend {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: params_buf.as_entire_binding(),
+                    resource: params_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: buf_in.as_entire_binding(),
+                    resource: buf_in.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: kernel_buf.as_entire_binding(),
+                    resource: kernel_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: buf_mid.as_entire_binding(),
+                    resource: buf_mid.used_binding(),
                 },
             ],
         });
@@ -992,19 +1086,19 @@ impl WgpuBackend {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: params_buf.as_entire_binding(),
+                    resource: params_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: buf_mid.as_entire_binding(),
+                    resource: buf_mid.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: kernel_buf.as_entire_binding(),
+                    resource: kernel_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: buf_out.as_entire_binding(),
+                    resource: buf_out.used_binding(),
                 },
             ],
         });
@@ -1040,7 +1134,7 @@ impl WgpuBackend {
         encoder.copy_buffer_to_buffer(&buf_out, 0, &readback, 0, img_bytes as u64);
         self.queue.submit(Some(encoder.finish()));
 
-        let slice = readback.slice(..);
+        let slice = readback.used_slice();
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
             tx.send(r).unwrap();
@@ -1176,19 +1270,19 @@ impl WgpuBackend {
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: params_buf.as_entire_binding(),
+                            resource: params_buf.used_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
-                            resource: buf_in.as_entire_binding(),
+                            resource: buf_in.used_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 2,
-                            resource: kernel_buf.as_entire_binding(),
+                            resource: kernel_buf.used_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 3,
-                            resource: buf_mid.as_entire_binding(),
+                            resource: buf_mid.used_binding(),
                         },
                     ],
                 });
@@ -1198,19 +1292,19 @@ impl WgpuBackend {
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: params_buf.as_entire_binding(),
+                            resource: params_buf.used_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
-                            resource: buf_mid.as_entire_binding(),
+                            resource: buf_mid.used_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 2,
-                            resource: kernel_buf.as_entire_binding(),
+                            resource: kernel_buf.used_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 3,
-                            resource: bufs_out[i].as_entire_binding(),
+                            resource: bufs_out[i].used_binding(),
                         },
                     ],
                 });
@@ -1269,14 +1363,14 @@ impl WgpuBackend {
 
         // Map every readback, then poll once.
         for rb in &readbacks {
-            let slice = rb.slice(..);
+            let slice = rb.used_slice();
             slice.map_async(wgpu::MapMode::Read, |r| r.unwrap());
         }
         self.device.poll(wgpu::Maintain::Wait);
 
         let mut out_imgs = Vec::with_capacity(sigmas.len());
         for rb in &readbacks {
-            let slice = rb.slice(..);
+            let slice = rb.used_slice();
             let data = slice.get_mapped_range();
             let chunk: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
             out_imgs.push(ImageBuf::from_data(w, h, f32_to_scalars(chunk)));
@@ -1359,7 +1453,7 @@ impl WgpuBackend {
                     | wgpu::BufferUsages::MAP_WRITE,
                 mapped_at_creation: true,
             });
-            buf.slice(..)
+            buf.used_slice()
                 .get_mapped_range_mut()
                 .copy_from_slice(bytemuck::cast_slice(&input_f32));
             buf.unmap();
@@ -1728,19 +1822,19 @@ impl WgpuBackend {
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: front_params_buf.as_entire_binding(),
+                            resource: front_params_buf.used_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
-                            resource: buf_a.as_entire_binding(),
+                            resource: buf_a.used_binding(),
                         }, // rgb_in
                         wgpu::BindGroupEntry {
                             binding: 2,
-                            resource: tc_lut_buf.as_entire_binding(),
+                            resource: tc_lut_buf.used_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 3,
-                            resource: buf_b.as_entire_binding(),
+                            resource: buf_b.used_binding(),
                         }, // raw_out
                     ],
                 });
@@ -1761,15 +1855,15 @@ impl WgpuBackend {
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: front_params_buf.as_entire_binding(),
+                            resource: front_params_buf.used_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
-                            resource: buf_a.as_entire_binding(),
+                            resource: buf_a.used_binding(),
                         }, // rgb_in
                         wgpu::BindGroupEntry {
                             binding: 2,
-                            resource: buf_b.as_entire_binding(),
+                            resource: buf_b.used_binding(),
                         }, // raw_out
                     ],
                 });
@@ -1810,11 +1904,11 @@ impl WgpuBackend {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: log10_params_buf.as_entire_binding(),
+                        resource: log10_params_buf.used_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: buf_b.as_entire_binding(),
+                        resource: buf_b.used_binding(),
                     },
                 ],
             });
@@ -1828,23 +1922,23 @@ impl WgpuBackend {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: film_density_params_buf.as_entire_binding(),
+                    resource: film_density_params_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: buf_b.as_entire_binding(),
+                    resource: buf_b.used_binding(),
                 }, // log_raw
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: film_log_exp_buf.as_entire_binding(),
+                    resource: film_log_exp_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: film_curves_buf.as_entire_binding(),
+                    resource: film_curves_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: buf_a.as_entire_binding(),
+                    resource: buf_a.used_binding(),
                 }, // density_cmy
             ],
         });
@@ -1854,31 +1948,31 @@ impl WgpuBackend {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: print_params_buf.as_entire_binding(),
+                    resource: print_params_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: buf_a.as_entire_binding(),
+                    resource: buf_a.used_binding(),
                 }, // density_cmy
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: film_cd_buf.as_entire_binding(),
+                    resource: film_cd_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: film_bd_buf.as_entire_binding(),
+                    resource: film_bd_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: print_illu_buf.as_entire_binding(),
+                    resource: print_illu_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: print_sens_buf.as_entire_binding(),
+                    resource: print_sens_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
-                    resource: buf_b.as_entire_binding(),
+                    resource: buf_b.used_binding(),
                 }, // log_raw_print
             ],
         });
@@ -1888,23 +1982,23 @@ impl WgpuBackend {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: print_density_params_buf.as_entire_binding(),
+                    resource: print_density_params_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: buf_b.as_entire_binding(),
+                    resource: buf_b.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: print_log_exp_buf.as_entire_binding(),
+                    resource: print_log_exp_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: print_curves_buf.as_entire_binding(),
+                    resource: print_curves_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: buf_a.as_entire_binding(),
+                    resource: buf_a.used_binding(),
                 },
             ],
         });
@@ -1914,39 +2008,39 @@ impl WgpuBackend {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: scan_params_buf.as_entire_binding(),
+                    resource: scan_params_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: buf_a.as_entire_binding(),
+                    resource: buf_a.used_binding(),
                 }, // density_print
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: scan_cd_buf.as_entire_binding(),
+                    resource: scan_cd_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: scan_bd_buf.as_entire_binding(),
+                    resource: scan_bd_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: view_illu_buf.as_entire_binding(),
+                    resource: view_illu_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: cmf_x_buf.as_entire_binding(),
+                    resource: cmf_x_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
-                    resource: cmf_y_buf.as_entire_binding(),
+                    resource: cmf_y_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 7,
-                    resource: cmf_z_buf.as_entire_binding(),
+                    resource: cmf_z_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 8,
-                    resource: buf_b.as_entire_binding(),
+                    resource: buf_b.used_binding(),
                 }, // final rgb
             ],
         });
@@ -1956,12 +2050,12 @@ impl WgpuBackend {
                 label: Some("bg_scan_lut"),
                 layout: &pipe.layout,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: prm.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: buf_a.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 2, resource: table.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 3, resource: buf_b.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 4, resource: hyper.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 5, resource: hyper_map.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 0, resource: prm.used_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: buf_a.used_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: table.used_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: buf_b.used_binding() },
+                    wgpu::BindGroupEntry { binding: 4, resource: hyper.used_binding() },
+                    wgpu::BindGroupEntry { binding: 5, resource: hyper_map.used_binding() },
                 ],
             })
         });
@@ -2107,8 +2201,9 @@ impl WgpuBackend {
         // (density_cmy from film density curve) and buf_b (log_raw),
         // produces a corrected buf_a via re-interpolation of
         // `density_curves_0` against `log_raw - correction`. Uses three
-        // owned scratch buffers (correction, mid, accumulator). buf_a is
-        // reused as blur mid since density_cmy is no longer needed once
+        // scratch buffers (correction, mid, accumulator): halation's when
+        // it is active (`HalationState::spent_scratch`), else its own. buf_a
+        // is reused as blur mid since density_cmy is no longer needed once
         // the matmul has consumed it (the final density_curve_interp
         // overwrites buf_a anyway).
         let dir_state = p.dir_couplers.as_ref().map(|dp| {
@@ -2119,6 +2214,7 @@ impl WgpuBackend {
                 image.height,
                 &buf_a,
                 &buf_b,
+                halation_state.as_ref().map(HalationState::spent_scratch),
                 self,
             )
         });
@@ -2281,7 +2377,7 @@ impl WgpuBackend {
             // an empty image; the caller awaits `take_readback` for the pixels.
             let map_target = readback.unwrap_or(buf_b);
             let (tx, rx) = futures_channel::oneshot::channel();
-            map_target.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            map_target.used_slice().map_async(wgpu::MapMode::Read, move |r| {
                 let _ = tx.send(r);
             });
             *self.pending_readback.lock().unwrap() = Some(PendingReadback {
@@ -2297,7 +2393,7 @@ impl WgpuBackend {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let map_target = readback.as_ref().unwrap_or(&buf_b);
-            let slice = map_target.slice(..);
+            let slice = map_target.used_slice();
             let (tx, rx) = std::sync::mpsc::channel();
             slice.map_async(wgpu::MapMode::Read, move |r| {
                 tx.send(r).unwrap();
@@ -2917,19 +3013,19 @@ fn build_halation_state(
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: params_buf.as_entire_binding(),
+                        resource: params_buf.used_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: src.as_entire_binding(),
+                        resource: src.used_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: kernel_buf.as_entire_binding(),
+                        resource: kernel_buf.used_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 3,
-                        resource: buf_a.as_entire_binding(),
+                        resource: buf_a.used_binding(),
                     }, // mid
                 ],
             });
@@ -2939,19 +3035,19 @@ fn build_halation_state(
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: params_buf.as_entire_binding(),
+                        resource: params_buf.used_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: buf_a.as_entire_binding(),
+                        resource: buf_a.used_binding(),
                     }, // mid
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: kernel_buf.as_entire_binding(),
+                        resource: kernel_buf.used_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 3,
-                        resource: out.as_entire_binding(),
+                        resource: out.used_binding(),
                     },
                 ],
             });
@@ -3011,19 +3107,19 @@ fn build_halation_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: scatter_mix_params.as_entire_binding(),
+                resource: scatter_mix_params.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: buf_c.as_entire_binding(),
+                resource: buf_c.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: buf_d.as_entire_binding(),
+                resource: buf_d.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
-                resource: buf_b.as_entire_binding(),
+                resource: buf_b.used_binding(),
             },
         ],
     });
@@ -3082,15 +3178,15 @@ fn build_halation_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: thr_params.as_entire_binding(),
+                resource: thr_params.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: buf_b.as_entire_binding(),
+                resource: buf_b.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: buf_e.as_entire_binding(),
+                resource: buf_e.used_binding(),
             },
         ],
     });
@@ -3147,15 +3243,15 @@ fn build_halation_state(
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: acc_params.as_entire_binding(),
+                    resource: acc_params.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: buf_c.as_entire_binding(),
+                    resource: buf_c.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: buf_d.as_entire_binding(),
+                    resource: buf_d.used_binding(),
                 },
             ],
         });
@@ -3209,15 +3305,15 @@ fn build_halation_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: final_add_params.as_entire_binding(),
+                resource: final_add_params.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: buf_d.as_entire_binding(),
+                resource: buf_d.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: buf_b.as_entire_binding(),
+                resource: buf_b.used_binding(),
             },
         ],
     });
@@ -3270,11 +3366,11 @@ fn build_halation_state(
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: renorm_params.as_entire_binding(),
+                    resource: renorm_params.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: buf_b.as_entire_binding(),
+                    resource: buf_b.used_binding(),
                 },
             ],
         });
@@ -3305,6 +3401,14 @@ fn build_halation_state(
 
 #[cfg(feature = "wgpu-backend")]
 impl HalationState {
+    /// Its three full-frame scratch buffers. Halation runs on the raw
+    /// exposure, first in the chain, and leaves its result in buf_b: a later
+    /// stage of the same frame may write them (DIR does, saving three
+    /// full-frame buffers).
+    fn spent_scratch(&self) -> [&wgpu::Buffer; 3] {
+        [&self.buf_c, &self.buf_d, &self.buf_e]
+    }
+
     fn encode_passes(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -3498,15 +3602,15 @@ fn build_diffusion_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: down_params.as_entire_binding(),
+                resource: down_params.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: buf_b.as_entire_binding(),
+                resource: buf_b.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: small_in.as_entire_binding(),
+                resource: small_in.used_binding(),
             },
         ],
     });
@@ -3594,19 +3698,19 @@ fn build_diffusion_state(
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: bp.as_entire_binding(),
+                    resource: bp.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: small_in.as_entire_binding(),
+                    resource: small_in.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: kernel_buf.as_entire_binding(),
+                    resource: kernel_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: small_mid.as_entire_binding(),
+                    resource: small_mid.used_binding(),
                 },
             ],
         });
@@ -3616,19 +3720,19 @@ fn build_diffusion_state(
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: bp.as_entire_binding(),
+                    resource: bp.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: small_mid.as_entire_binding(),
+                    resource: small_mid.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: kernel_buf.as_entire_binding(),
+                    resource: kernel_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: small_out.as_entire_binding(),
+                    resource: small_out.used_binding(),
                 },
             ],
         });
@@ -3657,15 +3761,15 @@ fn build_diffusion_state(
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: ap.as_entire_binding(),
+                    resource: ap.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: small_out.as_entire_binding(),
+                    resource: small_out.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: small_acc.as_entire_binding(),
+                    resource: small_acc.used_binding(),
                 },
             ],
         });
@@ -3701,15 +3805,15 @@ fn build_diffusion_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: up_params.as_entire_binding(),
+                resource: up_params.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: small_acc.as_entire_binding(),
+                resource: small_acc.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: upsampled.as_entire_binding(),
+                resource: upsampled.used_binding(),
             },
         ],
     });
@@ -3754,15 +3858,15 @@ fn build_diffusion_state(
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: pb.as_entire_binding(),
+                    resource: pb.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: src.as_entire_binding(),
+                    resource: src.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: buf_mix.as_entire_binding(),
+                    resource: buf_mix.used_binding(),
                 },
             ],
         });
@@ -3876,10 +3980,11 @@ fn build_simple_blur_state(
     backend: &WgpuBackend,
 ) -> SimpleBlurState {
     let n_bytes = (width as u64) * (height as u64) * 3 * 4;
-    let dst = device.create_buffer_t(&wgpu::BufferDescriptor {
+    // Every pixel is written by the V pass. COPY_DST: poolable (`TrackedCreate`).
+    let dst = device.create_buffer_overwritten_t(&wgpu::BufferDescriptor {
         label: Some(&format!("{label}_blur_dst")),
         size: n_bytes,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
 
@@ -3939,19 +4044,19 @@ fn build_simple_blur_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: params_buf.as_entire_binding(),
+                resource: params_buf.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: src.as_entire_binding(),
+                resource: src.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: kernel_buf.as_entire_binding(),
+                resource: kernel_buf.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
-                resource: mid.as_entire_binding(),
+                resource: mid.used_binding(),
             },
         ],
     });
@@ -3961,19 +4066,19 @@ fn build_simple_blur_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: params_buf.as_entire_binding(),
+                resource: params_buf.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: mid.as_entire_binding(),
+                resource: mid.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: kernel_buf.as_entire_binding(),
+                resource: kernel_buf.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
-                resource: dst.as_entire_binding(),
+                resource: dst.used_binding(),
             },
         ],
     });
@@ -4106,15 +4211,15 @@ fn build_highlight_boost_state(
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: params_buf.as_entire_binding(),
+                    resource: params_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: input.as_entire_binding(),
+                    resource: input.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: output.as_entire_binding(),
+                    resource: output.used_binding(),
                 },
             ],
         });
@@ -4153,15 +4258,15 @@ fn build_highlight_boost_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: boost_params.as_entire_binding(),
+                resource: boost_params.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: final_max.as_entire_binding(),
+                resource: final_max.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: img.as_entire_binding(),
+                resource: img.used_binding(),
             },
         ],
     });
@@ -4255,11 +4360,11 @@ fn build_log_to_linear_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: params_buf.as_entire_binding(),
+                resource: params_buf.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: img.as_entire_binding(),
+                resource: img.used_binding(),
             },
         ],
     });
@@ -4306,11 +4411,11 @@ fn build_linear_to_log_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: params_buf.as_entire_binding(),
+                resource: params_buf.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: img.as_entire_binding(),
+                resource: img.used_binding(),
             },
         ],
     });
@@ -4360,11 +4465,11 @@ fn build_post_scan_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: params_buf.as_entire_binding(),
+                resource: params_buf.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: img.as_entire_binding(),
+                resource: img.used_binding(),
             },
         ],
     });
@@ -4411,13 +4516,22 @@ fn build_dir_state(
     height: u32,
     buf_a: &wgpu::Buffer,
     buf_b: &wgpu::Buffer,
+    scratch: Option<[&wgpu::Buffer; 3]>,
     backend: &WgpuBackend,
 ) -> DirState {
     let n_pixels = (width as usize) * (height as usize);
     let img_bytes = (n_pixels * 3 * 4) as u64;
 
+    // buf_correction holds the matmul output, then is overwritten by the
+    // tail blur (in-place via the V pass of a separable blur — H and V
+    // are separate compute passes so wgpu does NOT see the input/output
+    // as aliasing). buf_gaussian holds the first blur's output.
+    // buf_mix holds the weighted lerp result that ultimately gets
+    // subtracted from log_raw. Each is written whole before it is read
+    // (matmul, blur V pass, `lerp_clear`'s clear_first), so they need no
+    // zeroing and can be an earlier stage's spent full-frame `scratch`.
     let mk_buf = |label: &str| {
-        device.create_buffer_t(&wgpu::BufferDescriptor {
+        device.create_buffer_overwritten_t(&wgpu::BufferDescriptor {
             label: Some(label),
             size: img_bytes,
             usage: wgpu::BufferUsages::STORAGE
@@ -4426,15 +4540,10 @@ fn build_dir_state(
             mapped_at_creation: false,
         })
     };
-    // buf_correction holds the matmul output, then is overwritten by the
-    // tail blur (in-place via the V pass of a separable blur — H and V
-    // are separate compute passes so wgpu does NOT see the input/output
-    // as aliasing). buf_gaussian holds the first blur's output.
-    // buf_mix holds the weighted lerp result that ultimately gets
-    // subtracted from log_raw.
-    let buf_correction = mk_buf("dir_correction");
-    let buf_gaussian = mk_buf("dir_gaussian");
-    let buf_mix = mk_buf("dir_mix");
+    let [buf_correction, buf_gaussian, buf_mix] = match scratch {
+        Some(s) => s.map(wgpu::Buffer::clone),
+        None => ["dir_correction", "dir_gaussian", "dir_mix"].map(mk_buf),
+    };
 
     // ── 1. dir_matmul ─────────────────────────────────────────────────
     let matmul_pipe = backend.cached_pipeline(
@@ -4479,15 +4588,15 @@ fn build_dir_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: matmul_params_buf.as_entire_binding(),
+                resource: matmul_params_buf.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: buf_a.as_entire_binding(),
+                resource: buf_a.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: buf_correction.as_entire_binding(),
+                resource: buf_correction.used_binding(),
             },
         ],
     });
@@ -4576,19 +4685,19 @@ fn build_dir_state(
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: params_buf.as_entire_binding(),
+                        resource: params_buf.used_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: src.as_entire_binding(),
+                        resource: src.used_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: kernel_buf.as_entire_binding(),
+                        resource: kernel_buf.used_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 3,
-                        resource: buf_a.as_entire_binding(),
+                        resource: buf_a.used_binding(),
                     }, // mid
                 ],
             });
@@ -4598,19 +4707,19 @@ fn build_dir_state(
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: params_buf.as_entire_binding(),
+                        resource: params_buf.used_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: buf_a.as_entire_binding(),
+                        resource: buf_a.used_binding(),
                     }, // mid
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: kernel_buf.as_entire_binding(),
+                        resource: kernel_buf.used_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 3,
-                        resource: out.as_entire_binding(),
+                        resource: out.used_binding(),
                     },
                 ],
             });
@@ -4677,15 +4786,15 @@ fn build_dir_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: lerp_clear_params.as_entire_binding(),
+                resource: lerp_clear_params.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: buf_gaussian.as_entire_binding(),
+                resource: buf_gaussian.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: buf_mix.as_entire_binding(),
+                resource: buf_mix.used_binding(),
             },
         ],
     });
@@ -4711,15 +4820,15 @@ fn build_dir_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: lerp_acc_params.as_entire_binding(),
+                resource: lerp_acc_params.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: buf_correction.as_entire_binding(),
+                resource: buf_correction.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: buf_mix.as_entire_binding(),
+                resource: buf_mix.used_binding(),
             },
         ],
     });
@@ -4746,15 +4855,15 @@ fn build_dir_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: subtract_params.as_entire_binding(),
+                resource: subtract_params.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: buf_mix.as_entire_binding(),
+                resource: buf_mix.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: buf_b.as_entire_binding(),
+                resource: buf_b.used_binding(),
             },
         ],
     });
@@ -4820,23 +4929,23 @@ fn build_dir_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: density_params_buf.as_entire_binding(),
+                resource: density_params_buf.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: buf_b.as_entire_binding(),
+                resource: buf_b.used_binding(),
             }, // input: corrected log_raw
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: log_exp_buf.as_entire_binding(),
+                resource: log_exp_buf.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
-                resource: curves_buf.as_entire_binding(),
+                resource: curves_buf.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 4,
-                resource: buf_a.as_entire_binding(),
+                resource: buf_a.used_binding(),
             }, // output: corrected density_cmy
         ],
     });
@@ -5028,19 +5137,19 @@ fn build_unsharp_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: params_buf.as_entire_binding(),
+                resource: params_buf.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: buf_b.as_entire_binding(),
+                resource: buf_b.used_binding(),
             }, // src
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: kernel_buf.as_entire_binding(),
+                resource: kernel_buf.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
-                resource: buf_a.as_entire_binding(),
+                resource: buf_a.used_binding(),
             }, // mid
         ],
     });
@@ -5050,19 +5159,19 @@ fn build_unsharp_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: params_buf.as_entire_binding(),
+                resource: params_buf.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: buf_a.as_entire_binding(),
+                resource: buf_a.used_binding(),
             }, // mid
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: kernel_buf.as_entire_binding(),
+                resource: kernel_buf.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
-                resource: blur_dst.as_entire_binding(),
+                resource: blur_dst.used_binding(),
             }, // blurred output
         ],
     });
@@ -5107,19 +5216,19 @@ fn build_unsharp_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: combine_params.as_entire_binding(),
+                resource: combine_params.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: buf_b.as_entire_binding(),
+                resource: buf_b.used_binding(),
             }, // a = original
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: blur_dst.as_entire_binding(),
+                resource: blur_dst.used_binding(),
             }, // b = blurred
             wgpu::BindGroupEntry {
                 binding: 3,
-                resource: out_buf.as_entire_binding(),
+                resource: out_buf.used_binding(),
             }, // out = sharpened
         ],
     });
@@ -5258,11 +5367,11 @@ fn build_glare_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: gen_params.as_entire_binding(),
+                resource: gen_params.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: scratch.as_entire_binding(),
+                resource: scratch.used_binding(),
             },
         ],
     });
@@ -5332,19 +5441,19 @@ fn build_glare_state(
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: params_buf.as_entire_binding(),
+                    resource: params_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: scratch.as_entire_binding(),
+                    resource: scratch.used_binding(),
                 }, // src (read)
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: kernel_buf.as_entire_binding(),
+                    resource: kernel_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: buf_a.as_entire_binding(),
+                    resource: buf_a.used_binding(),
                 }, // mid
             ],
         });
@@ -5354,19 +5463,19 @@ fn build_glare_state(
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: params_buf.as_entire_binding(),
+                    resource: params_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: buf_a.as_entire_binding(),
+                    resource: buf_a.used_binding(),
                 }, // mid (read)
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: kernel_buf.as_entire_binding(),
+                    resource: kernel_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: scratch.as_entire_binding(),
+                    resource: scratch.used_binding(),
                 }, // back into scratch (separate pass — no aliasing)
             ],
         });
@@ -5415,15 +5524,15 @@ fn build_glare_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: apply_params.as_entire_binding(),
+                resource: apply_params.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: scratch.as_entire_binding(),
+                resource: scratch.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: buf_b.as_entire_binding(),
+                resource: buf_b.used_binding(),
             },
         ],
     });
@@ -5565,15 +5674,15 @@ fn build_gamut_state(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: params_buf.as_entire_binding(),
+                resource: params_buf.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: cmax_buf.as_entire_binding(),
+                resource: cmax_buf.used_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: buf_b.as_entire_binding(),
+                resource: buf_b.used_binding(),
             },
         ],
     });
@@ -5639,10 +5748,13 @@ fn build_grain_state(
     // blurs it into buf_b and the V pass adds it onto the clean density in
     // buf_a (CPU: filming.rs). Blurring the whole density softened the image.
     let dev_only = gp.hash.is_some() && gp.grain_blur > 0.1;
-    let grain_dev = device.create_buffer_t(&wgpu::BufferDescriptor {
+    // With `dev_only` the grain pass writes every pixel before the blur reads
+    // it; otherwise nothing reads it (a 16-byte stand-in for the binding).
+    // COPY_DST: poolable (`TrackedCreate`).
+    let grain_dev = device.create_buffer_overwritten_t(&wgpu::BufferDescriptor {
         label: Some("grain_dev"),
         size: if dev_only { (n_pixels * 3 * std::mem::size_of::<f32>()) as u64 } else { 16 },
-        usage: wgpu::BufferUsages::STORAGE,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
 
@@ -5703,9 +5815,9 @@ fn build_grain_state(
             label: Some("grain_hash_bg"),
             layout: &grain_pipe.layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: buf_a.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: grain_dev.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 0, resource: params_buf.used_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: buf_a.used_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: grain_dev.used_binding() },
             ],
         });
         DispatchJob { _params_buf: params_buf, pipeline: grain_pipe, bg }
@@ -5760,11 +5872,11 @@ fn build_grain_state(
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: params_buf.as_entire_binding(),
+                    resource: params_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: buf_a.as_entire_binding(),
+                    resource: buf_a.used_binding(),
                 },
             ],
         });
@@ -5840,19 +5952,19 @@ fn build_grain_state(
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: params_buf.as_entire_binding(),
+                    resource: params_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: if dev_only { grain_dev.as_entire_binding() } else { buf_a.as_entire_binding() },
+                    resource: if dev_only { grain_dev.used_binding() } else { buf_a.used_binding() },
                 }, // src: the grain deviation (hash), or the grainy density
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: kernel_buf.as_entire_binding(),
+                    resource: kernel_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: buf_b.as_entire_binding(),
+                    resource: buf_b.used_binding(),
                 }, // mid
             ],
         });
@@ -5862,19 +5974,19 @@ fn build_grain_state(
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: params_buf.as_entire_binding(),
+                    resource: params_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: buf_b.as_entire_binding(),
+                    resource: buf_b.used_binding(),
                 }, // mid
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: kernel_buf.as_entire_binding(),
+                    resource: kernel_buf.used_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: buf_a.as_entire_binding(),
+                    resource: buf_a.used_binding(),
                 }, // dst (in place)
             ],
         });
