@@ -156,6 +156,10 @@
       #tabs button[aria-selected=true]:hover { color: var(--accent); }
     }
   }
+  .has-tip { -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+  .tip { position: fixed; z-index: 50; max-width: min(280px, calc(100vw - 16px)); padding: 8px 10px; border-radius: 8px;
+    background: var(--card); color: var(--fg); border: 1px solid var(--line); font-size: 13px; line-height: 1.35;
+    box-shadow: 0 4px 16px rgb(0 0 0 / 0.45); pointer-events: none; }
 </style>
 </head>
 <body>

@@ -17,6 +17,7 @@ import { OUTPUT_WGSL, packParams, toSpaceCPU } from './lib/output.js';
 import { tiltMap, tiltRGBA } from './lib/tilt.js';
 import { tiltRuler } from './lib/ruler.js';
 import { hyperToneMap } from './lib/hypertone.js';
+import { attachTips } from './lib/tips.js';
 
 // Engine default; sets the physical pixel size of the engine's own effects (grain, halation, DIR diffusion) as the frame's
 // long side in mm. Not util.js FRAME_UM (36 mm, the 24×36 frame, for the JS effects): the engine's look was tuned at 35,
@@ -1340,6 +1341,7 @@ function offerUpdate() {
   if (v.classList.contains('update')) return;
   v.classList.add('update'); v.textContent += ' · aggiorna ↻'; v.addEventListener('click', reloadNow);
 }
+attachTips();   // after every row exists (the v3 rows above included)
 checkUpdate();
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
 addEventListener('pageshow', (e) => { if (e.persisted) checkUpdate(); });
