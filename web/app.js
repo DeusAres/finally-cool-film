@@ -1182,7 +1182,9 @@ const V4_FRONTIER = { gradation_a: 9.6, black_point: 0.023, white_point: 0.97, s
 // same Color Precision Gold 200 frames scanned on their Noritsu (eval/frontier_cp). It overrides every v3 Gold-look op (none of
 // them is the Noritsu's). Tone: a 9.26, black 0.025, white 1.0 (opener whites than the Frontier's 0.97), grey L* rms 1.25.
 // Colour: per-hue lightness / saturation / rotation (6 knots, proto_all.py then the engine): dE00 6.4-6.7 -> 4.3-4.5 over
-// -1..+2 EV, chroma 1.06 of the real. Balance: the Noritsu's greys are warm in the shadows / mids, neutral in the lights (mid b*
+// -1..+2 EV, chroma 1.06 of the real. The magenta rotation (31 deg) is the machine's: on the same negatives the real Noritsu
+// renders magentas / purples / violets 8-24 deg redder than the real Frontier (9 patches, every EV); here it takes dE00 4.75-4.93
+// -> 4.31-4.49 at the 4 EVs, helps 7 patches (B4 9.6 -> 2.4, H3 11.0 -> 4.7), worsens none by more than 0.2. Balance: the Noritsu's greys are warm in the shadows / mids, neutral in the lights (mid b*
 // +13 on the chart frame, +7 outdoors, against the Frontier's +4.5 / +2): C M Y +0.02 / +0.05 / +0.075 over the Frontier's
 // balance, the mean of the chart-frame fit (0.03 / 0.068 / 0.103) and the outdoor frame's about half of it.
 const V4_NORITSU = { gradation_a: 9.26, black_point: 0.025, white_point: 1.0, shoulder_start: 0.95, shoulder_sharpness: 0,

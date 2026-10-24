@@ -146,7 +146,12 @@ The same frames on the tool's Noritsu, with the same method; the Frontier's scan
   - Start: `SCAN=Noritsu colour.py` with neutral colour (no v3 ops), dE00 6.4-6.7.
   - `proto_all.py` fits the 18 per-hue values at 0 EV: dE00 4.3 / 4.5 / 4.5 / 4.5 in the engine (-1..+2 EV held out), chroma
     1.06 of the real.
-  - The magenta rotation (31 deg) rests on 5 patches.
+  - The magenta rotation (31 deg), checked per patch (`SCAN=Noritsu colour.py` at the 4 EVs, with it and with the magenta knot
+    at 0): dE00 4.75 / 4.86 / 4.87 / 4.93 -> 4.31 / 4.49 / 4.48 / 4.49 (0 / -1 / +1 / +2 EV). It is carried by H3 / B4 / C2 / B3
+    (opponent hue 331-348, hue error -13..-30 deg without) and partly B2 / M2 / L4 (15-24); no patch worsens by more than 0.2.
+    It is the machine's: the real Noritsu renders the same negatives' magentas / purples / violets 8-24 deg redder than the real
+    Frontier (9 patches, every EV). Kept. Left: violets I2 / C3 (opponent 284) -20 deg, as on the Frontier (a narrow feature
+    next to blues that are right, see the cyan note).
 - **Balance.** The Noritsu's greys are warm in the shadows / mids and neutral in the lights:
   - chart frame: mid b* +13 (Frontier +4.5);
   - outdoors: Spyder greys +7 to +11 in the mids / darks, ~0 in the lights.
