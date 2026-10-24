@@ -1145,14 +1145,19 @@ const V4_STOCK = { film_render: { layer_speed_ev: [0.75, 0, 0] } };
 const V4_NEUTRAL_SIGMA = 0.06;
 // v4 Frontier AutoSetup, from the real Frontier's Gold 200 frames with charts (eval/frontier_cp; their Lightroom export has every
 // setting at 0, so brightness and casts are the lab's). Density: over -1..+2 EV the real machine keeps the chart's mid grey within
-// 2.4 L* (full compensation): strength 1.0 (v3 0.85 drifted ~+11 L*). The level stays v3's (target_offset 0.0109): on scenes
-// reconstructed from the real scans (recon.py) the lab's mid grey is 67 / 80 / 53 (grey wall / black studio / outdoors), ours
-// 58 / 86 / 59; v3.47's draft target 0.16 matched the grey wall only (75 / 86 / 76: outdoor photos came out washed, user).
+// 2.4 L* (full compensation): strength 1.0 (v3 0.85 drifted ~+11 L*). Level, fitted on the three frames with grey patches
+// rebuilt as scenes (recon.py, autorecon.py): the lab's mid grey is 67 / 80 / 53 (grey wall / black studio / outdoors); the
+// trimmed mean alone (v3's target 0.0109) gave 58 / 86 / 59 (rms 7.2): a frame on black was lifted too much. highlight_weight 0.6
+// reads 60 % of the key from the bright large areas (engine: the G 95th percentile on the knee), target_offset -0.12: 62 / 79 /
+// 57 (rms 3.6; the grid's valley is flat over 0.5-0.7 / -0.10..-0.16); the exposure series stays flat (autolevel.py). Checked on
+// every Gold Frontier frame of the tool, 5 scenes x -1..+2 EV, through our tone curve (recon_model.py; Landscape and Night not in
+// the fit): level error rms 0.57 -> 0.29 EV; harbour -0.79 -> -0.04, night +0.80 -> -0.03, outdoor portrait +0.21 -> +0.41 EV
+// (still brighter than the lab, by ~4 L*). v3.47's draft target 0.16 matched the grey wall only (outdoor photos came out washed).
 // Colour: k_col x strength 0.68 (v3 0.3 x 0.85). The tungsten frame keeps b* +12 / +25 / +14 over daylight (dark / mid /
 // light greys) and takes the red out (a* -4); ours at v3's 0.26 kept +29 / +35 / +26 and a* +9 under a simulated 3200 K;
 // 0.6 / 0.85 leave +24 / +24 / +12 and +19 / +18 / +6: 0.68 matches the mean. The light's temperature is not known (3200 K
 // assumed): warmer light would mean an even stronger correction, so this is a lower bound.
-const V4_AUTO = { strength: 1.0, k_col: 0.68 };
+const V4_AUTO = { strength: 1.0, k_col: 0.68, highlight_weight: 0.6, target_offset: -0.12 };
 // v4 Frontier tone and colour, fitted to a real Frontier (eval/frontier_cp, eval/V4.md): the Color Precision film comparison tool's
 // Gold 200 chart frames (ColorChecker SG + Kodak grey scale, -1..+2 EV; the same negatives also on a Noritsu), our v4 Frontier
 // rendering the same patches on CPU with the operator's density / C M Y keys as free nuisances. Tone: grey L* rms 2.6 -> 1.2;

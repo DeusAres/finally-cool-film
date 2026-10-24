@@ -39,6 +39,19 @@ def scene():
     return img.astype(np.float32), cen, kd, ramp
 def openblas():
     return os.path.dirname(subprocess.run(f'find {ROOT}/engine/target/release/build -name "libopenblas*.so*"', shell=True, capture_output=True, text=True).stdout.split()[0])
+def sf_image(params_json, npy, png, gains=None):
+    """sf-eval image: the scene .npy through the params; gains r,g,b (scene-linear, before the film) also run AutoSetup on the
+    frame (None: the params' keys as given). Returns sf-eval's stderr (it prints the AutoSetup keys)."""
+    cmd = [f'{ROOT}/engine/target/release/sf-eval', 'image', '--params', params_json, '--in', npy, '--out', png, '--output-space', 'bt2020',
+           '--data', os.environ.get('SIM_DATA', f'{ROOT}/web/data')]
+    if gains is not None:
+        cmd += ['--under', '0', '--gains', ','.join(str(g) for g in gains)]
+    r = subprocess.run(cmd, env=dict(os.environ, LD_LIBRARY_PATH=openblas()), capture_output=True, text=True)
+    if r.returncode: sys.exit(r.stderr)
+    return r.stderr
+def png_lin(png):   # the BT.2020 render as linear sRGB, clipped as an sRGB export is
+    from PIL import Image
+    return np.clip(dec(np.asarray(Image.open(png).convert('RGB')).astype(float) / 255) @ (np.linalg.inv(SRGB) @ BT2020).T, 0, 1)
 def run(name, overrides, evs, gains=(1.0, 1.0, 1.0)):   # gains: the illuminant, per channel (tungsten: 1.486, 1, 0.439)
     import mkfrontier
     from PIL import Image
@@ -47,15 +60,11 @@ def run(name, overrides, evs, gains=(1.0, 1.0, 1.0)):   # gains: the illuminant,
     res = {}
     for ev in evs:
         k = 2 ** ev; out = f'sim_{name}_{ev:+g}.png'
-        r = subprocess.run([f'{ROOT}/engine/target/release/sf-eval', 'image', '--params', f'p_{name}.json', '--in', f'scene_{name}.npy', '--out', out,
-                            '--output-space', 'bt2020', '--under', '0', '--gains', ','.join(str(k * g) for g in gains), '--data', os.environ.get('SIM_DATA', f'{ROOT}/web/data')],
-                           env=dict(os.environ, LD_LIBRARY_PATH=openblas()), capture_output=True, text=True)
-        if r.returncode: sys.exit(r.stderr)
+        err = sf_image(f'p_{name}.json', f'scene_{name}.npy', out, [k * g for g in gains])
         enc = np.asarray(Image.open(out).convert('RGB')).astype(float) / 255
-        lin = dec(enc) @ (np.linalg.inv(SRGB) @ BT2020).T   # BT.2020 -> linear sRGB, clipped as an sRGB export is
-        lin = np.clip(lin, 0, 1)
+        lin = png_lin(out)
         m = lambda p: lin[p[1] - R:p[1] + R, p[0] - R:p[0] + R].reshape(-1, 3).mean(0)
-        res[f'{ev:+g}'] = {'auto': r.stderr.strip().split('autosetup')[-1], 'sg_lab': lin2lab(np.array([m(cen[n]) for n in NAMES])).tolist(),
+        res[f'{ev:+g}'] = {'auto': err.strip().split('autosetup')[-1], 'sg_lab': lin2lab(np.array([m(cen[n]) for n in NAMES])).tolist(),
                            'kodak_lab': lin2lab(np.array([m(p) for p in kd])).tolist(),
                            'ramp_enc': [enc[p[1] - R:p[1] + R, p[0] - R:p[0] + R].reshape(-1, 3).mean(0).tolist() for p in ramp],
                            'ramp_lab': lin2lab(np.array([m(p) for p in ramp])).tolist()}

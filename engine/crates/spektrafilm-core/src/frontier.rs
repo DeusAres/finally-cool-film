@@ -1215,10 +1215,15 @@ pub fn auto_setup(base: &FrontierBase, cmy: &[f32], width: usize, height: usize)
     // at or below the paper shoulder knee. A backlit white subject on a dark room has a low
     // mean but a dense subject; the mean alone would brighten it into the shoulder. The guard
     // only limits brightening (it can also pull a frame down), and never loosens the mean term.
-    let mut d_den = k_den * (target - mean[1]);
+    // `highlight_weight` > 0 reads the frame partly by its highlights: the key that puts the same percentile on the knee
+    // is blended in. Both terms move alike with exposure (compensated in full), but a frame on black (thin mean, normal
+    // highlights) is lifted less and a frame with a large bright background is printed darker, as the lab does.
+    let hi = percentile(&g, p.highlight_pct);
+    let knee = base.knee_density();
+    let w = p.highlight_weight;
+    let mut d_den = k_den * ((1.0 - w) * (target - mean[1]) + w * (knee - hi));
     if p.highlight_pct > 0.0 {
-        let hi = percentile(&g, p.highlight_pct);
-        let cap = base.knee_density() + p.highlight_margin - hi;
+        let cap = knee + p.highlight_margin - hi;
         d_den = d_den.min(p.strength * cap);
     }
     let d_den = d_den.clamp(-p.clamp_density, p.clamp_density);
@@ -1709,6 +1714,38 @@ mod tests {
         let k = |ev| super::thin_k_col(&p, ev, k0);
         assert!(k(1.2) < k0 && k(1.2) > k(p.thin_ev_hi));
         assert!((k(2.5) - p.thin_k_col * p.strength).abs() < 1e-12);
+    }
+
+    /// highlight_weight: the same chart (greys and whites, right third) on black and on a mid-grey wall. The mean alone
+    /// lifts the frame on black far more; with the highlights read in, the gap shrinks (both frames share them). Exposure
+    /// moves the key as much as without it (both terms shift alike).
+    #[test]
+    fn highlight_weight_lifts_a_frame_on_black_less_and_keeps_the_exposure_response() {
+        let Some(p) = pipeline() else { return };
+        let n = 40usize;
+        let frame = |surround: f64, gain: f64| {
+            let data = (0..n * n)
+                .flat_map(|i| {
+                    let (x, y) = (i % n, i / n);
+                    let v = if x < 26 { surround } else if y % 2 == 0 { 0.18 } else { 0.72 };
+                    [from_f64(v * gain); 3]
+                })
+                .collect();
+            ImageBuf::from_data(n as u32, n as u32, data)
+        };
+        let with_w = |w: f64| {
+            let mut params = p.params.clone();
+            params.scanner.frontier.model.auto.highlight_weight = w;
+            p.clone().with_params(params)
+        };
+        let (p0, p6) = (with_w(0.0), with_w(0.6));
+        let key = |q: &Pipeline, surround: f64, gain: f64| q.frontier_auto_setup(frame(surround, gain)).unwrap()[0] as f64;
+        let gap = |q: &Pipeline| key(q, 0.18 * 2f64.powf(-2.5), 1.0) - key(q, 0.18, 1.0);
+        assert!(gap(&p0) > 0.5, "the mean alone should lift the frame on black: {}", gap(&p0));
+        assert!(gap(&p6) < 0.7 * gap(&p0), "w 0.6 gap {} vs mean alone {}", gap(&p6), gap(&p0));
+        let step = |q: &Pipeline| key(q, 0.18, 2.0) - key(q, 0.18, 1.0);
+        assert!((step(&p6) - step(&p0)).abs() < 0.1, "exposure response {} vs {}", step(&p6), step(&p0));
+        assert!(step(&p0) < -0.3, "a stop brighter should darken the key: {}", step(&p0));
     }
 
     /// A 2.5 EV thin, warm-lit grey frame: the density key reaches past the old 0.30 logD clamp and the

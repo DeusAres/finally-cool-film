@@ -19,6 +19,7 @@ Run from a WORK directory (needs sf-eval, scripts/eval/build-sf-eval.sh; python 
     SET=Studio python3 -I measure_real.py STUDIO/Gold-0EV-Frontier.png STUDIO/Gold-*.png > real_studio.json   # SG on black
     python3 -I measure_charts.py CHARTS/Gold-0EV-Frontier.png CHARTS/*.png > charts_measure.json  # Spyder + Kodak (Charts)
     CP_SLIDER=SLIDER python3 -I recon.py && python3 -I autorecon.py NAME '{auto params}'      # Auto on the rebuilt real frames
+    CP_SLIDER=SLIDER python3 -I recon_model.py NAME '{auto params}' [SET/FRAME ...]   # level error on any frame (SCAN=Noritsu)
     python3 -I sim.py ext '{"scanner":{"frontier":{"model":{"gradation_a":0.001,"shoulder_sharpness":0,"black_point":0,
         "white_point":1,"range_density":2.4,"cool_neutral_warm":0,"highlight_neutral":0}}}}' -1 0 1 2   # linear curve: density per patch
     python3 -I fit_tone.py Frontier gradation_a,black_point,white_point '{"shoulder_sharpness":0,"shoulder_start":0.95}'
@@ -77,7 +78,7 @@ Run from a WORK directory (needs sf-eval, scripts/eval/build-sf-eval.sh; python 
   shot. So brightness and casts are the lab's, not a post adjustment.
   - Density, exposure. Over -1..+2 EV the real Frontier keeps the SG mid grey at L* 66.8-69.2: full compensation. v4 uses
     strength 1.0; v3's 0.85 drifted ~+11 L*.
-  - Density, level: kept at v3's (target_offset 0.0109).
+  - Density, level: v3's (target_offset 0.0109) up to 4.0; 4.1 below ("Level since 4.1").
     - A first fit on the Charts frame alone (target 0.16, `autolevel.py` on a synthetic frame with the wall and the board)
       matched its 67 L* but made outdoor photos washed out (user; sea / rock mean L* 51 / 47 -> 67 / 60).
     - The other frames with charts show the lab's level depends on the scene. Mid grey: grey wall 67, black studio 80
@@ -97,8 +98,28 @@ Run from a WORK directory (needs sf-eval, scripts/eval/build-sf-eval.sh; python 
     - 0.6 leaves +24 / +24 / +12;
     - 0.85 leaves +19 / +18 / +6.
   - v4 uses 0.68 (app.js V4_AUTO), a lower bound: the light's temperature is not known.
-  - Open: our AutoSetup does not separate a bright outdoor frame from a grey-wall frame as the lab's does (a darker outdoor
-    level by ~14 L*).
+  - Level since 4.1: the key is read partly from the highlights (engine `highlight_weight`: the key that puts the G 95th
+    percentile on the knee, blended with the trimmed-mean key; both move alike with exposure, so the compensation stays full).
+    Grid on the three rebuilt frames (mid grey, wall / black / outdoors; real 67 / 80 / 53):
+    | highlight_weight, target_offset | wall | black | outdoors | rms |
+    |---|---|---|---|---|
+    | 0, 0.0109 (v3) | 58 | 86 | 59 | 7.2 |
+    | 0.5, -0.10 | 60 | 81 | 56 | 4.3 |
+    | 0.6, -0.12 | 62 | 79 | 57 | 3.6 |
+    | 0.7, -0.16 | 64 | 77 | 58 | 3.9 |
+    | 0.8, -0.16 | 68 | 76 | 61 | 4.7 |
+    v4 uses 0.6 / -0.12. The outdoor frame's mean and 95th percentile in EV sit within 0.1 / 0.4 of the wall frame's, so no
+    statistic of the frame explains the lab printing it ~14 L* darker; it stays ~4 L* too bright.
+  - Check on frames without grey patches (`recon_model.py`): the real scan is turned back into a scene through our own tone
+    curve at zero keys (fitted to the real one), so the key our AutoSetup computes on it is our level error. All 20 Gold
+    Frontier frames (5 scenes x -1..+2 EV), mean error per scene in EV (+ = brighter than the lab):
+    | | Charts | Studio | Daylight | Landscape | Night | rms (20) |
+    |---|---|---|---|---|---|---|
+    | v3 level | -0.46 | +0.21 | +0.21 | -0.79 | +0.80 | 0.57 |
+    | 0.6 / -0.12 | -0.24 | -0.18 | +0.41 | -0.04 | -0.03 | 0.29 |
+    Landscape and Night were not in the fit. The night frames show the lab not compensating a thin negative in full (-1 EV
+    prints darker, +2 EV lighter: ours +0.49 / -0.42 at the ends). The Noritsu, same check: rms 0.36, night -0.53 (ours
+    darker), landscape +0.21.
 - **Step 4: lightness and hue by hue.** After step 3, saturated colours of every hue were still lighter than real (blues
   +4.8 L*), and the cyans were 24 deg greener.
   - Engine `hue_lightness` (6 knots, the same chroma ramp 0.19-0.66) replaces `cyan_green_darken`; `hue_shift` (6 knots, deg,
