@@ -1203,7 +1203,9 @@ const V4_NORITSU = { gradation_a: 9.26, black_point: 0.025, white_point: 1.0, sh
 // kept below the knee + margin) does that: margin -0.08 with the mean's target 0.15 gives, on scenes rebuilt from the real
 // Noritsu scans (recon.py / autorecon.py), wall / black / outdoors 68.7 / 58.7 / 57.9 (real 69.7 / 66.9 / 54.0; the v3 setup
 // 58.8 / 83.8 / 59.5). Colour: the tungsten frame keeps b* -3 / +7 / +5 (dark / mid / light) over daylight, much less than
-// the Frontier: k_col 1.15 (1.0 / 1.3 leave +11 / +9 / +7 and +3 / -5 / -5), clamp_colour 0.3 (0.15 bound it).
+// the Frontier: k_col 1.15 (1.0 / 1.3 leave +11 / +9 / +7 and +3 / -5 / -5), clamp_colour 0.3 (0.15 bound it). Exposure-faithful
+// check on its 20 Gold frames (recon_model.py EVS): rms 4.7 L*; the Frontier's mean / highlight blend does no better (4.9+ on the
+// fit scenes, eval/frontier_cp/README.md).
 const V4_NORITSU_AUTO = { strength: 1.0, target_offset: 0.15, highlight_margin: -0.08, k_col: 1.15, clamp_colour: 0.3 };
 const SCATTER_SCALE = 0.5;   // film scatter size multiplier (engine default 1), see renderParams
 // v3.32: dye-cloud blur 0.65 -> 0.45 (reference px, ~12 -> ~8 um): measured on 10 full-frame Gold 200 scans the grain has ~12 % of

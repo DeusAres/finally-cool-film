@@ -121,8 +121,10 @@ Run from a WORK directory (needs sf-eval, scripts/eval/build-sf-eval.sh; python 
     density per EV falls, under-correct). The highlight term read in EV along the grey ramp fixes it but over-corrects the
     other scenes at +2 EV (rms 3.2 / 3.4 / 3.5 at target -0.12 / -0.08 / -0.16): not taken.
     The default mode (each frame rebuilt from its own scan) loses the negative's exposure: it is a level check at 0 EV only.
-    With it the Noritsu reads rms 0.36 EV at 0 EV-equivalent levels (night -0.53, landscape +0.21); its exposure response is
-    not measured yet.
+    The Noritsu, exposure-faithful (`SCAN=Noritsu EVS=...`): rms 4.7 L* over the 20 frames (Charts -3.1, Studio -0.2,
+    Daylight +6.3, Landscape +4.8, Night -4.4 mean). The Frontier's blend (highlight_weight 0.4-1.0, target -0.36..+0.12,
+    margin back to 0.1672, fitted on Charts / Studio / Daylight) does not beat its highlight-anchored setup there (4.9-13.0 vs
+    4.5 L*): its grey-wall vs outdoor gap (~12 L*) is not in those statistics either. Kept.
 - **Step 4: lightness and hue by hue.** After step 3, saturated colours of every hue were still lighter than real (blues
   +4.8 L*), and the cyans were 24 deg greener.
   - Engine `hue_lightness` (6 knots, the same chroma ramp 0.19-0.66) replaces `cyan_green_darken`; `hue_shift` (6 knots, deg,
