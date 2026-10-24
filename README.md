@@ -14,6 +14,10 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.3**: **controlli dello scanner più veloci**, stesse immagini: la pellicola sviluppata resta sulla GPU fra un render e
+  l'altro, quindi Densità, Gradazione, Tono, Saturazione, Bright, Hyper Tone / Sharpness, i filtri colore e la Luminosità di
+  Nessuno rifanno solo la scansione (input, Halation, DIR e grana saltati finché foto, luce e pellicola non cambiano). In headless
+  un tasto del laboratorio 0.7 s contro 12.5 s di un cambio di pellicola (CPU che simula la GPU; su telefono il rapporto è minore).
 - **v4.2**: **spiegazioni sui controlli**: tieni premuta l'etichetta (sul telefono) o passaci sopra col mouse: cosa fa e dove
   agisce (scena, pellicola, scanner). Un tap e il doppio tap (= 0) restano come prima. Immagini identiche alla 4.1. Numeri della
   4.1 corretti con una misura che rispetta l'esposizione del negativo: errore di luminosità sui 20 fotogrammi veri 8.2 → 2.8 L*.
