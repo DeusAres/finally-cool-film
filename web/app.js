@@ -70,6 +70,7 @@ const ui = () => ({
   grain: +$('grain').value, halation: +$('halation').value, texture: +$('texture').value, clarity: +$('clarity').value, sharp: +$('sharp').value,
   ca: +$('ca').value, vignette: +$('vignette').value, falloff: +$('falloff').value, tilt: +$('tilt').value, htHi: +$('htHi').value, htLo: +$('htLo').value, hypersharp: +$('hypersharp').value,
   labD: +$('labD').value, labGrad: +$('labGrad').value, labHi: +$('labHi').value, labLo: +$('labLo').value, labSat: +$('labSat').value, labBright: +$('labBright').value,
+  nbBright: +$('nbBright').value,
   ...(V3 ? { hlc: +$('hlc').value, shadows: +$('shadows').value, v3dodge: $('v3dodge').checked } : {}),   // v3: snapshotted with the rest (export tiles)
 });
 // CA slider is quadratic: realistic (subtle) amounts get most of the travel.
@@ -299,7 +300,8 @@ const HYPER_THUMB_PX = 512;   // the map's source thumb: its resolution is the m
 // The lab operator's keys (Scanner tab, Frontier and Noritsu; SP-3000 manual, "Condition Setup and Maintenance" PP3-B1271E2:
 // density key, Gradation Selection Hard2..Soft3, Tone Adjustment highlight / shadow hard / soft, Saturation -9..+9, Bright Mode
 // colour intensity -2..+4). The manual gives the levels, not what a step does: the step sizes below are choices.
-// Densità: + = denser print (darker), the lab's sign; 1/4 EV per step (FrontierParams.density, EV, + = brighter).
+// Densità: + = denser print (darker), the lab's sign; 1/4 EV per step (FrontierParams.density, EV, + = brighter). Nessuno's
+// Luminosità (+ = brighter) moves the inversion's mid grey by the same step (invert.js; a choice: one step size in the tab).
 const LAB_D_EV = 0.25;
 // Gradazione: about 14 % of mid-tone slope per level (contrast key: slope x (1 + 1.9 c) up, x (1 + 0.85 c) down, frontier.rs).
 const GRAD_C = [-0.383, -0.271, -0.145, 0, 0.074, 0.157], GRAD_NAMES = ['Soft3', 'Soft2', 'Soft1', 'Normal', 'Hard1', 'Hard2'];
@@ -357,7 +359,7 @@ function v4Anchors(ev) {
   for (let i = 0; i < rgb.length; i++) rgb[i] *= g;
   return invertAnchors(syncEngine(ui(), { noGrain: true }).process(rgb, w, h), { shared: true });   // the scan is on the stock's grey axis (NARROWBAND)
 }
-const invUniform = (u) => (neutralScan() ? invertUniform(photo.inv, u.mshift, u.yshift) : null);
+const invUniform = (u) => (neutralScan() ? invertUniform(photo.inv, { mshift: u.mshift, yshift: u.yshift, ev: u.nbBright * LAB_D_EV }) : null);
 
 // ---------- preview ----------
 
@@ -838,6 +840,7 @@ async function setScanner(s) {
   for (const b of document.querySelectorAll('[data-scanner]')) b.setAttribute('aria-checked', String(b.dataset.scanner === s));
   $('frontierRows').hidden = scanner !== 'frontier';   // Hyper Tone / Hyper Sharpness are the Frontier's
   $('labRows').hidden = neutralScan();   // the operator's keys of a lab scanner (Frontier, Noritsu)
+  $('neutralRows').hidden = !neutralScan();   // Luminosità: the neutral inversion's mid grey
   if (!photo || loadingPhoto) return;   // a photo still loading measures for this scanner in its own runAuto
   internoBusy++;   // an export waits for the switch (same guard as Interno)
   try {
@@ -1098,7 +1101,7 @@ const FORMAT = {
   falloff: pct,
   texture: signPct, clarity: signPct, sharp: signPct, dust: pctOff, black: pctOff, htHi: (v) => HYPER_NAMES[v], htLo: (v) => HYPER_NAMES[v], hypersharp: pctOff,
   labD: (v) => `${sign(v)}${v}`, labGrad: (v) => GRAD_NAMES[v + 3], labHi: (v) => TONE_NAMES[v + 1], labLo: (v) => TONE_NAMES[v + 1],
-  labSat: (v) => `${sign(v)}${v}`, labBright: (v) => `${sign(v)}${v}`,
+  labSat: (v) => `${sign(v)}${v}`, labBright: (v) => `${sign(v)}${v}`, nbBright: (v) => `${sign(v)}${v}`,
 };
 const DUST_RESEED = 0.27;   // Rimescola with Polvere off turns it on at this amount (the default before v3.33)
 const AUTO_EV_MIN = -2, AUTO_EV_MAX = 2.5;   // Auto's exposure range, see autoSetup

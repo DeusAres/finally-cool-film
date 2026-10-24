@@ -13,7 +13,8 @@
 //   - mid grey: the frame's median density lands on display mid grey (0.18 linear);
 //   - between the anchors, density maps linearly to log display light (density is log exposure): the film's toe and
 //     shoulder shape the shadows and highlights, nothing else does.
-// Magenta ↔ Verde / Giallo ↔ Blu shift the G / B channel's position between its black and white.
+// Magenta ↔ Verde / Giallo ↔ Blu shift the G / B channel's position between its black and white; Luminosità moves where the
+// mid grey lands (EV over MID): the black and white anchors stay, so nothing clips.
 //
 // No DOM: shared by the GPU output pass (output.js) and the CPU path (app.js).
 
@@ -86,14 +87,16 @@ export function invertAnchors(scan, { shared = false } = {}) {
   return { lo, hi, xm: Math.min(XM_MAX, Math.max(XM_MIN, pct(mean.sort(), 0.5))) };
 }
 
-/** Uniform values for INVERT_WGSL: lo[3], 1 / range[3], xm, then the G / B key offsets. */
-export function invertUniform({ lo, hi, xm }, mshift = 0, yshift = 0) {
-  return [...lo, ...hi.map((h, c) => 1 / (h - lo[c])), xm, mshift * KEY, yshift * KEY];
+/** Uniform values for INVERT_WGSL: lo[3], 1 / range[3], xm, the G / B key offsets, then the mid grey's offset (ln units);
+ * `ev`: where the mid grey lands, EV over MID. */
+export function invertUniform({ lo, hi, xm }, { mshift = 0, yshift = 0, ev = 0 } = {}) {
+  return [...lo, ...hi.map((h, c) => 1 / (h - lo[c])), xm, mshift * KEY, yshift * KEY, ev * Math.LN2];
 }
 
-/** Display light (linear) of normalised density x: log-linear through (0, BLACK), (xm, MID), (1, 1), soft at both ends. */
-function displayLin(x, xm) {
-  let l = x < xm ? Math.log(BLACK) + (Math.log(MID) - Math.log(BLACK)) * (x / xm) : Math.log(MID) * (1 - (x - xm) / (1 - xm));
+/** Display light (linear) of normalised density x: log-linear through (0, BLACK), (xm, MID e^dm), (1, 1), soft at both ends. */
+function displayLin(x, xm, dm) {
+  const lm = Math.log(MID) + dm;
+  let l = x < xm ? Math.log(BLACK) + (lm - Math.log(BLACK)) * (x / xm) : lm * (1 - (x - xm) / (1 - xm));
   if (l > -SOFT_W) l = -SOFT_W * Math.exp(-(l + SOFT_W) / SOFT_W);
   else if (l < FLOOR + SOFT_W) l = FLOOR + SOFT_W * Math.exp((l - FLOOR - SOFT_W) / SOFT_W);
   return Math.exp(l);
@@ -104,15 +107,15 @@ function displayLin(x, xm) {
 export function invertCPU(px, u) {
   for (let c = 0; c < 3; c++) {
     const x = (-Math.log10(Math.max(T_MIN, srgbDec(px[c]))) - u[c]) * u[3 + c] + (c ? u[6 + c] : 0);   // keys: u[7] G, u[8] B
-    px[c] = srgbEnc(displayLin(x, u[6]));
+    px[c] = srgbEnc(displayLin(x, u[6], u[9]));
   }
 }
 
-/** WGSL: `invertNeg(c, o)`, the same as invertCPU on a display-encoded pixel, with the uniforms at P[o..o+8]; returns
+/** WGSL: `invertNeg(c, o)`, the same as invertCPU on a display-encoded pixel, with the uniforms at P[o..o+9]; returns
  * linear light. Needs srgbDec (color.js SRGB_WGSL). */
 export const INVERT_WGSL = /* wgsl */`
-fn invDisplay(x: vec3<f32>, xm: f32) -> vec3<f32> {
-  let lb = log(${BLACK.toFixed(6)}); let lm = log(${MID.toFixed(6)});
+fn invDisplay(x: vec3<f32>, xm: f32, dm: f32) -> vec3<f32> {
+  let lb = log(${BLACK.toFixed(6)}); let lm = log(${MID.toFixed(6)}) + dm;
   let lo = vec3<f32>(lb) + (lm - lb) * (x / xm);
   let hi = vec3<f32>(lm) * (vec3<f32>(1.0) - (x - vec3<f32>(xm)) / (1.0 - xm));
   var l = select(hi, lo, x < vec3<f32>(xm));
@@ -126,6 +129,6 @@ fn invertNeg(c: vec3<f32>, o: u32) -> vec3<f32> {
   let lo = vec3<f32>(P[o], P[o + 1u], P[o + 2u]);
   let k = vec3<f32>(P[o + 3u], P[o + 4u], P[o + 5u]);
   let x = (d - lo) * k + vec3<f32>(0.0, P[o + 7u], P[o + 8u]);
-  return invDisplay(x, P[o + 6u]);
+  return invDisplay(x, P[o + 6u], P[o + 9u]);
 }`;
-export const INVERT_LEN = 9;
+export const INVERT_LEN = 10;

@@ -169,6 +169,13 @@
      "scanFrontier"
     ]
    }
+  },
+  "v4_sky_bright": {
+   "photo": "samples/indigo/IDG_20261022_182651_466",
+   "query": "?v4",
+   "ui": {
+    "nbBright": 4
+   }
   }
  }
 }
