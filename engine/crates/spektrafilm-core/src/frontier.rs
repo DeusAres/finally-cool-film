@@ -188,8 +188,6 @@ pub struct FrontierBase {
     /// (film-type LUT); empty = the linear `slope`/`offset` fit.
     lut_x: [Vec<f64>; 3],
     lut_y: Vec<f64>,
-    /// The stock's grey ramp as (G setup density, EV over mid grey), density rising: `ev_of_density`.
-    ramp_g: Vec<(f64, f64)>,
 }
 
 impl FrontierBase {
@@ -210,7 +208,6 @@ impl FrontierBase {
             d_per_ev: 1.0,
             lut_x: [Vec::new(), Vec::new(), Vec::new()],
             lut_y: Vec::new(),
-            ramp_g: Vec::new(),
         };
         b.dmin = b.raw_density([0.0; 3]);
         b.fit_setup(ramp_cmy);
@@ -231,18 +228,6 @@ impl FrontierBase {
     pub fn normalised_density(&self, cmy: [f64; 3]) -> [f64; 3] {
         let d = self.raw_density(cmy);
         [d[0] - self.dmin[0], d[1] - self.dmin[1], d[2] - self.dmin[2]]
-    }
-
-    /// EV over mid grey of a G setup density, along the stock's grey ramp (straight line, toe and shoulder alike); past the
-    /// ramp's ends, its end slopes. Without a ramp (identity setup): the mid-scale slope.
-    pub fn ev_of_density(&self, d: f64) -> f64 {
-        let r = &self.ramp_g;
-        if r.len() < 2 {
-            return (d - self.d_ref) / self.d_per_ev;
-        }
-        let i = r.partition_point(|&(x, _)| x < d).clamp(1, r.len() - 1);
-        let ((x0, e0), (x1, e1)) = (r[i - 1], r[i]);
-        e0 + (d - x0) * (e1 - e0) / (x1 - x0)
     }
 
     /// Film-type-setup density `D'_c`, before the keys.
@@ -337,12 +322,6 @@ impl FrontierBase {
             }
         }
         self.d_ref = m[1];
-        // G's setup density is its normalised density (the setup maps R and B onto it): the ramp read back to EV
-        for (d, &ev) in dn.iter().zip(&evs) {
-            if self.ramp_g.last().is_none_or(|&(p, _)| d[1] > p + 1e-6) {
-                self.ramp_g.push((d[1], ev));
-            }
-        }
         // Mid-scale slope: regression of G density on EV through the mid point, over +-2 EV only
         // (a wide ramp would average in the toe and shoulder).
         let (mut sge2, mut see2) = (0.0, 0.0);
@@ -1294,11 +1273,7 @@ pub fn auto_setup(base: &FrontierBase, cmy: &[f32], width: usize, height: usize)
     let hi = percentile(&g, p.highlight_pct);
     let knee = base.knee_density();
     let w = p.highlight_weight;
-    // The highlight term is measured in EV along the stock's grey ramp, then put back in mid-scale density: an overexposed
-    // frame's highlights sit in the film's shoulder, where density per EV falls, and read in density they under-corrected
-    // it (real Frontier frames at +2 EV keep their level; ours came out up to 5 L* brighter, recon_model.py EVS).
-    let hi_key = base.d_per_ev * (base.ev_of_density(knee) - base.ev_of_density(hi));
-    let mut d_den = k_den * ((1.0 - w) * (target - mean[1]) + w * hi_key);
+    let mut d_den = k_den * ((1.0 - w) * (target - mean[1]) + w * (knee - hi));
     if p.highlight_pct > 0.0 {
         let cap = knee + p.highlight_margin - hi;
         d_den = d_den.min(p.strength * cap);
