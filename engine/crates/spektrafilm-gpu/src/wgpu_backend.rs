@@ -284,6 +284,12 @@ struct WebIo {
     pack_pipe: Option<(String, wgpu::ComputePipeline)>,
     /// Linear clamp sampler of the input pass (stateless: made once).
     sampler: Option<wgpu::Sampler>,
+    /// Bumped by every frame (re)allocation or upload: the frame's content, for the film cache key.
+    frame_gen: u64,
+    /// The developed film (the chain's density after grain, H*W*3 f32) of the last full-frame render and its key: a render
+    /// whose input pass, frame and film params are unchanged copies it instead of running input .. grain (a scanner, lab or
+    /// output control moved). Not pooled: it lives across frames. Dropped with the frame.
+    film: Option<(u64, wgpu::Buffer)>,
 }
 
 #[cfg(feature = "wgpu-backend")]
@@ -584,6 +590,10 @@ impl WgpuBackend {
         if let Some(t) = io.frame.take() {
             t.destroy();
         }
+        if let Some((_, b)) = io.film.take() {
+            b.destroy();
+        }
+        io.frame_gen += 1;
         let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
         io.frame = Some(self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("frame"),
@@ -600,7 +610,8 @@ impl WgpuBackend {
     /// Write whole rows of the frame from row `y0` on (as many as `rgba`
     /// holds): uploading in strips keeps a big frame out of the wasm heap.
     pub fn set_frame_rows(&self, rgba: &[u8], y0: u32) {
-        let io = self.io.lock().unwrap();
+        let mut io = self.io.lock().unwrap();
+        io.frame_gen += 1;
         let tex = io.frame.as_ref().expect("alloc_frame before set_frame_rows");
         let width = tex.width();
         let rows = (rgba.len() / (width as usize * 4)) as u32;
@@ -619,7 +630,8 @@ impl WgpuBackend {
 
     /// Rows of a half-float frame (`alloc_frame_f16`): 4 × f16 bits per pixel.
     pub fn set_frame_rows_f16(&self, rgba: &[u16], y0: u32) {
-        let io = self.io.lock().unwrap();
+        let mut io = self.io.lock().unwrap();
+        io.frame_gen += 1;
         let tex = io.frame.as_ref().expect("alloc_frame_f16 before set_frame_rows_f16");
         let width = tex.width();
         let rows = (rgba.len() / (width as usize * 4)) as u32;
@@ -1440,6 +1452,23 @@ impl WgpuBackend {
             let mut io = self.io.lock().unwrap();
             (io.input.take(), io.pack.take())
         };
+        // Film cache (`WebIo::film`): only a full-frame render through the input pass (the preview; export tiles are
+        // smaller than the frame), keyed on the film params, the input pass and the frame's content.
+        let film_key = match (p.film_key, input_req.as_ref()) {
+            (Some(k), Some(req)) if p.scan_film => {
+                let io = self.io.lock().unwrap();
+                io.frame.as_ref().filter(|f| (f.width(), f.height()) == (image.width, image.height)).map(|_| {
+                    use std::hash::{Hash, Hasher};
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    (k, io.frame_gen, image.width, image.height, &req.wgsl).hash(&mut h);
+                    req.uniform.iter().chain(&req.gain_lut).for_each(|v| v.to_bits().hash(&mut h));
+                    h.finish()
+                })
+            }
+            _ => None,
+        };
+        let film_hit = film_key.is_some()
+            && self.io.lock().unwrap().film.as_ref().is_some_and(|(k, b)| Some(*k) == film_key && b.size() == img_bytes as u64);
         let input_f32 = scalars_to_f32(&image.data);
         let buf_a = if input_req.is_some() {
             make_img_buf("img_a")   // filled by the input pass
@@ -2079,7 +2108,7 @@ impl WgpuBackend {
         // buffers `buf_a` / `buf_b` are reused as blur input/mid; the new
         // `buf_c` and `buf_d` hold the scatter outputs and the halation
         // accumulator. None of this is touched when `p.halation` is `None`.
-        let halation_state = p.halation.as_ref().map(|hp| {
+        let halation_state = p.halation.as_ref().filter(|_| !film_hit).map(|hp| {
             build_halation_state(
                 &self.device,
                 hp,
@@ -2093,7 +2122,7 @@ impl WgpuBackend {
 
         // ── Highlight boost state ────────────────────────────────────────
         // Runs on raw film exposure immediately after the front pass.
-        let highlight_state = p.highlight_boost.as_ref().map(|hp| {
+        let highlight_state = p.highlight_boost.as_ref().filter(|_| !film_hit).map(|hp| {
             build_highlight_boost_state(&self.device, hp, n_pixels, &buf_b, self)
         });
 
@@ -2101,11 +2130,11 @@ impl WgpuBackend {
         // Applied on the raw film exposure (buf_b) right after hanatos and
         // before halation, matching the CPU filming order. Owns its own
         // downsampled scratch buffers.
-        let diffusion_state = p.diffusion.as_ref().map(|plan| {
+        let diffusion_state = p.diffusion.as_ref().filter(|_| !film_hit).map(|plan| {
             build_diffusion_state(&self.device, plan, image.width, image.height, &buf_b, self)
         });
 
-        let camera_lens_blur_state = p.camera_lens_blur_px.and_then(|sigma| {
+        let camera_lens_blur_state = p.camera_lens_blur_px.filter(|_| !film_hit).and_then(|sigma| {
             (sigma > 0.0).then(|| {
                 build_simple_blur_state(
                     &self.device,
@@ -2184,7 +2213,7 @@ impl WgpuBackend {
         // before print_spectral. Optionally followed by a Gaussian
         // post-blur (uses buf_b as mid, since log_raw_corrected in buf_b
         // is no longer needed after DIR's final density_curve_0).
-        let grain_state = p.grain.as_ref().map(|gp| {
+        let grain_state = p.grain.as_ref().filter(|_| !film_hit).map(|gp| {
             build_grain_state(
                 &self.device,
                 gp,
@@ -2206,7 +2235,7 @@ impl WgpuBackend {
         // is reused as blur mid since density_cmy is no longer needed once
         // the matmul has consumed it (the final density_curve_interp
         // overwrites buf_a anyway).
-        let dir_state = p.dir_couplers.as_ref().map(|dp| {
+        let dir_state = p.dir_couplers.as_ref().filter(|_| !film_hit).map(|dp| {
             build_dir_state(
                 &self.device,
                 dp,
@@ -2235,7 +2264,7 @@ impl WgpuBackend {
         // ── Single command buffer chaining everything ────────────────────
         let mut encoder = self.device.create_command_encoder(&Default::default());
         flush_pending_clears(&mut encoder);
-        if let Some(req) = input_req.as_ref() {
+        if let Some(req) = input_req.as_ref().filter(|_| !film_hit) {
             self.encode_input_pass(&mut encoder, req, &buf_a, image.width, image.height);
         }
         let dispatch = |encoder: &mut wgpu::CommandEncoder,
@@ -2251,6 +2280,11 @@ impl WgpuBackend {
             pass.dispatch_workgroups((n + workgroup_size - 1) / workgroup_size, 1, 1);
         };
 
+        // The film stage (1 .. 3c), or the developed film it left last time (a cache hit: same input, frame and film).
+        if film_hit {
+            let io = self.io.lock().unwrap();
+            encoder.copy_buffer_to_buffer(&io.film.as_ref().expect("film_hit").1, 0, &buf_a, 0, img_bytes as u64);
+        } else {
         // 1. Front pass (hanatos or mallett): buf_a (rgb in) → buf_b (raw)
         dispatch(&mut encoder, &front_pipe.pipeline, &bg_front, n_pixels);
         // 1a. Highlight boost on raw, before optical scatter.
@@ -2294,6 +2328,25 @@ impl WgpuBackend {
         if let Some(gs) = grain_state.as_ref() {
             let wg_xy = (image.width.div_ceil(16), image.height.div_ceil(16));
             gs.encode_passes(&mut encoder, n_pixels, workgroup_size, wg_xy);
+        }
+        if let Some(key) = film_key {
+            let mut io = self.io.lock().unwrap();
+            if io.film.as_ref().is_none_or(|(_, b)| b.size() != img_bytes as u64) {
+                if let Some((_, b)) = io.film.take() {
+                    b.destroy();
+                }
+                let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("film_cache"),
+                    size: img_bytes as u64,
+                    usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                io.film = Some((key, buf));
+            }
+            let entry = io.film.as_mut().expect("just set");
+            entry.0 = key;
+            encoder.copy_buffer_to_buffer(&buf_a, 0, &entry.1, 0, img_bytes as u64);
+        }
         }
         // 4 + 5. Printing: print_spectral (buf_a → buf_b) then the print
         //     density curve (buf_b → buf_a). Skipped for scan_film — the

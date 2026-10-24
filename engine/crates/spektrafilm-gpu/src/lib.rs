@@ -239,6 +239,9 @@ pub struct FilmChainParams<'a> {
     /// Whether the final output should be sRGB-encoded after clamping. Mirrors
     /// `RuntimeParams::io.output_cctf_encoding`.
     pub output_cctf_encoding: bool,
+    /// The film stage's inputs hashed (core `Pipeline::film_stage_key`); `Some` only when scanning film. With the input pass
+    /// and the frame it lets the web path keep the developed film between renders (`WebIo::film`).
+    pub film_key: Option<u64>,
     /// Frontier scanner LUT: when `Some` (scan_film), the scan pass is a
     /// trilinear lookup in this table instead of `scan_spectral`.
     pub frontier: Option<FrontierGpuLut<'a>>,

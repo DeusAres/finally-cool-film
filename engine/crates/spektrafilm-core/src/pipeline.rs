@@ -227,6 +227,15 @@ pub struct Pipeline {
     cmy_per_ev: Option<Arc<(HyperStock, String)>>,
     /// The stock's toe (G density at its end, red layer shortfall), from the datasheet curves (`stock_toe`).
     toe: (f64, f64),
+    /// Which construction this is (a process-wide count; `with_params` keeps it): part of `film_stage_key`, so two engines
+    /// never share a cached film stage.
+    instance: u64,
+}
+
+/// Next `Pipeline::instance`.
+fn next_instance() -> u64 {
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl Pipeline {
@@ -280,6 +289,24 @@ impl Pipeline {
     /// The scan LUT the scan stage uses instead of the spectral scan: the Frontier's or the narrowband scan's.
     fn scan_lut(&self) -> Option<&crate::frontier::FrontierLut> {
         self.frontier.as_deref().map(|f| f.lut()).or(self.narrowband.as_deref().map(|n| &n.0))
+    }
+
+    /// Everything the film stage (input → exposure → halation → density → DIR → grain) depends on, hashed: the params with
+    /// the scanner and the output's fields reset (they act after it), and this engine (`instance`: film, paper, calibration).
+    /// More than it needs is safe (a needless re-run); less is not. With it the GPU backend keeps the developed film between
+    /// renders whose input and film are unchanged (a scanner, lab or output control moved: the film stage is skipped).
+    fn film_stage_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut p = self.params.clone();
+        p.scanner = Default::default();
+        let d = crate::params::IoParams::default();
+        p.io.output_color_space = d.output_color_space;
+        p.io.output_cctf_encoding = d.output_cctf_encoding;
+        p.io.output_gamut_compress = d.output_gamut_compress;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.instance.hash(&mut h);
+        serde_json::to_string(&p).unwrap_or_default().hash(&mut h);
+        h.finish()
     }
 
     /// Whether the scan stage uses a scan LUT (without building the Frontier's).
@@ -499,6 +526,7 @@ impl Pipeline {
             narrowband: None,
             cmy_per_ev: None,
             toe,
+            instance: next_instance(),
         }
     }
 
@@ -781,6 +809,7 @@ impl Pipeline {
             narrowband: None,
             cmy_per_ev: None,
             toe,
+            instance: next_instance(),
         };
         pipeline.refresh_frontier();
         pipeline.refresh_narrowband();
@@ -1510,6 +1539,7 @@ impl Pipeline {
             enlarger_diffusion,
             print_exposure_scale,
             output_cctf_encoding: self.params.io.output_cctf_encoding,
+            film_key: self.params.io.scan_film.then(|| self.film_stage_key()),
             frontier: self.scan_lut().map(|lut| {
                 let (table, steps, data_min, inv) = lut.gpu_table();
                 let hyper = self.hyper_tone().map(|(h, f)| spektrafilm_gpu::HyperToneGpu {
