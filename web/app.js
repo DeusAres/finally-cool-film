@@ -1157,10 +1157,12 @@ const V4_NEUTRAL_SIGMA = 0.06;
 // rebuilt as scenes (recon.py, autorecon.py): the lab's mid grey is 67 / 80 / 53 (grey wall / black studio / outdoors); the
 // trimmed mean alone (v3's target 0.0109) gave 58 / 86 / 59 (rms 7.2): a frame on black was lifted too much. highlight_weight 0.6
 // reads 60 % of the key from the bright large areas (engine: the G 95th percentile on the knee), target_offset -0.12: 62 / 79 /
-// 57 (rms 3.6; the grid's valley is flat over 0.5-0.7 / -0.10..-0.16); the exposure series stays flat (autolevel.py). Checked on
-// every Gold Frontier frame of the tool, 5 scenes x -1..+2 EV, through our tone curve (recon_model.py; Landscape and Night not in
-// the fit): level error rms 0.57 -> 0.29 EV; harbour -0.79 -> -0.04, night +0.80 -> -0.03, outdoor portrait +0.21 -> +0.41 EV
-// (still brighter than the lab, by ~4 L*). v3.47's draft target 0.16 matched the grey wall only (outdoor photos came out washed).
+// 57 (rms 3.6; the grid's valley is flat over 0.5-0.7 / -0.10..-0.16). Checked on every Gold Frontier frame of the tool, 5 scenes
+// x -1..+2 EV (recon_model.py EVS: each scene rebuilt through our tone curve and exposed as the camera did; Landscape and Night
+// not in the fit): mean L* ours - real, rms 8.2 -> 2.8; harbour -12.4 -> +2.0, night +8.6 -> +0.5, grey wall -8.7 -> -3.1, outdoor
+// portrait +2.1 -> +3.7 (brighter than the lab). Left: overexposed frames' highlights sit in the film's shoulder, so the harbour
+// at +2 EV is +4.8; reading that term in EV along the grey ramp fixes it but over-corrects the others (rms 3.2-3.5): not taken.
+// v3.47's draft target 0.16 matched the grey wall only (outdoor photos came out washed).
 // Colour: k_col x strength 0.68 (v3 0.3 x 0.85). The tungsten frame keeps b* +12 / +25 / +14 over daylight (dark / mid /
 // light greys) and takes the red out (a* -4); ours at v3's 0.26 kept +29 / +35 / +26 and a* +9 under a simulated 3200 K;
 // 0.6 / 0.85 leave +24 / +24 / +12 and +19 / +18 / +6: 0.68 matches the mean. The light's temperature is not known (3200 K

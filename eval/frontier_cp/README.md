@@ -110,16 +110,19 @@ Run from a WORK directory (needs sf-eval, scripts/eval/build-sf-eval.sh; python 
     | 0.8, -0.16 | 68 | 76 | 61 | 4.7 |
     v4 uses 0.6 / -0.12. The outdoor frame's mean and 95th percentile in EV sit within 0.1 / 0.4 of the wall frame's, so no
     statistic of the frame explains the lab printing it ~14 L* darker; it stays ~4 L* too bright.
-  - Check on frames without grey patches (`recon_model.py`): the real scan is turned back into a scene through our own tone
-    curve at zero keys (fitted to the real one), so the key our AutoSetup computes on it is our level error. All 20 Gold
-    Frontier frames (5 scenes x -1..+2 EV), mean error per scene in EV (+ = brighter than the lab):
+  - Check on frames without grey patches (`EVS=-1,0,1,2 recon_model.py`): each scene's 0 EV scan is turned back into a scene
+    through our own tone curve at zero keys (fitted to the real one), then exposed by 2^ev as the camera did; our render's mean
+    L* is compared with the real frame at that EV. All 20 Gold Frontier frames, mean L* ours - real per scene (+ = brighter):
     | | Charts | Studio | Daylight | Landscape | Night | rms (20) |
     |---|---|---|---|---|---|---|
-    | v3 level | -0.46 | +0.21 | +0.21 | -0.79 | +0.80 | 0.57 |
-    | 0.6 / -0.12 | -0.24 | -0.18 | +0.41 | -0.04 | -0.03 | 0.29 |
-    Landscape and Night were not in the fit. The night frames show the lab not compensating a thin negative in full (-1 EV
-    prints darker, +2 EV lighter: ours +0.49 / -0.42 at the ends). The Noritsu, same check: rms 0.36, night -0.53 (ours
-    darker), landscape +0.21.
+    | v3 level (4.0) | -8.7 | +3.0 | +2.1 | -12.4 | +8.6 | 8.2 |
+    | 0.6 / -0.12 (4.1) | -3.1 | -0.5 | +3.7 | +2.0 | +0.5 | 2.8 |
+    Landscape and Night were not in the fit. Left: at +2 EV the harbour is +4.8 (its highlights in the film's shoulder, where
+    density per EV falls, under-correct). The highlight term read in EV along the grey ramp fixes it but over-corrects the
+    other scenes at +2 EV (rms 3.2 / 3.4 / 3.5 at target -0.12 / -0.08 / -0.16): not taken.
+    The default mode (each frame rebuilt from its own scan) loses the negative's exposure: it is a level check at 0 EV only.
+    With it the Noritsu reads rms 0.36 EV at 0 EV-equivalent levels (night -0.53, landscape +0.21); its exposure response is
+    not measured yet.
 - **Step 4: lightness and hue by hue.** After step 3, saturated colours of every hue were still lighter than real (blues
   +4.8 L*), and the cyans were 24 deg greener.
   - Engine `hue_lightness` (6 knots, the same chroma ramp 0.19-0.66) replaces `cyan_green_darken`; `hue_shift` (6 knots, deg,

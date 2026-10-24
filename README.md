@@ -15,8 +15,8 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 ## App (v4.0)
 
 - **v4.1**: **AutoSetup del Frontier** tarato su tutti i fotogrammi Gold del Frontier vero di Color Precision (5 scene × 4
-  esposizioni): il livello si legge per il 60 % dalle grandi zone chiare, non solo dalla media; errore di livello 0.57 → 0.29 EV
-  (porto −0.79 → −0.04, notte +0.80 → −0.03; il ritratto all'aperto resta ~4 L* più chiaro del vero). **Nessuno: Luminosità**
+  esposizioni): il livello si legge per il 60 % dalle grandi zone chiare, non solo dalla media; errore di luminosità 8.2 → 2.8 L*
+  (porto −12.4 → +2.0, notte +8.6 → +0.5; il ritratto all'aperto resta ~4 L* più chiaro del vero). **Nessuno: Luminosità**
   (scheda Scanner, ¼ EV a passo): sposta il grigio medio, nero e bianco restano. Più leggera sul telefono, stesse immagini: la
   LUT di Nessuno non si ricostruisce più a ogni foto / passo di Halation (0.75 → 0.08 s), quella del Frontier una volta sola
   al cambio scanner, le conversioni dell'anteprima RAW nel worker (~0.45 s di blocco in meno all'apertura), la memoria GPU
