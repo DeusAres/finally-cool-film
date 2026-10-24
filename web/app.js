@@ -3,7 +3,7 @@ import { sleep, store, stripRows, PREVIEW_LONG_SIDE, PREVIEW_KPX, FRAME_UM } fro
 import { DISPLAY_GAIN_LUT } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
-import { isRaw, loadRaw, uploadRaw, rawThumb, rawPreviewRGBA, withRotation } from './lib/raw.js';
+import { isRaw, loadRaw, uploadRaw, previewThumb, withRotation } from './lib/raw.js';
 import { internoParams } from './lib/interno.js';
 import { invertAnchors, invertUniform, invertCPU } from './lib/invert.js';
 import { iccSegment } from './lib/icc.js';
@@ -258,10 +258,14 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
     d32[p] = (q8(px[0]) | (q8(px[1]) << 8) | (q8(px[2]) << 16) | 0xff000000) >>> 0;
   }
 }
+/** A fresh copy of the photo's scene-linear thumb at `longSide`: the raw's own (decoded with it, raw.js previewThumb), or the
+ * JPEG preview's. */
+const thumbOf = (preview, longSide = THUMB_PX) => (preview.raw ? previewThumb(preview.raw, longSide) : jpegThumb(preview, longSide));
+
 /** v3: DISPLAY_GAIN_LUT + the dodging header and base map (base: once per photo, from the AutoSetup thumbnail). */
 function v3Gain(u, space) {
   if (!photo.dodge) {
-    const raw = photo.preview.raw, { rgb, w, h } = raw ? rawThumb(raw, THUMB_PX) : jpegThumb(photo.preview);
+    const { rgb, w, h } = thumbOf(photo.preview);
     photo.dodge = dodgeBase(rgb, w, h, LUMA[space === 'p3' ? 'rec2020' : space]);   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
     log(`v3 dodge base ${w}x${h} median ${photo.dodge.M.toFixed(2)} p99 ${photo.dodge.P.toFixed(2)}`);
   }
@@ -276,8 +280,8 @@ const q8 = (v) => Math.round(255 * Math.min(1, Math.max(0, v)));
 // cached per photo, never touches the sliders, so toggling Interno off restores the exact previous result.
 
 function autoSetup(on, evIn = null) {
-  const eng = syncEngine(ui()), { preview } = photo, raw = preview.raw;   // a fresh engine has the library defaults (camera auto-exposure on, no scanner model)
-  const { rgb, w, h } = raw ? rawThumb(raw, THUMB_PX) : jpegThumb(preview);
+  const eng = syncEngine(ui());   // a fresh engine has the library defaults (camera auto-exposure on, no scanner model)
+  const { rgb, w, h } = thumbOf(photo.preview);
   const scale = (k) => { for (let i = 0; i < rgb.length; i++) rgb[i] *= k; };
   scale(2 ** baselineEv());
   // The meter sees the scene as shot: it never compensates Interno's U (the negative stays thin).
@@ -344,8 +348,8 @@ function syncHyperMap(u) {
   // left its sky outside the map's dead zone: Hyper Tone luci 5 did nothing while the sky lost its blue (sunset, measured).
   const gain = 2 ** (photo.autoEv + baselineEv() + (photo.auto?.[0] ?? 0) - u.labD * LAB_D_EV);   // the operator's density key too
   if (photo.hyper?.gain !== gain) {
-    const { preview } = photo, raw = preview.raw, { rgb, w, h } = raw ? rawThumb(raw, HYPER_THUMB_PX) : jpegThumb(preview, HYPER_THUMB_PX);
-    photo.hyper = { ...hyperToneMap(rgb, w, h, LUMA[raw || preview.p3 ? 'rec2020' : 'srgb'], gain), gain };   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
+    const { preview } = photo, { rgb, w, h } = thumbOf(preview, HYPER_THUMB_PX);
+    photo.hyper = { ...hyperToneMap(rgb, w, h, LUMA[preview.raw || preview.p3 ? 'rec2020' : 'srgb'], gain), gain };   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
     log(`hyper tone map ${photo.hyper.w}x${photo.hyper.h}`);
   }
   if (engine.hyperFor !== photo.hyper) {
@@ -357,8 +361,7 @@ function syncHyperMap(u) {
 /** v4: the inversion anchors of this frame (lib/invert.js), from the engine's negative scan of the metered thumb (no grain,
  * lens, dodge or Temperatura: the frame's own range, the sliders act on top). */
 function v4Anchors(ev) {
-  const { preview } = photo, raw = preview.raw;
-  const { rgb, w, h } = raw ? rawThumb(raw, THUMB_PX) : jpegThumb(preview);
+  const { rgb, w, h } = thumbOf(photo.preview);
   const g = 2 ** (ev + baselineEv());
   for (let i = 0; i < rgb.length; i++) rgb[i] *= g;
   return invertAnchors(syncEngine(ui(), { noGrain: true }).process(rgb, w, h), { shared: true });   // the scan is on the stock's grey axis (NARROWBAND)
@@ -667,10 +670,11 @@ async function loadPhoto(file) {
     if (await isRaw(file)) {
       // DNG (raw.js): scene-linear Rec.2020, half-float frame; output in Display P3.
       if (!gpu) throw new Error('I file RAW (DNG / ORF) richiedono WebGPU');
-      const t = performance.now(), raw = await loadRaw(file, PREVIEW_LONG_SIDE, 0, { signal: abort.signal });
+      // the 'before' view, half-float frame and thumbs come converted (raw.js previewOf); the view lives on as preview.data only
+      const t = performance.now(), { view, ...raw } = await loadRaw(file, PREVIEW_LONG_SIDE, 0, { signal: abort.signal, thumbs: [THUMB_PX, HYPER_THUMB_PX] });
       while (rendering || exporting) await sleep(20);
       if (my !== loadSeq) return;
-      const preview = { data: rawPreviewRGBA(raw), w: raw.w, h: raw.h, p3: true, raw };
+      const preview = { data: view, w: raw.w, h: raw.h, p3: true, raw };
       preview.before = new ImageData(preview.data, preview.w, preview.h, { colorSpace: 'display-p3' });
       log(`raw ${raw.fullW}x${raw.fullH}, preview ${raw.w}x${raw.h}, orientation ${raw.orientation}, baseline ${raw.baseline} EV, ${Math.round(performance.now() - t)} ms (${raw.decodedIn})`);
       $('indoor').checked = false; rotPending = 0; resetTilt();
@@ -746,19 +750,15 @@ async function rotate(quarters) {
       if (photo !== target) return;   // a new photo arrived during the wait: the turn was for the old one
       const q = rotPending; rotPending = 0;
       const rot = (photo.rot + q + 4) & 3;
-      let preview;
-      if (photo.preview.raw) {
-        const raw = withRotation(photo.preview.raw, rot);
-        preview = { data: rawPreviewRGBA(raw), w: raw.w, h: raw.h, p3: true, raw };
-        preview.before = new ImageData(preview.data, preview.w, preview.h, { colorSpace: 'display-p3' });
-        uploadRaw(sf, raw);
-      } else {
-        // the preview's own pixels turned (exact copy, no await: an export cannot start in between)
-        const pv = photo.preview, t = turnRGBA(pv.data, pv.w, pv.h, q);
-        preview = { data: t.data, w: t.w, h: t.h, p3: pv.p3 };
-        preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
-        if (gpu) uploadFrame(preview.data, preview.w, preview.h);
-      }
+      // the preview's own pixels turned (exact copy, no await: an export cannot start in between); a raw's frame is turned
+      // as it uploads, its thumbs are looked up by the turn (raw.js)
+      const pv = photo.preview, t = turnRGBA(pv.data, pv.w, pv.h, q);
+      const preview = { data: t.data, w: t.w, h: t.h, p3: pv.p3 };
+      preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
+      if (pv.raw) {
+        preview.raw = withRotation(pv.raw, rot);
+        uploadRaw(sf, preview.raw);
+      } else if (gpu) uploadFrame(preview.data, preview.w, preview.h);
       Object.assign(photo, { rot, preview, dodge: null, hyper: null });   // dodging base, Hyper Tone map: rebuilt from the turned thumb
       log(`rotate ${rot * 90}°, preview ${preview.w}x${preview.h}`);
       showPreview();

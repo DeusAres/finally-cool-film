@@ -8,11 +8,13 @@
 // after it is shared with the JPEG path.
 // Orientation (EXIF 1–8) is applied by index mapping while converting strips,
 // so the full-resolution float image is never copied.
+// The preview's conversions (half-float frame, 'before' view, thumbs) run where it decodes (raw-worker.js), once per photo:
+// main keeps their results, never the float image, and a quarter turn only reorders their pixels.
 
 import { decodeDNG, tiffMagic } from './dng.js';
 import { decodeORF, isORFHeader } from './orf.js';
 import { REC2020_TO_P3, linearToSrgb } from './color.js';
-import { stripRows } from './util.js';
+import { stripRows, turnRows } from './util.js';
 
 /** True for a DNG or an Olympus ORF (by name/type, or a TIFF / ORF header when the name says nothing). */
 export async function isRaw(file) {
@@ -32,7 +34,7 @@ export function rawObject(d, rot = 0) {
   return withRotation({ sw: d.w, sh: d.h, ow, oh, ofw, ofh, rgb: d.rgb, baseline: d.exposure || 0, orientation: o }, rot);
 }
 
-/** Decode and assemble, in this thread (the worker's job; here only as the fallback and in node). */
+/** Decode and assemble, in this thread (the worker's job; here only as the fallback and in node: eval/dng2npy.mjs). */
 export async function decodeRaw(buf, { maxLongSide, rot = 0 } = {}) {
   return rawObject(await decodeRawBuffer(buf, maxLongSide ? { maxLongSide } : {}), rot);
 }
@@ -41,7 +43,10 @@ export async function decodeRaw(buf, { maxLongSide, rot = 0 } = {}) {
 // with it) or aborted (a newer photo); the file's bytes are transferred to it, not copied. A worker that cannot start or
 // dies decodes here instead, for the rest of the session (the bytes are read again: the transfer emptied them); so do
 // node scripts (eval/dng2npy.mjs).
-//   Preview: the worker posts { r } (the float image transferred) and main keeps it (turns, 'before' view, thumbs).
+//   Preview: the worker posts { r } = previewOf(the decode): the half-float frame, the 'before' view and the thumbs, all
+//   transferred. On the main thread these conversions froze the page ~0.5 s per photo and ~0.4 s per turn (12 MP DNG at
+//   preview size, desktop headless Chromium, CDP profile); main now only uploads, and on a turn reorders pixels (~0.15 s).
+//   The float image stays in the worker and goes with it.
 //   Export (`sf` given): the worker posts { head } (r without pixels); main allocates the GPU frame and asks for one
 //   half-float strip at a time ('more' -> { strip, y0 }, transferred), uploading each before asking for the next. So the
 //   full f16 image never exists and main converts nothing. Worker peak: file + CFA + float image during the decode, then the
@@ -84,20 +89,21 @@ function decodeInWorker(file, buf, opt, sf, signal) {
 // The fallback: decode in this thread; with `sf`, upload and drop the float image (the export's form).
 async function decodeHere(buf, opt, sf) {
   const r = await decodeRaw(buf, opt);
-  if (!sf) return { ...r, decodedIn: 'main' };
+  if (!sf) return { ...previewOf(r, opt.thumbs), decodedIn: 'main' };
   uploadRaw(sf, r);
   return { ...r, rgb: null, decodedIn: 'main' };
 }
 
 /**
- * Decode (optionally downscaled); returns { w, h, rgb, baseline, orientation, fullW, fullH, decodedIn ('worker' | 'main') },
- * sizes AFTER orientation. `rot`: the user's extra quarter turns clockwise (withRotation). `sf`: upload the frame to the GPU
- * as it decodes (export) and return the same object without pixels (rgb null). `signal`: an AbortSignal that stops the
- * decode (a newer photo); the load then rejects with its reason.
+ * Decode (optionally downscaled); returns { w, h, baseline, orientation, fullW, fullH, decodedIn ('worker' | 'main'), ... },
+ * sizes AFTER orientation. `rot`: the user's extra quarter turns clockwise (withRotation). Without `sf`, the preview
+ * (previewOf, with a thumb per long side in `thumbs`). `sf`: upload the frame to the GPU as it decodes (export) and return
+ * the decode without pixels (rgb null). `signal`: an AbortSignal that stops the decode (a newer photo); the load then
+ * rejects with its reason.
  */
-export async function loadRaw(file, maxLongSide, rot = 0, { sf = null, signal = null } = {}) {
+export async function loadRaw(file, maxLongSide, rot = 0, { sf = null, signal = null, thumbs = [] } = {}) {
   signal?.throwIfAborted();
-  const buf = await file.arrayBuffer(), opt = { maxLongSide, rot };
+  const buf = await file.arrayBuffer(), opt = { maxLongSide, rot, thumbs };
   signal?.throwIfAborted();   // aborted while the file was read (hundreds of ms for a big raw)
   const p = workerOk && decodeInWorker(file, buf, opt, sf, signal);
   return p ? p : decodeHere(buf, opt, sf);
@@ -163,11 +169,44 @@ export function* stripsOf(r) {
   for (let y0 = 0; y0 < r.h; y0 += rows) yield [y0, Math.min(rows, r.h - y0)];
 }
 
-/** Upload the oriented raw as the GPU frame, in strips. */
+/**
+ * Upload the oriented raw as the GPU frame, in strips: a preview's half-float frame turned by its r.rot (frameRows), or a
+ * decode's float image converted (f16Rows: an export decoded in this thread).
+ */
 export function uploadRaw(sf, r) {
   sf.alloc_frame_f16(r.w, r.h);
-  const buf = new Uint16Array(r.w * stripRows(r.w, 8) * 4);
-  for (const [y0, n] of stripsOf(r)) sf.set_frame_rows_f16(f16Rows(r, y0, n, buf).subarray(0, r.w * n * 4), y0);
+  const buf = new Uint16Array(r.w * stripRows(r.w, 8) * 4), rows = r.frame ? frameRows : f16Rows;
+  for (const [y0, n] of stripsOf(r)) sf.set_frame_rows_f16(rows(r, y0, n, buf).subarray(0, r.w * n * 4), y0);
+}
+
+// Rows y0 … y0+n-1 of a preview's half-float frame (upright: r.ow × r.oh) turned by r.rot: the same pixels f16Rows gives
+// for that turn, reordered instead of converted again.
+function frameRows(r, y0, n, out) {
+  if (!r.rot) return r.frame.subarray(y0 * r.w * 4, (y0 + n) * r.w * 4);
+  const words = (a) => new Uint32Array(a.buffer, a.byteOffset, a.length / 2);   // a half-float RGBA pixel = 2 words
+  turnRows(words(r.frame), r.ow, r.oh, r.rot, y0, n, words(out));
+  return out;
+}
+
+/**
+ * What the app keeps of a preview decode `r` (everything converted here, in the worker, once): r without its float image,
+ * plus `frame`, its half-float RGBA frame before the user's turn (uploadRaw turns it), `view`, the 'before' view as turned
+ * by r.rot (rawPreviewRGBA), and `thumbs[turn][longSide]` (rawThumb, for every quarter turn: a turned thumb samples other
+ * pixels, so it cannot be reordered from the upright one).
+ */
+export function previewOf(r, thumbSides = []) {
+  const { rgb, ...p } = r, upright = withRotation(r, 0);
+  return {
+    ...p, view: rawPreviewRGBA(r), frame: f16Rows(upright, 0, upright.h),
+    thumbs: [0, 1, 2, 3].map((t) => Object.fromEntries(thumbSides.map((s) => [s, rawThumb(withRotation(r, t), s)]))),
+  };
+}
+
+/** A copy of a preview's thumb at `longSide` for its turn (previewOf; the caller may scale it in place). */
+export function previewThumb(r, longSide) {
+  const t = r.thumbs[r.rot][longSide];
+  if (!t) throw new Error(`no ${longSide} px raw thumb (loadRaw thumbs)`);
+  return { rgb: t.rgb.slice(), w: t.w, h: t.h };
 }
 
 /** Scene-linear Rec.2020 thumb (sensor values, oriented, no baseline) for the engine's auto-exposure / AutoSetup. */
@@ -184,7 +223,7 @@ export function rawThumb(r, longSide) {
 }
 
 /** The 'before' view: the raw as plain Display P3 (exposure + baseline, clipped), RGBA 8-bit. */
-export function rawPreviewRGBA(r) {
+function rawPreviewRGBA(r) {
   const out = new Uint8ClampedArray(r.w * r.h * 4), g = 2 ** r.baseline, M = REC2020_TO_P3;
   const enc = new Uint8Array(4096); for (let i = 0; i < 4096; i++) enc[i] = Math.round(255 * linearToSrgb(i / 4095));
   const q = (v) => enc[Math.max(0, Math.min(4095, Math.round(v * 4095)))];

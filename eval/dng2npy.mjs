@@ -3,7 +3,7 @@
 // usage: node eval/dng2npy.mjs <in.dng> <out.npy> [maxLongSide] [--interno]
 // --interno: meta gets under (fixed INTERNO_EV), gains [1,1,1] and grain from web/lib/interno.js, as the app's toggle.
 import { readFileSync, writeFileSync } from 'node:fs';
-import { isRaw, loadRaw, rawThumb } from '../web/lib/raw.js';
+import { isRaw, decodeRaw, rawThumb } from '../web/lib/raw.js';
 import { internoParams } from '../web/lib/interno.js';
 import { THUMB_PX } from '../web/lib/common.js';
 
@@ -14,11 +14,12 @@ if (!input || !output) {
   process.exit(1);
 }
 
-// Same steps as the app's raw path (web/app.js): loadRaw (decode + EXIF orientation via rawThumb's index
-// mapping), thumb for AutoSetup (rawThumb at THUMB_PX).
+// Same steps as the app's raw path (raw.js loadRaw, whose worker runs decodeRaw then previewOf): decode + EXIF
+// orientation via rawThumb's index mapping, thumb for AutoSetup (rawThumb at THUMB_PX). decodeRaw directly: the app's
+// preview form keeps no float image.
 const buf = readFileSync(input);
 const file = new File([buf], input.split('/').pop());
-const raw = await loadRaw(file, maxLongSide ? +maxLongSide : 2000);   // app preview size = 2000
+const raw = await decodeRaw(await file.arrayBuffer(), { maxLongSide: maxLongSide ? +maxLongSide : 2000 });   // app preview size = 2000
 if (!(await isRaw(file))) throw new Error('not a DNG');
 const { w, h, rgb } = rawThumb(raw, 1e9);       // scale 1: oriented full copy, sensor values (no baseline)
 const thumb = rawThumb(raw, THUMB_PX);
