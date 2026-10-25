@@ -444,6 +444,9 @@ pub struct FrontierAutoParams {
     /// the shoulder knee. 0 = the mean alone (as before).
     #[serde(default)]
     pub highlight_weight: f64,
+    /// The highlight percentile on each pixel's densest channel instead of G (false: G, as before).
+    #[serde(default)]
+    pub highlight_max_channel: bool,
     /// Thin negatives (Interno): once the density key lifts more than `thin_ev_lo` EV the lab trusts its
     /// colour reading more, ramping `k_col` to `thin_k_col` at `thin_ev_hi` EV. Frames needing <= `thin_ev_lo`
     /// (every normally exposed frame) keep `k_col` exactly.
@@ -475,6 +478,7 @@ impl Default for FrontierAutoParams {
             highlight_pct: 95.0,
             highlight_margin: 0.1672,
             highlight_weight: 0.0,
+            highlight_max_channel: false,
             thin_k_col: 0.0,
             thin_ev_lo: 0.8,
             thin_ev_hi: 1.6,

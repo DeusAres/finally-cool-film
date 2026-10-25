@@ -1270,7 +1270,15 @@ pub fn auto_setup(base: &FrontierBase, cmy: &[f32], width: usize, height: usize)
     // `highlight_weight` > 0 reads the frame partly by its highlights: the key that puts the same percentile on the knee
     // is blended in. Both terms move alike with exposure (compensated in full), but a frame on black (thin mean, normal
     // highlights) is lifted less and a frame with a large bright background is printed darker, as the lab does.
-    let hi = percentile(&g, p.highlight_pct);
+    // The highlights read on G, or (highlight_max_channel) on each pixel's densest channel: a bright saturated subject (an
+    // orange: red dense, green mid) sits in the curve's shoulder on R while G reads a mid tone.
+    let hi = if p.highlight_max_channel {
+        let mut m: Vec<f64> = px.iter().map(|d| d[0].max(d[1]).max(d[2])).collect();
+        m.sort_by(|a, b| a.total_cmp(b));
+        percentile(&m, p.highlight_pct)
+    } else {
+        percentile(&g, p.highlight_pct)
+    };
     let knee = base.knee_density();
     let w = p.highlight_weight;
     let mut d_den = k_den * ((1.0 - w) * (target - mean[1]) + w * (knee - hi));
