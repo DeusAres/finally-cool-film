@@ -7,6 +7,8 @@ from labd50 import lab2xyz, xyz2lab, SRGB, CAT_50_65, CAT_65_50
 from sgref import REF
 from de00 import de00
 N = int(os.environ.get('N', 12)); REG = float(os.environ.get('REG', 0.0005))
+SMOOTH = float(os.environ.get('SMOOTH', 0))   # penalty on neighbour knot differences: no hue squeeze between knots
+SHOW = os.environ.get('SHOW', 'D9,F9,B8,C8').split(',')
 real = json.load(open('real.json')); names = real['names']; ref = np.array([REF[n] for n in names])
 chrom = (np.hypot(ref[:, 1], ref[:, 2]) > 15) & ~np.isin(names, ['I4', 'M3'])
 sets = [(lab2xyz(np.array(json.load(open(f))['sg_lab'])) @ (np.linalg.inv(SRGB) @ CAT_50_65).T, np.array(real['frames'][fr]['sg_lab']), fr)
@@ -25,12 +27,15 @@ def apply(lin, rot):
 err = lambda p, s: de00(s[1], apply(s[0], p)[0])[chrom].mean()
 FREE = [int(i) for i in os.environ['FREE'].split(',')] if os.environ.get('FREE') else list(range(N))
 full = lambda q: (lambda v: (v.__setitem__(FREE, q), v)[1])(np.zeros(N))
-fit = minimize(lambda q: err(full(q), sets[0]) + REG * np.sum(q ** 2), np.zeros(len(FREE)), method='Powell', options={'maxfev': 30000})
+fit = minimize(lambda q: err(full(q), sets[0]) + REG * np.sum(q ** 2) + SMOOTH * np.sum(np.diff(np.r_[full(q), full(q)[0]]) ** 2), np.zeros(len(FREE)), method='Powell', options={'maxfev': 30000})
 p = full(fit.x); print('N', N, 'extra rot', np.round(p, 1))
 H = lambda x: np.degrees(np.arctan2(x[:, 2], x[:, 1])) % 360
+SEP = os.environ.get('SEP', 'M4,I7').split(',')   # hue distance between two patches (a red and an orange): kept or squeezed
+sep = lambda lab: (H(lab)[names.index(SEP[1])] - H(lab)[names.index(SEP[0])] + 180) % 360 - 180
 for s in sets:
     lab0 = apply(s[0], np.zeros(N))[0]; lab1, h = apply(s[0], p)
     d = lambda lab, k: ((H(lab) - H(s[1]) + 180) % 360 - 180)[names.index(k)]
-    print(f'{s[2]:24s} dE00 {err(np.zeros(N), s):.2f} -> {err(p, s):.2f}   dh D9 {d(lab0,"D9"):+.0f}->{d(lab1,"D9"):+.0f} F9 {d(lab0,"F9"):+.0f}->{d(lab1,"F9"):+.0f} B8 {d(lab0,"B8"):+.0f}->{d(lab1,"B8"):+.0f} C8 {d(lab0,"C8"):+.0f}->{d(lab1,"C8"):+.0f}')
+    print(f'{s[2]:24s} dE00 {err(np.zeros(N), s):.2f} -> {err(p, s):.2f}  ' + ' '.join(f'{k} {d(lab0, k):+.0f}->{d(lab1, k):+.0f}' for k in SHOW)
+          + f'  hue {SEP[0]}->{SEP[1]} {sep(lab0):.0f}->{sep(lab1):.0f} (real {sep(s[1]):.0f})')
 if os.environ.get('OPP'):
     print('opp hue of D9 F9 B8 C8 (render):', [round(float(apply(sets[0][0], np.zeros(N))[1][names.index(k)])) for k in ['D9', 'F9', 'B8', 'C8']])
