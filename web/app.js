@@ -347,7 +347,7 @@ function syncHyperMap(u) {
   // The thumb as the scanner renders it, as on the machine (Hypertone dodges the scanned image): Auto's exposure + baseline (v4 has
   // no exposure slider), the AutoSetup's density key (EV) and the operator's (Densità). Without the key a dark backlit frame that AutoSetup lifts by 2 EV
   // left its sky outside the map's dead zone: Hyper Tone luci 5 did nothing while the sky lost its blue (sunset, measured).
-  const gain = 2 ** (photo.autoEv + baselineEv() + (photo.auto?.[0] ?? 0) - u.labD * LAB_D_EV);   // the operator's density key too
+  const gain = 2 ** (scanEv() + baselineEv() + (photo.auto?.[0] ?? 0) - u.labD * LAB_D_EV);   // the operator's density key too
   if (photo.hyper?.gain !== gain) {
     const { preview } = photo, { rgb, w, h } = thumbOf(preview, HYPER_THUMB_PX);
     photo.hyper = { ...hyperToneMap(rgb, w, h, LUMA[preview.raw || preview.p3 ? 'rec2020' : 'srgb'], gain), gain };   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
@@ -379,6 +379,7 @@ async function render() {
     do {
       dirty = false;
       const u = ui();
+      if (V4 && !loadingPhoto) prepareScanner();   // the scanner re-reads the negative when Esposizione / Interno moved (cached)
       const pv = photo.preview, t0 = performance.now(), n = ++renderCount;
       // Breadcrumb: if iOS kills the tab mid-render, the next load says so.
       setBusy(`anteprima #${n} ${pv.w}x${pv.h} ${JSON.stringify(u)}`);
@@ -625,6 +626,10 @@ if (V4) {
   document.querySelector('#tabs [data-tab="light"]').remove();   // v4: the light is the phone's exposure
   // Magenta ↔ Verde / Giallo ↔ Blu are the scanner's colour keys (the inversion's, or the Frontier's cmy): in the Scanner tab
   for (const id of ['mshift', 'yshift']) document.querySelector('[data-pane="scanner"]').append($(id).closest('.row'));
+  // Esposizione (and its Auto) is the camera's: how much light the film gets, at the top of Pellicola. Measured on a dim indoor
+  // DNG (IDG_20261024_153100_228): at the phone's exposure Gold's green layer sits in its toe on orange light and Nessuno split
+  // the carrots into red and yellow; 1-2 EV more film exposure keeps them one orange (the scanner re-reads the denser negative).
+  document.querySelector('[data-pane="film"]').prepend($('auto').closest('.row'), $('ev').closest('.row'));
   for (const id of ['texture', 'ca', 'vignette', 'falloff']) $(id).value = 0;
   for (const [id, v] of Object.entries(V4_FILM)) $(id).value = v;
 }
@@ -809,7 +814,7 @@ async function runAuto() {
   // render() returns early while another render / export is in flight: wait first (the engine is shared).
   while (rendering || exporting) await sleep(20);
   const on = $('indoor').checked, a = autoSetup(on);
-  photo.autoEv = a.ev; photo.autoCache = a.auto ? { [autoKey(on)]: a.auto } : {}; photo.inv = null;
+  photo.autoEv = a.ev; photo.autoCache = a.auto ? { [autoKey(on, a.ev)]: a.auto } : {}; photo.inv = null;
   $('ev').value = a.ev;
   syncOutputs();
   log(`auto: ev ${a.ev}`);
@@ -817,17 +822,22 @@ async function runAuto() {
   await render();
 }
 
-/** What the current scanner needs for this photo, measured once at the photo's auto exposure: the neutral inversion's anchors,
- * or the Frontier's AutoSetup (per Interno state). */
+/** The film's exposure the scanner reads: v4, the Esposizione slider (the lab scans the negative it gets: a denser one is not a
+ * brighter print, its dark colours are cleaner); v3, the photo's Auto (its Esposizione moves the print after AutoSetup). */
+const scanEv = () => (V4 ? +$('ev').value : photo.autoEv);
+
+/** What the current scanner needs for this photo at that exposure and Interno state, measured once each: the neutral
+ * inversion's anchors, or the Frontier / Noritsu AutoSetup. */
 function prepareScanner() {
+  const on = $('indoor').checked, ev = scanEv(), key = autoKey(on, ev);
   if (neutralScan()) {
-    if (photo.inv) return;
-    photo.inv = v4Anchors(photo.autoEv);
+    if (photo.inv?.key === key) return;
+    photo.inv = { ...v4Anchors(ev), key };
     const f = (v) => v.map((x) => x.toFixed(2)).join('/');
     log(`scanner none: density black ${f(photo.inv.lo)} white ${f(photo.inv.hi)} mid ${photo.inv.xm.toFixed(2)}`);
   } else {
-    const on = $('indoor').checked;
-    photo.auto = photo.autoCache[autoKey(on)] ??= autoSetup(on, photo.autoEv).auto;
+    if (photo.autoCache[key]) { photo.auto = photo.autoCache[key]; return; }
+    photo.auto = photo.autoCache[key] = autoSetup(on, ev).auto;
     log(`scanner ${scanner}: autosetup ${photo.auto.map((v) => v.toFixed(3)).join(' ')}`);
   }
 }
@@ -839,7 +849,7 @@ function prepareScanner() {
 const SCANNERS = ['none', 'frontier', 'noritsu'];
 let scanner = V4 && SCANNERS.includes(store.get('fcf_scanner')) ? store.get('fcf_scanner') : V4 ? 'none' : 'frontier';
 function neutralScan() { return scanner === 'none'; }
-const autoKey = (on) => `${scanner}:${on}`;   // AutoSetup depends on the scanner and on Interno
+const autoKey = (on, ev) => `${scanner}:${on}:${ev}`;   // the scanner's setup depends on the scanner, Interno and the exposure
 async function setScanner(s) {
   scanner = s; store.set('fcf_scanner', s);
   for (const b of document.querySelectorAll('[data-scanner]')) b.setAttribute('aria-checked', String(b.dataset.scanner === s));
@@ -1209,9 +1219,10 @@ const V4_NORITSU = { gradation_a: 9.26, black_point: 0.025, white_point: 1.0, sh
 // 58.8 / 83.8 / 59.5). Colour: the tungsten frame keeps b* -3 / +7 / +5 (dark / mid / light) over daylight, much less than
 // the Frontier: k_col 1.15 (1.0 / 1.3 leave +11 / +9 / +7 and +3 / -5 / -5), clamp_colour 0.3 (0.15 bound it). Exposure-faithful
 // check on its 20 Gold frames (recon_model.py EVS): rms 4.7 L*; the Frontier's mean / highlight blend does no better (4.9+ on the
-// fit scenes, eval/frontier_cp/README.md). Since 4.4 its highlights are read on the densest channel (V4_AUTO) with margin -0.04
-// (-0.08 / 0.0 with it: 4.6 / 5.5): rms 4.7 -> 4.3 L*.
-const V4_NORITSU_AUTO = { strength: 1.0, target_offset: 0.15, highlight_margin: -0.04, highlight_max_channel: true, k_col: 1.15, clamp_colour: 0.3 };
+// fit scenes, eval/frontier_cp/README.md). Its highlights on the densest channel (as V4_AUTO since 4.4) with margin -0.04: rms
+// 4.7 -> 4.3 L* (-0.08 / 0.0: 4.6 / 5.5), but its cap then prints a sunset with a saturated sky near black (median L* 62 -> 25,
+// v4_sky_noritsu): not taken.
+const V4_NORITSU_AUTO = { strength: 1.0, target_offset: 0.15, highlight_margin: -0.08, k_col: 1.15, clamp_colour: 0.3 };
 const SCATTER_SCALE = 0.5;   // film scatter size multiplier (engine default 1), see renderParams
 // v3.32: dye-cloud blur 0.65 -> 0.45 (reference px, ~12 -> ~8 um): measured on 10 full-frame Gold 200 scans the grain has ~12 % of
 // its power below 40 um wavelength and r50 ~13.5 um; ours had 3 % / 18.6 um (soft). At 0.45
@@ -1261,7 +1272,7 @@ $('indoor').addEventListener('change', async () => {
     while (rendering || exporting) await sleep(20);
     if (photo !== target) return;   // a new photo arrived during the wait: it reset the switch, nothing to apply
     on = $('indoor').checked;   // the lab re-reads the (thin) negative; sliders are not touched
-    photo.auto = photo.autoCache[autoKey(on)] ??= autoSetup(on, photo.autoEv).auto;
+    prepareScanner();
   } catch (e) {   // the switch goes back to what is applied
     log('interno error: ' + (e?.stack || e)); status('Errore: ' + (e?.message || e));
     $('indoor').checked = !on;

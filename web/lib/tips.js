@@ -33,12 +33,13 @@ const TIPS = {
   vignette: 'Vignettatura dell’obiettivo: angoli più scuri, in luce prima della pellicola.',
   falloff: 'Forma della vignettatura: 0 = calo ottico morbido (cos⁴), 1 = taglio meccanico più netto.',
   dust: 'Polvere e piccoli segni sulla scansione.',
+  auto: 'Auto: l’esposizione come l’avrebbe misurata il telefono.',
   // File / Trasforma
   quality: 'Qualità del JPEG esportato.',
   border: 'Bordo bianco attorno alla foto esportata.',
   tilt: 'Raddrizza: ruota fino a ±45° con ritaglio automatico.',
   // v3 (index.html?v3)
-  ev: 'Esposizione: luce sulla pellicola, in EV.',
+  ev: 'Esposizione: quanta luce riceve la pellicola, in EV (Auto = come il telefono). In v4 lo scanner rilegge il negativo: più luce non schiarisce la stampa, pulisce i colori delle scene scure (la Gold sovraesposta tiene, sottoesposta no).',
   contrast: 'Contrasto della stampa.',
   highlight: 'Alte luci: recupero delle luci della stampa.',
   whites: 'Bianchi: quanto sono aperti i bianchi della stampa.',
