@@ -628,7 +628,7 @@ if (V4) {
   for (const id of ['mshift', 'yshift']) document.querySelector('[data-pane="scanner"]').append($(id).closest('.row'));
   // Esposizione (and its Auto) is the camera's: how much light the film gets, at the top of Pellicola. Measured on a dim indoor
   // DNG (IDG_20261024_153100_228): at the phone's exposure Gold's green layer sits in its toe on orange light and Nessuno split
-  // the carrots into red and yellow; 1-2 EV more film exposure keeps them one orange (the scanner re-reads the denser negative).
+  // the pumpkin flesh into red and yellow; 1-2 EV more film exposure keeps it one orange (the scanner re-reads the denser negative).
   document.querySelector('[data-pane="film"]').prepend($('auto').closest('.row'), $('ev').closest('.row'));
   for (const id of ['texture', 'ca', 'vignette', 'falloff']) $(id).value = 0;
   for (const [id, v] of Object.entries(V4_FILM)) $(id).value = v;
@@ -1174,7 +1174,7 @@ const V4_NEUTRAL_SIGMA = 0.06;
 // at +2 EV is +4.8; reading that term in EV along the grey ramp fixes it but over-corrects the others (rms 3.2-3.5): not taken.
 // v3.47's draft target 0.16 matched the grey wall only (outdoor photos came out washed).
 // Since 4.4 the highlight percentile is each pixel's densest channel (engine highlight_max_channel), not G: a bright saturated
-// subject (a user's DNG of orange carrots under a lamp, IDG_20261024_153100_228: R in the shoulder, G a mid tone) was not
+// subject (a user's DNG of the inside of a pumpkin under a lamp, IDG_20261024_153100_228: R in the shoulder, G a mid tone) was not
 // guarded, and auto exposure lifted the dark frame +1.3 EV: its light oranges came out yellow and washed (hue 87 deg vs the
 // DNG's 56; now 78). target_offset -0.12 -> -0.07 refit (-0.12 / -0.04 / +0.04: 3.1 / 2.9 / 4.6): the 20 real frames 2.8 -> 2.6.
 // Colour: k_col x strength 0.68 (v3 0.3 x 0.85). The tungsten frame keeps b* +12 / +25 / +14 over daylight (dark / mid /

@@ -14,9 +14,10 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.5**: spiegazioni dei controlli riscritte in parole semplici. Immagini identiche alla 4.4.
 - **v4.4**: **Esposizione** in v4 (scheda Pellicola, con Auto): quanta luce riceve la pellicola. Lo scanner rilegge il negativo,
   quindi la stampa resta alla stessa luminosità e cambiano i colori: in una scena interna scura la Gold sottoesposta lavora
-  nel piede dello strato verde e un arancio si spacca in rosso e giallo (carote, IDG_20261024_153100_228); con 1-2 EV in più
+  nel piede dello strato verde e un arancio si spacca in rosso e giallo (interno di una zucca, IDG_20261024_153100_228); con 1-2 EV in più
   resta un arancio, come si fa con la pellicola vera. **Frontier**: l'AutoSetup legge le luci sul canale più denso, non solo sul
   verde: un soggetto chiaro e saturo (arancio, cielo al tramonto) non si slava più verso il giallo; i 20 fotogrammi veri 2.8 →
   2.6 L*. Noritsu invariato.
