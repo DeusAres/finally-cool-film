@@ -1163,6 +1163,10 @@ const V4_NEUTRAL_SIGMA = 0.06;
 // portrait +2.1 -> +3.7 (brighter than the lab). Left: overexposed frames' highlights sit in the film's shoulder, so the harbour
 // at +2 EV is +4.8; reading that term in EV along the grey ramp fixes it but over-corrects the others (rms 3.2-3.5): not taken.
 // v3.47's draft target 0.16 matched the grey wall only (outdoor photos came out washed).
+// Since 4.4 the highlight percentile is each pixel's densest channel (engine highlight_max_channel), not G: a bright saturated
+// subject (a user's DNG of orange carrots under a lamp, IDG_20261024_153100_228: R in the shoulder, G a mid tone) was not
+// guarded, and auto exposure lifted the dark frame +1.3 EV: its light oranges came out yellow and washed (hue 87 deg vs the
+// DNG's 56; now 78). target_offset -0.12 -> -0.07 refit (-0.12 / -0.04 / +0.04: 3.1 / 2.9 / 4.6): the 20 real frames 2.8 -> 2.6.
 // Colour: k_col x strength 0.68 (v3 0.3 x 0.85). The tungsten frame keeps b* +12 / +25 / +14 over daylight (dark / mid /
 // light greys) and takes the red out (a* -4); ours at v3's 0.26 kept +29 / +35 / +26 and a* +9 under a simulated 3200 K;
 // 0.6 / 0.85 leave +24 / +24 / +12 and +19 / +18 / +6: 0.68 matches the mean. The light's temperature is not known (3200 K
@@ -1205,8 +1209,9 @@ const V4_NORITSU = { gradation_a: 9.26, black_point: 0.025, white_point: 1.0, sh
 // 58.8 / 83.8 / 59.5). Colour: the tungsten frame keeps b* -3 / +7 / +5 (dark / mid / light) over daylight, much less than
 // the Frontier: k_col 1.15 (1.0 / 1.3 leave +11 / +9 / +7 and +3 / -5 / -5), clamp_colour 0.3 (0.15 bound it). Exposure-faithful
 // check on its 20 Gold frames (recon_model.py EVS): rms 4.7 L*; the Frontier's mean / highlight blend does no better (4.9+ on the
-// fit scenes, eval/frontier_cp/README.md).
-const V4_NORITSU_AUTO = { strength: 1.0, target_offset: 0.15, highlight_margin: -0.08, k_col: 1.15, clamp_colour: 0.3 };
+// fit scenes, eval/frontier_cp/README.md). Since 4.4 its highlights are read on the densest channel (V4_AUTO) with margin -0.04
+// (-0.08 / 0.0 with it: 4.6 / 5.5): rms 4.7 -> 4.3 L*.
+const V4_NORITSU_AUTO = { strength: 1.0, target_offset: 0.15, highlight_margin: -0.04, highlight_max_channel: true, k_col: 1.15, clamp_colour: 0.3 };
 const SCATTER_SCALE = 0.5;   // film scatter size multiplier (engine default 1), see renderParams
 // v3.32: dye-cloud blur 0.65 -> 0.45 (reference px, ~12 -> ~8 um): measured on 10 full-frame Gold 200 scans the grain has ~12 % of
 // its power below 40 um wavelength and r50 ~13.5 um; ours had 3 % / 18.6 um (soft). At 0.45
