@@ -143,6 +143,17 @@ Run from a WORK directory (needs sf-eval, scripts/eval/build-sf-eval.sh; python 
     real machines and on the reference: an error of our film / sensor chain on that dye, not a hue-smooth scanner trait. Left as
     is (a scanner-stage patch would be the wrong stage and buys <= 0.1 dE00).
   - Violets -16..-27 deg (3-4 patches).
+  - Red -> orange separation (a user's lantana DNG, IDG_20261018_182846_761: the orange florets came out red). On the chart,
+    hue M4 (red) -> I7 (orange): reference 31 deg, real Frontier 33, ours 16 at every EV (reds +7..+15 deg towards orange,
+    oranges -5..+3: too red); Nessuno shows the same squeeze on the DNG (orange 44 -> 31 deg), so it starts in our film /
+    sensor chain. Tried in the scanner stage with `proto_rot.py` (an extra rotation, fit at 0 EV, SEP=M4,I7):
+    | basis, knots, SMOOTH | dE00 0 / -1 / +1 / +2 EV (now 4.30 / 3.93 / 4.02 / 4.15) | separation (real 27-34) |
+    |---|---|---|
+    | opponent, 24 (15 deg), 0 | 3.96 / 3.82 / 3.82 / 3.91 | 26-33, but the knots swing +5.6 / -6.3 / +4.8: banding on gradients |
+    | opponent, 24, 0.002 | 4.12 / 3.78 / 3.93 / 4.03 | 21-27 |
+    | OkLab, 24, 0 | 4.19 / 3.85 / 4.07 / 4.14 | 21-26 |
+    | OkLab, 24, 0.002 | 4.23 / 3.84 / 4.05 / 4.14 | 18-24 |
+    No smooth hue rotation gives the separation back: left as is (the fix belongs to the spectral chain).
 
 ## Noritsu (app.js V4_NORITSU, V4_NORITSU_AUTO)
 The same frames on the tool's Noritsu, with the same method; the Frontier's scanner model takes the Noritsu's parameters.

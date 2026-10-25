@@ -9,6 +9,12 @@ from de00 import de00
 N = int(os.environ.get('N', 12)); REG = float(os.environ.get('REG', 0.0005))
 SMOOTH = float(os.environ.get('SMOOTH', 0))   # penalty on neighbour knot differences: no hue squeeze between knots
 SHOW = os.environ.get('SHOW', 'D9,F9,B8,C8').split(',')
+BASIS = os.environ.get('BASIS', 'opp')   # the hue the knots are looked up on: 'opp' (linear opponent, the engine's) or 'ok' (OkLab)
+M1 = np.array([[0.4122214708, 0.5363325363, 0.0514459929], [0.2119034982, 0.6806995451, 0.1073969566], [0.0883024619, 0.2817188376, 0.6299787005]])
+M2 = np.array([[0.2104542553, 0.7936177850, -0.0040720468], [1.9779984951, -2.4285922050, 0.4505937099], [0.0259040371, 0.7827717662, -0.8086757660]])
+def okhue(lin):   # linear sRGB -> OkLab hue, deg
+    lab = np.cbrt(np.clip(lin, 0, None) @ M1.T) @ M2.T
+    return np.degrees(np.arctan2(lab[:, 2], lab[:, 1])) % 360
 real = json.load(open('real.json')); names = real['names']; ref = np.array([REF[n] for n in names])
 chrom = (np.hypot(ref[:, 1], ref[:, 2]) > 15) & ~np.isin(names, ['I4', 'M3'])
 sets = [(lab2xyz(np.array(json.load(open(f))['sg_lab'])) @ (np.linalg.inv(SRGB) @ CAT_50_65).T, np.array(real['frames'][fr]['sg_lab']), fr)
@@ -19,7 +25,8 @@ def knots(h, g):
     w = sm(1 - np.abs((h[:, None] - KN[None, :] + 180) % 360 - 180) / SP); return (w * g[None, :]).sum(1) / w.sum(1)
 def apply(lin, rot):
     l = lin @ LUMA; o1 = (lin[:, 0] - lin[:, 1]) / np.sqrt(2); o2 = (lin[:, 0] + lin[:, 1] - 2 * lin[:, 2]) / np.sqrt(6)
-    h = np.degrees(np.arctan2(o2, o1)) % 360; t = np.radians(knots(h, rot)); m = lin.mean(1)
+    h = np.degrees(np.arctan2(o2, o1)) % 360 if BASIS == 'opp' else okhue(lin)
+    t = np.radians(knots(h, rot)); m = lin.mean(1)
     p1, p2 = np.cos(t) * o1 - np.sin(t) * o2, np.sin(t) * o1 + np.cos(t) * o2
     out = np.stack([m + p1 / np.sqrt(2) + p2 / np.sqrt(6), m - p1 / np.sqrt(2) + p2 / np.sqrt(6), m - 2 * p2 / np.sqrt(6)], 1)
     out = out + (l - out @ LUMA)[:, None]
