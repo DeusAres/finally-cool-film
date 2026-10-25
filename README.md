@@ -14,6 +14,10 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.6**: **Frontier, rosso e arancio separati**: il sensore verde dello scanner (540 → 555 nm) e i colori per tinta ritarati
+  sulle carte Gold del Frontier vero: rosso → arancio 14–19° → 18–28° (vero 27–34°), pelle meno gialla (+8…+14° → +2…+11°),
+  errore colore ΔE00 4.10 → 3.93 a tutte le esposizioni. I fiori arancio non si confondono più col rosso. Prezzo: livello un
+  po' più incerto sulle foto sovraesposte (errore 2.6 → 3.2 L*). Noritsu e Nessuno invariati.
 - **v4.5**: spiegazioni dei controlli riscritte in parole semplici. Immagini identiche alla 4.4.
 - **v4.4**: **Esposizione** in v4 (scheda Pellicola, con Auto): quanta luce riceve la pellicola. Lo scanner rilegge il negativo,
   quindi la stampa resta alla stessa luminosità e cambiano i colori: in una scena interna scura la Gold sottoesposta lavora

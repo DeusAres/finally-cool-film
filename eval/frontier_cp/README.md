@@ -154,6 +154,15 @@ Run from a WORK directory (needs sf-eval, scripts/eval/build-sf-eval.sh; python 
     | OkLab, 24, 0 | 4.19 / 3.85 / 4.07 / 4.14 | 21-26 |
     | OkLab, 24, 0.002 | 4.23 / 3.84 / 4.05 / 4.14 | 18-24 |
     No smooth hue rotation gives the separation back: left as is (the fix belongs to the spectral chain).
+    Fixed in 4.6 in the scanner's spectral read instead: the Frontier's green sensor band. The real Frontier separates red and
+    orange more than the real Noritsu on the same negatives (33 vs 22 deg), so the bands set it. `colour.py` at 0 EV, old hue
+    ops: G peak 525 / 540 / 555 / 565 / 575 nm -> separation 12 / 16 / 23 / 28 / 32 deg, dE00 4.83 / 4.30 / 4.24 / 5.19 / 6.80
+    (R 630 / 670 and narrower bands: no gain). At 555 nm the per-hue ops were refitted (`proto_all.py` on renders without them,
+    fit at 0 EV) with `warm_hue_shift` 6 (skin, +8..+14 deg yellow before): engine dE00 3.93 / 4.30 / 4.02 / 4.15 -> 3.79 /
+    4.17 / 3.89 / 3.85 (-1 / 0 / +1 / +2 EV), separation 14-19 -> 18-28, skin +2..+11 deg. 565 nm separates more but the ops
+    cannot hold the rest (refit dE00 4.13-4.62). The new band moves the setup densities: AutoSetup target_offset -0.07 -> -0.04,
+    the 20 frames' level rms 2.6 -> 3.2 L* (overexposed frames a little darker). The earlier rejection of a 559 nm band (step 2)
+    was with the old hue ops.
 
 ## Noritsu (app.js V4_NORITSU, V4_NORITSU_AUTO)
 The same frames on the tool's Noritsu, with the same method; the Frontier's scanner model takes the Noritsu's parameters.

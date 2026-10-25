@@ -1181,7 +1181,7 @@ const V4_NEUTRAL_SIGMA = 0.06;
 // light greys) and takes the red out (a* -4); ours at v3's 0.26 kept +29 / +35 / +26 and a* +9 under a simulated 3200 K;
 // 0.6 / 0.85 leave +24 / +24 / +12 and +19 / +18 / +6: 0.68 matches the mean. The light's temperature is not known (3200 K
 // assumed): warmer light would mean an even stronger correction, so this is a lower bound.
-const V4_AUTO = { strength: 1.0, k_col: 0.68, highlight_weight: 0.6, target_offset: -0.07, highlight_max_channel: true };
+const V4_AUTO = { strength: 1.0, k_col: 0.68, highlight_weight: 0.6, target_offset: -0.04, highlight_max_channel: true };
 // v4 Frontier tone and colour, fitted to a real Frontier (eval/frontier_cp, eval/V4.md): the Color Precision film comparison tool's
 // Gold 200 chart frames (ColorChecker SG + Kodak grey scale, -1..+2 EV; the same negatives also on a Noritsu), our v4 Frontier
 // rendering the same patches on CPU with the operator's density / C M Y keys as free nuisances. Tone: grey L* rms 2.6 -> 1.2;
@@ -1196,9 +1196,15 @@ const V4_AUTO = { strength: 1.0, k_col: 0.68, highlight_weight: 0.6, target_offs
 // 3.9 / 4.1 at -1 / +1 / +2 EV; chroma 1.06 and lightness +0.1 L* of the real. Left: the saturated green-cyan D9 is ~19 deg greener
 // than real at every EV (pure cyans / blues within 5 deg); its neighbours in hue are right, both real machines put it ~28 deg from
 // cyan C8 (we 49): an error of our spectral chain on that dye, not the scanner's LUT (proto_rot.py: 12 knots gain <= 0.1 dE00).
+// 4.6, red -> orange: the green sensor band at 540 nm read red and orange alike (hue M4 -> I7 14-19 deg; the real Frontier 27-34,
+// the real Noritsu on the same negatives 22: the scanner's bands set it). At 555 nm (565 / 575: 28 / 32 deg but the hue ops cannot
+// hold the rest) with warm_hue_shift 6 (skin, the v3 op) and the per-hue ops refitted (proto_all.py at 0 EV): dE00 3.93 / 4.30 /
+// 4.02 / 4.15 -> 3.79 / 4.17 / 3.89 / 3.85 (-1 / 0 / +1 / +2 EV), separation 18-28 deg, skin hue +8..+14 -> +2..+11 deg.
+// The band moves the setup densities: AutoSetup's target_offset -0.07 -> -0.04 (V4_AUTO); the 20 real frames 2.6 -> 3.2 L* rms
+// (overexposed frames now a little darker, Charts +1 / +2 EV -6), the price of the colour.
 const V4_FRONTIER = { gradation_a: 9.6, black_point: 0.023, white_point: 0.97, shoulder_start: 0.95, shoulder_sharpness: 0,
-  saturation: 0.92, saturation_blue: 0.05, blue_hue_shift: 18, green_hue_shift: 20,
-  hue_lightness: [0.91, 0.92, 0.46, 0.75, 0.9, 0.96], hue_saturation: [0.88, 1.06, 0.97, 1.04, 0.73, 0.64], hue_shift: [3, 1, 6, 7, -5, 12] };
+  saturation: 0.92, saturation_blue: 0.05, blue_hue_shift: 18, green_hue_shift: 20, sensor_peak_nm: [650, 555, 450], warm_hue_shift: 6,
+  hue_lightness: [0.87, 0.97, 0.53, 0.83, 0.92, 0.91], hue_saturation: [0.87, 1.09, 0.99, 1.09, 0.85, 0.78], hue_shift: [2.3, 4.5, 6.6, 1.6, -2.9, 15.1] };
 // v4 Noritsu (Scanner tab): the Frontier's scanner model with a Noritsu's tone, colour and AutoSetup, fitted as V4_FRONTIER on the
 // same Color Precision Gold 200 frames scanned on their Noritsu (eval/frontier_cp). It overrides every v3 Gold-look op (none of
 // them is the Noritsu's). Tone: a 9.26, black 0.025, white 1.0 (opener whites than the Frontier's 0.97), grey L* rms 1.25.
