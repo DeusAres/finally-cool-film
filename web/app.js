@@ -2,7 +2,7 @@ import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decod
 import { sleep, store, stripRows, PREVIEW_LONG_SIDE, PREVIEW_KPX, FRAME_UM } from './lib/util.js';
 import { DISPLAY_GAIN_LUT } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
-import { readExifSegment, patchExif, insertExif } from './lib/exif.js';
+import { MARKER, exportExif, xmpSegment, patchExif, insertExif } from './lib/exif.js';
 import { isRaw, loadRaw, uploadRaw, previewThumb, withRotation } from './lib/raw.js';
 import { internoParams } from './lib/interno.js';
 import { invertAnchors, invertUniform, invertCPU } from './lib/invert.js';
@@ -1046,11 +1046,14 @@ async function exportFull(ig = false) {
     enc.postMessage({ cmd: 'finish' });
     const result = await done;
     let bytes = result.jpeg;
-    bytes = insertExif(bytes, iccSegment(outSpace()));   // segments go right after SOI, JFIF dropped; Exif is inserted last so it ends up first
-    try {
-      const seg = await readExifSegment(photo.file);
-      if (seg) { bytes = insertExif(bytes, patchExif(seg, result.width, result.height, outSpace() === 'p3')); log(`EXIF carried over (${seg.length} B)`); }
-    } catch (e) { log('EXIF skipped: ' + (e?.message || e)); }
+    // segments go right after SOI, JFIF dropped: inserted ICC, XMP, Exif so the file reads Exif, XMP, ICC (Exif first for iOS Photos)
+    const film = `Kodak Gold 200${neutralScan() ? '' : `, ${scanner === 'frontier' ? 'Frontier' : 'Noritsu'} scan`}`;
+    const desc = `${MARKER}, ${film}`;   // the marker: what Photos search can find (exif.js)
+    bytes = insertExif(bytes, iccSegment(outSpace()));
+    bytes = insertExif(bytes, xmpSegment(desc, [MARKER, 'Kodak Gold 200']));
+    const seg = await exportExif(photo.file, desc, log);
+    bytes = insertExif(bytes, patchExif(seg, result.width, result.height, outSpace() === 'p3'));
+    log(`EXIF + marker (${seg.length} B)`);
     const blob = new Blob([bytes], { type: 'image/jpeg' });
     const base = (photo.file.name || 'foto').replace(/\.[^.]+$/, '');
     const secs = ((performance.now() - t0) / 1000).toFixed(1);

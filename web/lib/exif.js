@@ -1,10 +1,13 @@
-// EXIF carry-over (adapted from the grain project's exporter).
+// EXIF carry-over (adapted from the grain project's exporter) and the export's marker.
 // jpegli writes pixels only, so date, camera, lens and GPS would be lost. The
-// original APP1/Exif segment is copied into the output with three patches:
-// Orientation → 1 (pixels are already upright), ColorSpace → sRGB for an sRGB
-// export, "uncalibrated" for a Display P3 one (the ICC profile says which),
-// PixelX/YDimension → the exported size. Anything unexpected → no EXIF rather
+// original's tags (JPEG, HEIC or raw) are rebuilt into a fresh APP1/Exif segment with
+// three patches: Orientation → 1 (pixels are already upright), ColorSpace → sRGB for an
+// sRGB export, "uncalibrated" for a Display P3 one (the ICC profile says which),
+// PixelX/YDimension → the exported size. Anything unexpected → no carried tags rather
 // than a broken file.
+// Marker (user's ask: find the exports in iPhone Photos search): the description goes in
+// EXIF ImageDescription and in an XMP packet (dc:description, dc:subject keywords). Which
+// of these Photos search indexes is not documented by Apple: unverified, hence all three.
 
 import { tiffMagic } from './dng.js';
 
@@ -71,33 +74,43 @@ function buildTiff({ ifd0, exif, gps }) {
 }
 
 const num = (type, v) => { const d = new Uint8Array(type === 3 ? 2 : 4); d[0] = v & 255; d[1] = (v >> 8) & 255; return { tag: 0, type, count: 1, data: d }; };
-const IFD0_KEEP = new Set([0x010F, 0x0110, 0x0131, 0x0132, 0x013B, 0x8298]);   // Make Model Software DateTime Artist Copyright
+const IFD0_KEEP = new Set([0x010F, 0x0110, 0x0132, 0x013B, 0x8298]);   // Make Model DateTime Artist Copyright (Software is ours)
 const EXIF_DROP = new Set([0x927C, 0xA005, 0x8769, 0x9286]);                  // MakerNote, Interop ptr, nested ptr, UserComment
 
-/** APP1/Exif segment built from a TIFF-structured file's own tags (DNG, or the Exif item of a HEIC): IFD0 subset + ExifIFD + GPS IFD. */
-function exifFromTiff(buf) {
-  if (buf.length < 16) return null;
+const ascii = (tag, s) => { const d = new TextEncoder().encode(s.replace(/[^ -~]/g, '?') + '\0'); return { tag, type: 2, count: d.length, data: d }; };
+export const MARKER = 'finallycoolfilm';   // the search word: one token no other app writes; also our Software tag
+
+/** The {ifd0, exif, gps} entries of a TIFF-structured block (DNG, a HEIC's Exif item, a JPEG's Exif payload); empty if it is not one. */
+function tiffTags(buf) {
+  const none = { ifd0: [], exif: [], gps: [] };
+  if (!buf || buf.length < 16) return none;
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   const m = dv.getUint16(0);
   const magic = dv.getUint16(2, m === 0x4949);   // 42; Olympus ORF 0x4f52 'RO' / 0x5352 'RS'
-  if ((m !== 0x4949 && m !== 0x4D4D) || (magic !== 42 && magic !== 0x4f52 && magic !== 0x5352)) return null;
+  if ((m !== 0x4949 && m !== 0x4D4D) || (magic !== 42 && magic !== 0x4f52 && magic !== 0x5352)) return none;
   const le = m === 0x4949;
   const all0 = readIfd(buf, dv, le, dv.getUint32(4, le));
   const ptrOf = (tag) => { const e = all0.find((x) => x.tag === tag); return e && e.type === 4 ? new DataView(e.data.buffer).getUint32(0, true) : 0; };
-  const ifd0 = all0.filter((e) => IFD0_KEEP.has(e.tag));
-  const exif = readIfd(buf, dv, le, ptrOf(0x8769)).filter((e) => !EXIF_DROP.has(e.tag));
-  const gps = readIfd(buf, dv, le, ptrOf(0x8825));
-  if (!ifd0.length && !exif.length) return null;
-  ifd0.push({ ...num(3, 1), tag: 0x0112 });                            // Orientation (patched to 1 again below)
-  for (const [tag, type] of [[0xA001, 3], [0xA002, 4], [0xA003, 4]]) {   // ColorSpace, PixelX/YDimension (values set by patchExif)
-    const i = exif.findIndex((e) => e.tag === tag);
-    if (i >= 0) exif.splice(i, 1);
-    exif.push({ ...num(type, 1), tag });
-  }
-  return exifSegment(buildTiff({ ifd0, exif, gps }));
+  return {
+    ifd0: all0.filter((e) => IFD0_KEEP.has(e.tag)),
+    exif: readIfd(buf, dv, le, ptrOf(0x8769)).filter((e) => !EXIF_DROP.has(e.tag)),
+    gps: readIfd(buf, dv, le, ptrOf(0x8825)),
+  };
 }
 
-/** HEIC/HEIF: the Exif item of `meta` (iinf → item_type 'Exif', iloc → offset/length) as a JPEG-style segment, or null. */
+/** APP1/Exif segment: the original's tags (IFD0 subset + ExifIFD + GPS IFD; none for a PNG) + our description and Software. */
+function exifSegmentOf(tiff, desc) {
+  // ours: ImageDescription, Software, Orientation (patched to 1 again below), ColorSpace and PixelX/YDimension (set by patchExif)
+  const mark = () => ({
+    ifd0: [ascii(0x010E, desc), ascii(0x0131, MARKER), { ...num(3, 1), tag: 0x0112 }],
+    exif: [[0xA001, 3], [0xA002, 4], [0xA003, 4]].map(([tag, type]) => ({ ...num(type, 1), tag })),
+  });
+  const { ifd0, exif, gps } = tiffTags(tiff), ours = mark(), mine = new Set([...ours.ifd0, ...ours.exif].map((e) => e.tag));
+  const merged = { ifd0: [...ifd0.filter((e) => !mine.has(e.tag)), ...ours.ifd0], exif: [...exif.filter((e) => !mine.has(e.tag)), ...ours.exif], gps };
+  return exifSegment(buildTiff(merged)) || exifSegment(buildTiff({ ...mark(), gps: [] }));   // over 64 KB: the marker alone
+}
+
+/** HEIC/HEIF: the TIFF block of the Exif item of `meta` (iinf → item_type 'Exif', iloc → offset/length), or null. */
 async function exifFromHeic(file) {
   const head = new Uint8Array(await file.slice(0, 1 << 20).arrayBuffer());
   const dv = new DataView(head.buffer);
@@ -145,17 +158,17 @@ async function exifFromHeic(file) {
   if (!loc || loc[1] < 12 || loc[1] > 0x10000) return null;
   const item = new Uint8Array(await file.slice(loc[0], loc[0] + loc[1]).arrayBuffer());
   const skip = 4 + new DataView(item.buffer).getUint32(0);               // exif_tiff_header_offset
-  return skip < item.length ? exifFromTiff(item.subarray(skip)) : null;
+  return skip < item.length ? item.subarray(skip) : null;
 }
 
-/** The EXIF of an input as an APP1/Exif segment (FFE1 + length + payload), or null: JPEG (copied), DNG/TIFF (rebuilt from its tags), HEIC (Exif item). */
-export async function readExifSegment(file) {
+/** The TIFF block holding an input's EXIF, or null: JPEG (APP1/Exif payload), DNG/TIFF (the file itself), HEIC (Exif item). */
+async function readTiff(file) {
   if (!file) return null;
   const id = `${file.type || ''} ${file.name || ''}`;
   // TIFF-based raws (DNG, ORF, TIFF) by header too: phone raws are often named without an extension (Indigo's IDG_...).
   const h = new Uint8Array(await file.slice(0, 4).arrayBuffer());
   if (tiffMagic(h) || /image\/(x-adobe-dng|x-olympus-orf|tiff)/i.test(file.type || '') || /\.(dng|orf|tiff?)$/i.test(file.name || '')) {
-    return exifFromTiff(new Uint8Array(await file.slice(0, 8 << 20).arrayBuffer()));
+    return new Uint8Array(await file.slice(0, 8 << 20).arrayBuffer());
   }
   if (/hei[cf]/i.test(id)) return exifFromHeic(file);
   if (!/jpe?g/i.test(id)) return null;
@@ -169,11 +182,33 @@ export async function readExifSegment(file) {
     if (m === 0xE1 && len > 8 && p + 2 + len <= buf.length &&
         buf[p + 4] === 0x45 && buf[p + 5] === 0x78 && buf[p + 6] === 0x69 && buf[p + 7] === 0x66 &&
         buf[p + 8] === 0 && buf[p + 9] === 0) {
-      return buf.slice(p, p + 2 + len);
+      return buf.subarray(p + 10, p + 2 + len);
     }
     p += 2 + len;
   }
   return null;
+}
+
+/** The export's APP1/Exif segment: the input's tags (if readable; `log` says why not) with `desc` as ImageDescription. */
+export async function exportExif(file, desc, log) {
+  let tiff = null;
+  try { tiff = await readTiff(file); } catch (e) { log('EXIF not read: ' + (e?.message || e)); }
+  return exifSegmentOf(tiff, desc);
+}
+
+/** APP1/XMP segment with `desc` as dc:description and `keywords` as dc:subject (what Photos / Lightroom show as caption and keywords). */
+export function xmpSegment(desc, keywords) {
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const xmp = '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">' +
+    '<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">' +
+    `<dc:description><rdf:Alt><rdf:li xml:lang="x-default">${esc(desc)}</rdf:li></rdf:Alt></dc:description>` +
+    `<dc:subject><rdf:Bag>${keywords.map((k) => `<rdf:li>${esc(k)}</rdf:li>`).join('')}</rdf:Bag></dc:subject>` +
+    '</rdf:Description></rdf:RDF></x:xmpmeta>';
+  const body = new TextEncoder().encode('http://ns.adobe.com/xap/1.0/\0' + xmp), len = body.length + 2;
+  const seg = new Uint8Array(len + 2);
+  seg.set([0xFF, 0xE1, len >> 8, len & 255]);
+  seg.set(body, 4);
+  return seg;
 }
 
 export function patchExif(seg, w, h, p3 = false) {

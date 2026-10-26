@@ -14,6 +14,10 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.7**: **export ritrovabili**: ogni foto esportata porta la parola `finallycoolfilm` (e "Kodak Gold 200", lo scanner)
+  nella descrizione EXIF, nel campo Software e nei metadati XMP (descrizione + parole chiave), anche se l'originale non
+  aveva EXIF. Quale campo usi la ricerca di Foto su iPhone non è documentato: scritti tutti e tre. I tag dell'originale
+  sono ricostruiti per JPEG come già per HEIC / raw (la MakerNote del produttore non è più copiata).
 - **v4.6**: **Frontier, rosso e arancio separati**: il sensore verde dello scanner (540 → 555 nm) e i colori per tinta ritarati
   sulle carte Gold del Frontier vero: rosso → arancio 14–19° → 18–28° (vero 27–34°), pelle meno gialla (+8…+14° → +2…+11°),
   errore colore ΔE00 4.10 → 3.93 a tutte le esposizioni. I fiori arancio non si confondono più col rosso. Prezzo: livello un
@@ -128,7 +132,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   dodge sono misurate sul fotogramma intero (raddrizzare non cambia i toni). A 0° nessuna trasformazione (identico a prima).
 - **Esporta**: piena risoluzione (max 12.5 MP) a tile 1024 px, una striscia alla volta passata in streaming a jpegli
   (worker, distance 1.0, 4:4:4, baseline sopra 6 MP perché il progressive tiene tutti i coefficienti DCT in heap),
-  EXIF dell'originale preservati, download diretto.
+  EXIF dell'originale preservati (più il marcatore `finallycoolfilm`, v4.7), download diretto.
 - **Look Gold 200 (v3.16)**: rivisto in 6 giri con un revisore "Kodak Gold 200" su 3 foto molto diverse (luce piena con pelle e cielo,
   interno a luce calda, rocce scure ad alto contrasto): cieli azzurri (saturazione selettiva dei blu chiari nello scanner,
   `saturation_blue`, solo sopra luminanza ~0.22, così pelle, verdi e i blu scuri della carta non si muovono), dodge del cielo meno
