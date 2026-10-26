@@ -1368,6 +1368,8 @@ function offerUpdate() {
   v.classList.add('update'); v.textContent += ' · aggiorna ↻'; v.addEventListener('click', reloadNow);
 }
 attachTips();   // after every row exists (the v3 rows above included)
+// Offline (sw.js): only the deployed app registers it (a local / headless run keeps the plain network).
+if ('serviceWorker' in navigator && !BUILD_ID.startsWith('__')) navigator.serviceWorker.register('sw.js').catch((e) => log('sw: ' + (e?.message || e)));
 checkUpdate();
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
 addEventListener('pageshow', (e) => { if (e.persisted) checkUpdate(); });

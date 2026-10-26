@@ -22,9 +22,19 @@ printf '%s\n' "$v" > "$dir/version.txt"   # read by app.js checkUpdate (no-store
 sed -i "s#new Worker('export-worker.js')#new Worker('export-worker.js?v=$v')#" "$dir/app.js"
 sed -i "s#importScripts('vendor/jpegli_wasm2.js')#importScripts('vendor/jpegli_wasm2.js?v=$v')#" "$dir/export-worker.js"
 sed -i "s#new URL('spektrafilm_wasm_bg.wasm', import.meta.url)#new URL('spektrafilm_wasm_bg.wasm?v=$v', import.meta.url)#" "$dir/pkg/spektrafilm_wasm.js"
+# Offline (web/sw.js): its version and precache list, the deployed app as the pages request it: every script but the bench /
+# debug pages' (stamped ?v=), the wasm (stamped), the film data (plain), the page.
+sed -i "s#'__BUILD_ID__'#'$v'#" "$dir/sw.js"
+precache=$(cd "$dir" && {
+  printf '%s\n' ./ index.html "pkg/spektrafilm_wasm_bg.wasm?v=$v" "vendor/jpegli_wasm2.js?v=$v"
+  find . -name '*.js' -not -path './vendor/*' -not -name sw.js -not -name bench.js | sed "s#^\./##; s#\$#?v=$v#"
+  find data -type f
+} | python3 -c 'import json, sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
+sed -i "s#/\*__PRECACHE__\*/\[\]#$precache#" "$dir/sw.js"
 # Fail loudly if a pattern stopped matching (e.g. after a refactor).
 for f in "$dir/app.js" "$dir/export-worker.js" "$dir/pkg/spektrafilm_wasm.js" "$dir/index.html" "$dir/lib/raw.js" "$dir/lib/raw-worker.js"; do
   grep -q "?v=$v" "$f" || { echo "stamp-version: nothing stamped in $f" >&2; exit 1; }
 done
 grep -q "__BUILD__\|__BUILD_ID__" "$dir/app.js" && { echo "stamp-version: build label not stamped" >&2; exit 1; }
+grep -q "__BUILD_ID__\|__PRECACHE__" "$dir/sw.js" && { echo "stamp-version: sw.js not stamped" >&2; exit 1; }
 echo "stamped $v ($when)"
