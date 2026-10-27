@@ -17,7 +17,7 @@
 const RADIUS_FRAC = 1 / 10, EDGE_EV = 1, MAP_LONG = 512;
 // Recovery, not flattening (user, v4): areas within DEAD_EV of mid grey are left alone (the mids keep their contrast);
 // beyond it only the excess acts (a sky 2.5 EV over mid grey moves as if it were 1.5 EV over). A choice.
-const DEAD_EV = 1;
+export const DEAD_EV = 1;   // also to the engine (HyperToneParams.dead_ev): the shadows' film exposure is map - DEAD_EV
 const MID_GREY = 0.18;   // scene-linear mid grey (the engine's meter target)
 const Y_MIN = 1e-5;   // floor of the luminance before log2 (black pixels)
 

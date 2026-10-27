@@ -271,9 +271,11 @@ pub struct HyperToneGpu<'a> {
     pub frame_px: [f32; 2],
     /// Density per map EV on the three layers where the map is positive (lights) and negative (shadows).
     pub gain: [f32; 2],
-    /// The stock's toe: G dye density where it ends, and the red layer's shortfall there (see `hyper_apply`).
-    pub toe_density: f32,
+    /// The stock's toe as the area's film exposure (EV from mid grey): `[deep, end]`, and the red layer's shortfall there
+    /// (see `hyper_apply`); the dead zone the map's caller took off (`HyperToneParams::dead_ev`).
+    pub toe_ev: [f32; 2],
     pub toe_cyan: f32,
+    pub dead_ev: f32,
 }
 
 /// Hyper Tone's density change for map value `m`: the lights' gain above mid grey, the shadows' below.
@@ -282,17 +284,22 @@ pub fn hyper_delta(m: f32, gain_hi: f32, gain_lo: f32) -> f32 {
     m * if m > 0.0 { gain_hi } else { gain_lo }
 }
 
-/// Hyper Tone on one pixel's dye density `cmy`, moved by `delta` (`hyper_delta`). A lift (delta > 0: a dark area made lighter)
-/// inside the stock's toe, where the negative holds little information, gives the red layer `toe_cyan` less of it in
-/// proportion to how deep in the toe the pixel is (1 - smoothstep(0, toe_density, G)): the red layer records less there,
-/// so lifting a void turns it cyan, as on the real machine. `scan_lut.wgsl` `hyper_apply` is the same maths.
-pub fn hyper_apply(cmy: [f32; 3], delta: f32, toe_density: f32, toe_cyan: f32) -> [f32; 3] {
-    let mut r = delta;
-    if delta > 0.0 && toe_cyan > 0.0 && toe_density > 0.0 {
-        let t = (cmy[1] / toe_density).clamp(0.0, 1.0);
-        r *= 1.0 - toe_cyan * (1.0 - t * t * (3.0 - 2.0 * t));
+/// Hyper Tone on one pixel's dye density `cmy`, moved by `delta` (`hyper_delta` of the map value `m`). A lift (delta > 0: a
+/// dark area made lighter) is a recovery of what the negative holds: an area inside the stock's toe holds little, so its lift
+/// fades with how deep in the toe the AREA is (its film exposure `m - dead_ev`, from the map; t = smoothstep(toe_ev[0],
+/// toe_ev[1], ev), lift x t), and the red layer, which records less there, gets `toe_cyan` x (1 - t) less of it (the upper
+/// toe goes cool, as on the machine). A void lifted in full only showed the fog and grain of a thin negative: black clothes
+/// came out teal and mottled (user, v4.8 screenshot, IDG_20261027_115516_955). Judged per area, not on the pixel's own G density
+/// (grain crossed the toe pixel by pixel). `scan_lut.wgsl` is the same maths.
+pub fn hyper_apply(cmy: [f32; 3], m: f32, delta: f32, toe_ev: [f32; 2], toe_cyan: f32, dead_ev: f32) -> [f32; 3] {
+    let (mut d, mut r) = (delta, delta);
+    if delta > 0.0 && toe_ev[1] > toe_ev[0] {
+        let t = ((m - dead_ev - toe_ev[0]) / (toe_ev[1] - toe_ev[0])).clamp(0.0, 1.0);
+        let t = t * t * (3.0 - 2.0 * t);
+        d *= t;
+        r = d * (1.0 - toe_cyan * (1.0 - t));
     }
-    [cmy[0] + r, cmy[1] + delta, cmy[2] + delta]
+    [cmy[0] + r, cmy[1] + d, cmy[2] + d]
 }
 
 /// The Hyper Tone map at pixel (x, y) of a render whose top-left is `origin_px` in a frame of `frame_px` pixels: bilinear,

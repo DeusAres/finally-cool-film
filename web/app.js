@@ -16,7 +16,7 @@ import { dustField, drawDust, compositeDust } from './lib/dust.js';
 import { OUTPUT_WGSL, packParams, toSpaceCPU } from './lib/output.js';
 import { tiltMap, tiltRGBA } from './lib/tilt.js';
 import { tiltRuler } from './lib/ruler.js';
-import { hyperToneMap } from './lib/hypertone.js';
+import { hyperToneMap, DEAD_EV } from './lib/hypertone.js';
 import { attachTips } from './lib/tips.js';
 
 // Engine default; sets the physical pixel size of the engine's own effects (grain, halation, DIR diffusion) as the frame's
@@ -153,7 +153,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
       model: 'frontier', black_correction: false, white_correction: false,
       // always sent: the engine merges updates; the Noritsu has none (they are the Frontier's)
       ...(scanner === 'noritsu' ? { hyper_tone: { highlights: 0, shadows: 0 }, unsharp_mask: [0, 0] }
-        : { hyper_tone: { highlights: hyperLevel(u.htHi), shadows: hyperLevel(u.htLo), ...wholeFrame(region) }, ...hyperSharp(u, region) }),
+        : { hyper_tone: { highlights: hyperLevel(u.htHi), shadows: hyperLevel(u.htLo), dead_ev: DEAD_EV, ...wholeFrame(region) }, ...hyperSharp(u, region) }),
       frontier: {
         // v3.20: Alte luci / Bianchi below 0 darken the scene before the film (dodge.js, local, the negative keeps the detail); above 0 they
         // stay on the scanner curve (gentler than pushing the scene into the shoulder). v2 page: scanner only.

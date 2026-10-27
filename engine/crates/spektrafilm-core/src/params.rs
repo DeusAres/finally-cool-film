@@ -208,6 +208,9 @@ pub struct HyperToneParams {
     pub map_h: u32,
     pub origin_px: [f64; 2],
     pub frame_px: [f64; 2],
+    /// The dead zone (EV) the caller took off the map (web/lib/hypertone.js DEAD_EV): a shadow area's film exposure is
+    /// `map - dead_ev` (where the toe's cyan voids are judged, spektrafilm-gpu `hyper_apply`).
+    pub dead_ev: f64,
 }
 
 /// Bands of the narrowband scan (nm). Default: the RGB LEDs of the reference scans in the gold200

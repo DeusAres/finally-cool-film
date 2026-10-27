@@ -264,7 +264,7 @@ pub fn scan_frontier(
                 if let Some((h, f)) = hyper {   // Hyper Tone (params.rs HyperToneParams), the GPU's scan_lut.wgsl twin
                     let ev = spektrafilm_gpu::hyper_map(&h.map, h.map_w, h.map_h, h.origin_px.map(|v| v as f32), h.frame_px.map(|v| v as f32), (i % w) as u32, (i / w) as u32);
                     let delta = spektrafilm_gpu::hyper_delta(ev, f.gain_hi as f32, f.gain_lo as f32);
-                    let c32 = spektrafilm_gpu::hyper_apply(cmy.map(|v| v as f32), delta, f.toe_density as f32, f.toe_cyan as f32);
+                    let c32 = spektrafilm_gpu::hyper_apply(cmy.map(|v| v as f32), ev, delta, f.toe_ev.map(|v| v as f32), f.toe_cyan as f32, h.dead_ev as f32);
                     cmy = c32.map(|v| v as f64);
                 }
                 let y = lut.apply(cmy);

@@ -1760,7 +1760,7 @@ impl WgpuBackend {
                         pad: 0,
                         origin_frame: [h.origin_px[0], h.origin_px[1], h.frame_px[0], h.frame_px[1]],
                         gain: [h.gain[0], h.gain[1], 0.0, 0.0],
-                        toe: [h.toe_density, h.toe_cyan, 0.0, 0.0],
+                        toe: [h.toe_ev[0], h.toe_ev[1], h.toe_cyan, h.dead_ev],
                     },
                     h.map,
                 ),

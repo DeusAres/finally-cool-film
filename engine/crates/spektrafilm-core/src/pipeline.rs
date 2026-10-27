@@ -121,19 +121,26 @@ pub fn antihalation_scale(antihalation: &str) -> f64 {
 /// Hyper Tone's per-stock data (Pipeline::refresh_hyper_tone).
 struct HyperStock {
     cmy_per_ev: [f64; 3],
-    toe_density: f64,
+    toe_ev: [f64; 2],
     toe_cyan: f64,
 }
 
 /// Hyper Tone for one render (spektrafilm-gpu `hyper_delta` / `hyper_apply`): density per map EV on the three layers where
-/// the map is positive (lights) and negative (shadows), the stock's toe end (G dye density) and the red layer's shortfall there.
+/// the map is positive (lights) and negative (shadows), the stock's toe as film exposure (EV from mid grey: where the grey's
+/// G density is TOE_DEEP of the toe end's, and the end) and the red layer's shortfall there.
 #[derive(Clone, Copy, Debug)]
 pub struct HyperFilm {
     pub gain_hi: f64,
     pub gain_lo: f64,
-    pub toe_density: f64,
+    pub toe_ev: [f64; 2],
     pub toe_cyan: f64,
 }
+
+/// The deep end of the toe for Hyper Tone's cyan voids, as a share of the toe end's G density: the old per-pixel rule ran
+/// smoothstep(0, toe end) on G, ~full at 10 % of it (a choice, kept from that rule).
+const TOE_DEEP: f64 = 0.1;
+/// Grey ramp where the toe is searched (EV from mid grey, 1/4 EV steps): Gold 200's toe end sits ~3 EV under mid grey.
+const TOE_RAMP_EV: [f64; 2] = [-10.0, 0.0];
 
 /// The stock's toe from its density curves (normalised, as developed): where the G curve's slope first reaches 90 % of its
 /// straight-line slope (the median slope where G is within 25-75 % of its range) is the toe's end, `toe_density` = G there;
@@ -174,6 +181,13 @@ fn stock_toe(film: &Profile) -> (f64, f64) {
     let (gr, gg) = (fit(0), fit(1));
     let cyan = if gr.is_finite() && gg.is_finite() && gg > 0.0 { (1.0 - gr / gg).clamp(0.0, 1.0) } else { 0.0 };
     (n[end][1], cyan)
+}
+
+/// The EV where a grey ramp `(ev, G density)` (ascending EV) first reaches density `d`, interpolated; NaN if it never does.
+fn ev_at_density(ramp: &[(f64, f64)], d: f64) -> f64 {
+    ramp.windows(2)
+        .find(|w| w[0].1 <= d && w[1].1 >= d && w[1].1 > w[0].1)
+        .map_or(f64::NAN, |w| w[0].0 + (d - w[0].1) / (w[1].1 - w[0].1) * (w[1].0 - w[0].0))
 }
 
 pub struct FrontierRuntime {
@@ -324,7 +338,7 @@ impl Pipeline {
         let mean = (st.cmy_per_ev[0] + st.cmy_per_ev[1] + st.cmy_per_ev[2]) / 3.0;
         (self.has_scan_lut() && (h.highlights != 0.0 || h.shadows != 0.0)).then_some((
             h,
-            HyperFilm { gain_hi: -h.highlights * mean, gain_lo: -h.shadows * mean, toe_density: st.toe_density, toe_cyan: st.toe_cyan },
+            HyperFilm { gain_hi: -h.highlights * mean, gain_lo: -h.shadows * mean, toe_ev: st.toe_ev, toe_cyan: st.toe_cyan },
         ))
     }
 
@@ -344,10 +358,16 @@ impl Pipeline {
         if self.cmy_per_ev.as_ref().is_some_and(|c| c.1 == key) {
             return;
         }
-        let ramp = self.grey_ramp_cmy(p, &[-0.5, 0.5]);
+        let steps = ((TOE_RAMP_EV[1] - TOE_RAMP_EV[0]) * 4.0) as usize;
+        let evs: Vec<f64> = [-0.5, 0.5].into_iter().chain((0..=steps).map(|i| TOE_RAMP_EV[0] + i as f64 * 0.25)).collect();
+        let ramp = self.grey_ramp_cmy(p, &evs);
         let (lo, hi) = (ramp[0], ramp[1]);
         let (toe_density, toe_cyan) = self.toe;
-        self.cmy_per_ev = Some(Arc::new((HyperStock { cmy_per_ev: [0, 1, 2].map(|c| hi[c] - lo[c]), toe_density, toe_cyan }, key)));
+        let g: Vec<(f64, f64)> = evs[2..].iter().zip(&ramp[2..]).map(|(e, c)| (*e, c[1])).collect();
+        let toe_ev = [ev_at_density(&g, TOE_DEEP * toe_density), ev_at_density(&g, toe_density)];
+        // no toe inside the ramp: no toe rule (an empty window: the lift is plain and neutral)
+        let toe_ev = if toe_ev.iter().all(|e| e.is_finite()) && toe_ev[1] > toe_ev[0] { toe_ev } else { [0.0; 2] };
+        self.cmy_per_ev = Some(Arc::new((HyperStock { cmy_per_ev: [0, 1, 2].map(|c| hi[c] - lo[c]), toe_ev, toe_cyan }, key)));
     }
 
     /// (Re)build the narrowband scan LUT when `scanner.model = "narrowband"` and its inputs changed (with the film-type setup,
@@ -1549,8 +1569,9 @@ impl Pipeline {
                     origin_px: h.origin_px.map(|v| v as f32),
                     frame_px: h.frame_px.map(|v| v as f32),
                     gain: [f.gain_hi as f32, f.gain_lo as f32],
-                    toe_density: f.toe_density as f32,
+                    toe_ev: f.toe_ev.map(|v| v as f32),
                     toe_cyan: f.toe_cyan as f32,
+                    dead_ev: h.dead_ev as f32,
                 });
                 spektrafilm_gpu::FrontierGpuLut { table, steps, data_min, inv, hyper }
             }),
