@@ -36,7 +36,7 @@ const JPEG_QUALITY_DEFAULT = 90;   // export slider default: jpegli quality 90 =
 /** jpegli's quality -> butteraugli distance (jpegli_quality_to_distance): 90 -> 1.0, 100 -> 0.1 (largest files). */
 const jpegDistance = (q) => (q >= 30 ? 0.1 + (100 - q) * 0.09 : 53 / 3000 * q * q - 23 / 20 * q + 25);
 const PROGRESSIVE_PIXEL_LIMIT = 6e6; // progressive keeps all DCT coeffs in the wasm heap (~29 B/px): baseline above
-const BORDER_FRACTION = 0.01;     // mat (the image's paper white), fraction of the long side; normal export: thicker across the short side so the aspect is kept
+const BORDER_FRACTION = 0.01;     // mat (white, MAT_WHITE), fraction of the long side; normal export: thicker across the short side so the aspect is kept
 /** Base mat width near `b` (±3 px, closest first) whose scaled side b·k is closest to a whole number (k = long / short side). */
 const matBase = (b, k) => [0, -1, 1, -2, 2, -3, 3].map((d) => Math.max(1, b + d))
   .reduce((best, c) => (Math.abs(c * k - Math.round(c * k)) < Math.abs(best * k - Math.round(best * k)) - 1e-9 ? c : best));
@@ -998,16 +998,9 @@ function download(blob, name) {
   setTimeout(() => { if (lastDownloadUrl === url) { URL.revokeObjectURL(url); lastDownloadUrl = null; } }, 60000);
 }
 
-// The mat is the image's own paper white, not pure 255: what the scanner renders for a
-// saturated neutral (far above scene white), in output code values. Read from the engine on a flat patch.
-const MAT_PATCH = 8, MAT_SCENE = 64;
-function paperWhite(u) {
-  const out = syncEngine(u, { noGrain: true }).process(new Float32Array(MAT_PATCH * MAT_PATCH * 3).fill(MAT_SCENE), MAT_PATCH, MAT_PATCH);
-  const px = Float32Array.from(out.subarray(0, 3)), inv = invUniform(u);
-  if (inv) invertCPU(px, inv);
-  if (packTo()) toSpaceCPU(px, packTo());
-  return Array.from(px, q8);
-}
+// The mat (Bordo bianco, IG canvas) is pure white (user, v4.10): it was the scanner's own paper white, ~244 / 244 / 246 on the
+// Frontier, which read as a grey-blue border; the photo's brightest whites may now look a touch less white beside it.
+const MAT_WHITE = [255, 255, 255];
 
 // `ig`: Instagram export (v3.27, any orientation): an IG_W × IG_H (3:4) sRGB canvas, the whole photo fitted inside it (mat colour
 // around, so Instagram never crops it), rendered at IG_SUPER × the posted size, then Lanczos-downscaled in linear light and
@@ -1082,7 +1075,7 @@ async function exportFull(ig = false) {
     const quality = +$('quality').value, distance = jpegDistance(quality);
     log(`export quality ${quality} (distance ${distance.toFixed(2)})`);
     const igFull = ig ? new Uint8Array(w * h * 3) : null;   // IG: the whole supersampled render, downscaled at the end
-    if (!ig) enc.postMessage({ cmd: 'start', width: w, height: h, distance, progressive, yuv444: 1, border: borderX, borderY, mat: border ? paperWhite(u) : undefined });
+    if (!ig) enc.postMessage({ cmd: 'start', width: w, height: h, distance, progressive, yuv444: 1, border: borderX, borderY, mat: MAT_WHITE });
 
     for (let s = 0; s < strips; s++) {
       const ty = s * EXPORT_TILE, ch = Math.min(EXPORT_TILE, h - ty);
@@ -1112,7 +1105,7 @@ async function exportFull(ig = false) {
       status('Esporto IG: ridimensiono e rendo nitido…');
       const { iw, ih } = igFit, small = downscale(igFull, w, h, iw, ih);
       sharpenForScreen(small, iw, ih);
-      const canvas = new Uint8Array(IG_W * IG_H * 3), matRGB = paperWhite(u);
+      const canvas = new Uint8Array(IG_W * IG_H * 3), matRGB = MAT_WHITE;
       for (let i = 0; i < IG_W * IG_H * 3; i += 3) canvas.set(matRGB, i);
       const ox = (IG_W - iw) >> 1, oy = (IG_H - ih) >> 1;
       for (let y = 0; y < ih; y++) canvas.set(small.subarray(y * iw * 3, (y + 1) * iw * 3), ((oy + y) * IG_W + ox) * 3);

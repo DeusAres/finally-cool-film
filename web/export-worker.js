@@ -8,7 +8,7 @@
 // Errors → { cmd: 'error', error }.
 //
 // `border` (px, optional) adds a mat of that width left and right, `borderY` (default `border`) top and bottom, in the
-// colour `mat` ([r, g, b] 8-bit, default white: the caller passes the image's paper white); it is
+// colour `mat` ([r, g, b] 8-bit, default white); it is
 // synthesised row by row, so the output is (width + 2·border) × (height + 2·borderY)
 // and the caller still sends only the image rows.
 // Rows are pushed into the wasm heap a batch at a time, so the full RGB image

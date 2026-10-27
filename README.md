@@ -16,6 +16,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 - **v4.10**: Hyper Tone ombre di nuovo **freddo / ciano** come sul Frontier, ma uniforme per zona: il rosso riceve il 18 %
   in meno del recupero (quanto lo strato rosso della Gold registra in meno nel piede), niente più macchie di pixel.
+  **Bordo bianco** e tela IG ora bianco puro 255 (prima era il bianco carta dello scanner, grigio-azzurro sul Frontier).
 - **v4.9**: **Ritaglia** (scheda Trasforma): con la scheda aperta la foto si vede intera con il riquadro del ritaglio sopra
   (griglia dei terzi, la parte tagliata scurita, non tolta); si trascinano gli angoli o il riquadro, il lucchetto tiene le
   proporzioni, "Intera" lo azzera. Fuori da Trasforma la foto È il ritaglio: vignettatura, aberrazione, grana, polvere,
