@@ -259,8 +259,9 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
   const ip = inputPass(u, frame.p3 ? 'p3' : 'srgb'), at0 = DISPLAY_GAIN_LUT.length;
   if (ip.dodge) dodgeCPU(rgb, w, h, x0, y0, o.w, o.h, expo, ip.arr, at0, LUMA[frame.p3 ? 'rec2020' : 'srgb'], map, frame.w, frame.h);
   if (ip.ht) {   // Hyper Tone: the map's gain on the scene light (hypertone.js hyperGainCPU, as the GPU pass)
+    const g = new Float32Array(3);
     for (let y = 0, j = 0; y < h; y++) {
-      for (let x = 0; x < w; x++, j += 3) { const g = hyperGainCPU(ip.arr, at0, x0 + x, y0 + y, o.w, o.h); rgb[j] *= g; rgb[j + 1] *= g; rgb[j + 2] *= g; }
+      for (let x = 0; x < w; x++, j += 3) { hyperGainCPU(ip.arr, at0, x0 + x, y0 + y, o.w, o.h, g); rgb[j] *= g[0]; rgb[j + 1] *= g[1]; rgb[j + 2] *= g[2]; }
     }
   }
   const out = engine.process(rgb, w, h), d32 = new Uint32Array(target.buffer, target.byteOffset, w * h);
