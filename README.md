@@ -14,6 +14,13 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.9**: **Ritaglia** (scheda Trasforma): con la scheda aperta la foto si vede intera con il riquadro del ritaglio sopra
+  (griglia dei terzi, la parte tagliata scurita, non tolta); si trascinano gli angoli o il riquadro, il lucchetto tiene le
+  proporzioni, "Intera" lo azzera. Fuori da Trasforma la foto È il ritaglio: vignettatura, aberrazione, grana, polvere,
+  Hyper Tone, istogramma ed export seguono quello (l'export ha la risoluzione piena del pezzo ritagliato). AutoSetup ed
+  esposizione restano misurati sul negativo intero, come in laboratorio. **Hyper Tone rifatto**: dà più luce alle zone
+  scure (e meno a quelle chiare) prima della pellicola, invece di schiarire la scansione: niente più ombre grigio-verdi a
+  macchie, le ombre hanno il loro dettaglio e colore. Raddrizza e Hyper Tone ora sono allineati (la mappa segue la rotazione).
 - **v4.8**: **offline più robusto**: con una rete che non risponde (una tacca, Wi-Fi senza internet) la pagina non resta
   più appesa: dopo 3 s si apre quella salvata (la rete, se risponde dopo, aggiorna la copia). L'app chiede al browser di
   non cancellare la copia offline (`storage.persist`). Su iPhone: usarla dalla schermata Home.

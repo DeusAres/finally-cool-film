@@ -116,17 +116,29 @@
          background: var(--accent); pointer-events: none; }
   #tiltRuler .needle::before { content: ''; position: absolute; left: 50%; top: -6px; margin-left: -4px;
          border: 4px solid transparent; border-top: 5px solid var(--accent); border-bottom: 0; }
-  /* thirds grid over the photo while the dial moves (positioned on the canvas by app.js placeGrid) */
-  #tiltGrid { position: absolute; z-index: 1; pointer-events: none; opacity: 0; transition: opacity .25s;
-         background:
+  /* Ritaglia (Trasforma tab open; placed on the canvas by app.js placeCrop): the crop box with a thirds grid (ninths while the
+     Raddrizza dial moves), the cut-away part darkened, not removed; corner handles resize, the box drags */
+  #cropUI { left: 0; top: 0; pointer-events: none; z-index: 1; }   /* not clipped: the corner handles reach past the photo's edge */
+  #cropBox { position: absolute; pointer-events: auto; touch-action: none; cursor: move; box-shadow: 0 0 0 100vmax #000a, inset 0 0 0 1px #fffc;
+         --thirds:
            linear-gradient(90deg, transparent calc(33.333% - .5px), #fff9 calc(33.333% - .5px), #fff9 calc(33.333% + .5px), transparent calc(33.333% + .5px),
              transparent calc(66.667% - .5px), #fff9 calc(66.667% - .5px), #fff9 calc(66.667% + .5px), transparent calc(66.667% + .5px)),
            linear-gradient(180deg, transparent calc(33.333% - .5px), #fff9 calc(33.333% - .5px), #fff9 calc(33.333% + .5px), transparent calc(33.333% + .5px),
-             transparent calc(66.667% - .5px), #fff9 calc(66.667% - .5px), #fff9 calc(66.667% + .5px), transparent calc(66.667% + .5px)),
+             transparent calc(66.667% - .5px), #fff9 calc(66.667% - .5px), #fff9 calc(66.667% + .5px), transparent calc(66.667% + .5px));
+         background-image: var(--thirds); }
+  #cropBox.fine { background-image: var(--thirds),
            repeating-linear-gradient(90deg, transparent 0 calc(11.111% - .5px), #fff3 calc(11.111% - .5px) 11.111%),
-           repeating-linear-gradient(180deg, transparent 0 calc(11.111% - .5px), #fff3 calc(11.111% - .5px) 11.111%);
-         box-shadow: inset 0 0 0 1px #fff6; }
-  #tiltGrid.on { opacity: 1; }
+           repeating-linear-gradient(180deg, transparent 0 calc(11.111% - .5px), #fff3 calc(11.111% - .5px) 11.111%); }
+  #cropBox i { position: absolute; width: 44px; height: 44px; transform: translate(-50%, -50%); }   /* a finger-sized hit area on each corner */
+  #cropBox i::after { content: ''; position: absolute; width: 18px; height: 18px; border: 0 solid #fff; }
+  #cropBox i[data-h="nw"] { left: 0; top: 0; cursor: nwse-resize; }      #cropBox i[data-h="nw"]::after { left: 19px; top: 19px; border-width: 3px 0 0 3px; }
+  #cropBox i[data-h="ne"] { left: 100%; top: 0; cursor: nesw-resize; }   #cropBox i[data-h="ne"]::after { right: 19px; top: 19px; border-width: 3px 3px 0 0; }
+  #cropBox i[data-h="sw"] { left: 0; top: 100%; cursor: nesw-resize; }   #cropBox i[data-h="sw"]::after { left: 19px; bottom: 19px; border-width: 0 0 3px 3px; }
+  #cropBox i[data-h="se"] { left: 100%; top: 100%; cursor: nwse-resize; } #cropBox i[data-h="se"]::after { right: 19px; bottom: 19px; border-width: 0 3px 3px 0; }
+  .croprow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0 2px; }
+  .croprow label { font-size: 14px; color: var(--muted); }
+  .croprow .btns { display: flex; gap: 8px; }
+  #cropLock[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 
   #logPanel { display: none; position: fixed; inset: 0; z-index: 10; background: #000e;
          padding: calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));
@@ -180,7 +192,7 @@
   </div>
   <canvas class="overlay" id="histo" width="256" height="112"></canvas>
   <div class="overlay" id="badge">ORIGINALE</div>
-  <div id="tiltGrid" hidden></div>
+  <div class="overlay" id="cropUI" hidden><div id="cropBox"><i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i></div></div>
   <div class="overlay" id="zoomLabel"></div>
 </div>
 
@@ -214,6 +226,9 @@
     <div id="tiltRuler" role="slider" tabindex="0" aria-labelledby="tiltLabel" aria-valuemin="-45" aria-valuemax="45" aria-valuenow="0" aria-orientation="horizontal"><span class="needle"></span></div>
     <input type="range" id="tilt" min="-45" max="45" step="0.1" value="0" hidden tabindex="-1">
   </div>
+  <div class="croprow"><label id="cropLabel">Ritaglia</label>
+    <div class="btns"><button class="btn ghost" id="cropLock" aria-pressed="false" title="Blocca le proporzioni">🔓 Proporzioni libere</button>
+      <button class="btn ghost" id="cropReset">Intera</button></div></div>
   </div>
   <div class="pane" data-pane="light" role="tabpanel" hidden>
   <div class="row act"><button class="btn ghost" id="auto" disabled>Auto</button></div>

@@ -104,7 +104,8 @@ function sample(data, W, H, c, x, y) {
  * scene light (color.js displayToScene); without it they are used as-is. Linear Rec.2020 when `p3`,
  * else linear sRGB — same contract as
  * common.js `extractLinear`, which this replaces when a lens is active.
- * `map` (tilt.js tiltMap, Raddrizza): every tap at output position (x, y) reads the source at map(x, y); the lens stays on the output frame.
+ * `map` (tilt.js frameMap, Raddrizza / Ritaglia): every tap at output position (x, y) reads the W×H source at map(x, y); the lens
+ * (`geo`) stays on the output frame.
  */
 export function extractLens(data, W, H, p3, x0, y0, w, h, scale, geo, inverse = false, map = null) {
   if (map) return extractLensMapped(data, W, H, p3, x0, y0, w, h, scale, geo, inverse, map);

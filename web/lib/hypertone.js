@@ -1,9 +1,9 @@
-// Hyper Tone map (the Frontier scanner's local tone control; engine params.rs HyperToneParams): a low-resolution base of the
+// Hyper Tone map (the Frontier scanner's local tone control; applied in the input pass, below): a low-resolution base of the
 // frame's log exposure that is smooth inside regions and changes only at their edges, in EV from mid grey as the scanner
 // renders it (0.18 x the gain: the film's exposure and the AutoSetup's density key, app.js syncHyperMap), beyond DEAD_EV: a recovery of the frame's extremes, not of what is dark or bright
 // relative to the rest (a frame that is mostly dark rock has its median there, and its shadows were left alone).
-// The engine moves each pixel's film density by -level x this map (the same on the three layers, as the scanner's signal), so
-// large bright areas are scanned darker and large dark ones lighter while the detail inside them stays (it is not in the map).
+// The input pass gives each pixel 2^(-level x this map) of light (hyperWGSL), so large bright areas reach the film darker and
+// large dark ones lighter while the detail inside them stays (it is not in the map).
 //
 // Edges: a self-guided filter (He et al. 2010) on log2 luminance. Inside a window whose variance is below EDGE_EV² the
 // output is the window mean (texture and small detail are flattened out of the base); across a step much larger than that
@@ -11,13 +11,13 @@
 // No DOM: shared by app.js and node eval scripts.
 
 // Choices, not measurements (first version, to tune on photos): window radius as a fraction of the thumb's long side
-// (the size of what counts as an "area"), the edge threshold in EV, the map's long side (the engine samples it bilinearly,
+// (the size of what counts as an "area"), the edge threshold in EV, the map's long side (the pass samples it bilinearly,
 // so a step in the map is spread over frame / MAP_LONG pixels: at 96 that was a visible light rim on a 2000 px rock against
-// the sky; 512 keeps it to ~4 px; the map goes to the engine once per photo, Engine.set_hyper_tone_map).
+// the sky; 512 keeps it to ~4 px; built once per photo, transform and level of the scan, app.js syncHyperMap).
 const RADIUS_FRAC = 1 / 10, EDGE_EV = 1, MAP_LONG = 512;
 // Recovery, not flattening (user, v4): areas within DEAD_EV of mid grey are left alone (the mids keep their contrast);
 // beyond it only the excess acts (a sky 2.5 EV over mid grey moves as if it were 1.5 EV over). A choice.
-export const DEAD_EV = 1;   // also to the engine (HyperToneParams.dead_ev): the shadows' film exposure is map - DEAD_EV
+const DEAD_EV = 1;
 const MID_GREY = 0.18;   // scene-linear mid grey (the engine's meter target)
 const Y_MIN = 1e-5;   // floor of the luminance before log2 (black pixels)
 
@@ -79,4 +79,42 @@ export function hyperToneMap(rgb, w, h, luma, gain = 1) {
   const map = shrink(base, w, h, mw, mh), ref = Math.log2(MID_GREY / gain);
   for (let i = 0; i < map.length; i++) { const m = map[i] - ref; map[i] = m - Math.max(-DEAD_EV, Math.min(DEAD_EV, m)); }
   return { map, w: mw, h: mh };
+}
+
+// In the input pass (v4.9): the map moves the LIGHT that reaches the film, scene x 2^(-k x map) before the exposure gain, k the
+// level's strength on the lights (map > 0) or the shadows (map < 0). As a density lift in the scanner (the first version) a
+// shadow left in the film's toe came out milky grey-green with the fog and grain of a thin negative, mottled (user, cafe
+// IDG_20261027_115516_955); given light, the film renders the shadow's own detail with its own toe and colours. The map rides
+// after the display-gain LUT in the pass's storage array: header [map w, map h, k lights, k shadows], then the map.
+const HDR = 4;
+
+/** The input pass's storage array: `lut` (color.js DISPLAY_GAIN_LUT), then the header and the map `hyper` ({ map, w, h }). */
+export function hyperArray(lut, hyper, kHi, kLo) {
+  const out = new Float32Array(lut.length + HDR + hyper.map.length);
+  out.set(lut);
+  out.set([hyper.w, hyper.h, kHi, kLo], lut.length);
+  out.set(hyper.map, lut.length + HDR);
+  return out;
+}
+
+/** WGSL: the gain at output-frame position `pos` (frame `p.frame`), from the array `arr` with the header at `at0`. */
+export const hyperWGSL = (arr, at0) => /* wgsl */`
+fn hyperGain(pos: vec2<f32>) -> f32 {
+  let mw = ${arr}[${at0}u]; let mh = ${arr}[${at0}u + 1u];
+  let q = clamp((pos + 0.5) / p.frame * vec2<f32>(mw, mh) - 0.5, vec2<f32>(0.0), vec2<f32>(mw - 1.0, mh - 1.0));
+  let i0 = vec2<u32>(floor(q)); let i1 = min(i0 + 1u, vec2<u32>(u32(mw) - 1u, u32(mh) - 1u)); let f = q - floor(q);
+  let W = u32(mw); let o = ${at0}u + ${HDR}u;
+  let m = mix(mix(${arr}[o + i0.y * W + i0.x], ${arr}[o + i0.y * W + i1.x], f.x), mix(${arr}[o + i1.y * W + i0.x], ${arr}[o + i1.y * W + i1.x], f.x), f.y);
+  return exp2(-m * select(${arr}[${at0}u + 3u], ${arr}[${at0}u + 2u], m > 0.0));
+}`;
+
+/** CPU twin of hyperWGSL: the gain at output-frame px (x, y) of an fw×fh frame. */
+export function hyperGainCPU(arr, at0, x, y, fw, fh) {
+  const mw = arr[at0], mh = arr[at0 + 1], o = at0 + HDR;
+  const qx = Math.min(mw - 1, Math.max(0, (x + 0.5) / fw * mw - 0.5)), qy = Math.min(mh - 1, Math.max(0, (y + 0.5) / fh * mh - 0.5));
+  const x0 = Math.floor(qx), y0 = Math.floor(qy), x1 = Math.min(x0 + 1, mw - 1), y1 = Math.min(y0 + 1, mh - 1), fx = qx - x0, fy = qy - y0;
+  const a = arr[o + y0 * mw + x0] + (arr[o + y0 * mw + x1] - arr[o + y0 * mw + x0]) * fx;
+  const b = arr[o + y1 * mw + x0] + (arr[o + y1 * mw + x1] - arr[o + y1 * mw + x0]) * fx;
+  const m = a + (b - a) * fy;
+  return 2 ** (-m * (m > 0 ? arr[at0 + 2] : arr[at0 + 3]));
 }

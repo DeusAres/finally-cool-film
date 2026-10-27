@@ -8,15 +8,15 @@ import { internoParams } from './lib/interno.js';
 import { invertAnchors, invertUniform, invertCPU } from './lib/invert.js';
 import { iccSegment } from './lib/icc.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
-import { INPUT_WGSL, INPUT_WGSL_V3, inputUniform } from './lib/lens-gpu.js';
+import { INPUT_WGSL, INPUT_WGSL_V3, INPUT_WGSL_HT, inputUniform } from './lib/lens-gpu.js';
 import { dodgeBase, dodgeParams, dodgeArray, dodgeCPU } from './lib/dodge.js';
 import { LUMA, XYZ_TO_RGB } from './lib/color.js';
 import { downscale, sharpenForScreen, fitInside } from './lib/igout.js';
 import { dustField, drawDust, compositeDust } from './lib/dust.js';
 import { OUTPUT_WGSL, packParams, toSpaceCPU } from './lib/output.js';
-import { tiltMap, tiltRGBA } from './lib/tilt.js';
+import { frameMap, frameImage, cropPx, turnCrop, isFull, FULL } from './lib/tilt.js';
 import { tiltRuler } from './lib/ruler.js';
-import { hyperToneMap, DEAD_EV } from './lib/hypertone.js';
+import { hyperToneMap, hyperArray, hyperGainCPU } from './lib/hypertone.js';
 import { attachTips } from './lib/tips.js';
 
 // Engine default; sets the physical pixel size of the engine's own effects (grain, halation, DIR diffusion) as the frame's
@@ -42,7 +42,7 @@ const matBase = (b, k) => [0, -1, 1, -2, 2, -3, 3].map((d) => Math.max(1, b + d)
   .reduce((best, c) => (Math.abs(c * k - Math.round(c * k)) < Math.abs(best * k - Math.round(best * k)) - 1e-9 ? c : best));
 
 const $ = (id) => document.getElementById(id);
-const stage = $('stage'), view = $('view'), tiltGrid = $('tiltGrid');
+const stage = $('stage'), view = $('view');
 const ctx = view.getContext('2d', { colorSpace: 'display-p3' });
 
 let gpu = false;
@@ -118,6 +118,12 @@ const sceneGain = (u) => 2 ** (u.ev - underEv() + baselineEv());
 // The film model and the Frontier scanner are the engine's (the positive comes out of it);
 // our input pass only conditions the light (display→scene, exposure, lens, Texture, Chiarezza, Nitidezza, Vividezza).
 let forceSRGB = false;   // IG export: sRGB output (P3 dulls saturated reds on Instagram)
+// Ritaglia (Trasforma; lib/tilt.js): the crop of the turned frame (fractions); while the Trasforma tab is open the whole frame
+// renders and the crop is drawn over it (cropEditing), elsewhere the crop is the output frame.
+let crop = FULL, cropEditing = false;
+const viewCrop = () => (cropEditing ? FULL : crop);
+/** The output frame of a W×H source as rendered now: { ox, oy, w, h } (tilt.js cropPx). */
+const outFrame = (W, H) => cropPx(W, H, viewCrop());
 // Output space ('p3' | 'srgb'): v3, Display P3 for P3 photos (sRGB for IG and sRGB photos); v4, always sRGB (the photos end
 // on the web / Instagram). `engineWide`: the engine renders Rec.2020 and the output pass maps it softly into the output
 // space (output.js GAMUT); otherwise the engine renders the output space itself (v3 sRGB: hard clip, kept as it was).
@@ -129,9 +135,10 @@ const packTo = () => (engineWide() ? outSpace() : null);
 // relative to (fw, fh: the tile's own size in an export, see exportFull), and the whole frame's size (W, H), in px. The grain
 // is a hash of the frame position, so every tile of an export gets the same grain as the whole frame.
 /** The render's top-left and the WHOLE frame's size (Hyper Tone's map spans the frame; Hyper Sharpness' pitch is the frame's). */
-const wholeFrame = (region) => ({
-  origin_px: region ? [region.x0, region.y0] : [0, 0], frame_px: region ? [region.W, region.H] : [photo.preview.w, photo.preview.h],
-});
+const wholeFrame = (region) => {
+  const o = outFrame(photo.preview.w, photo.preview.h);
+  return { origin_px: region ? [region.x0, region.y0] : [0, 0], frame_px: region ? [region.W, region.H] : [o.w, o.h] };
+};
 function renderParams(u, { noGrain = false, region = null } = {}) {
   return {
     camera: { auto_exposure: false, film_format_mm: FILM_FORMAT_MM },
@@ -149,11 +156,11 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
     // film-adjacency clarity in the input pass instead (lens-gpu.js), in µm.
     // v4 Scanner 'Nessuno': no scanner look, the engine returns the negative read in three narrow bands (engine narrowband.rs:
     // the bands of the real Gold 200 reference scans, eval/V4.md), inverted in the output pass (lib/invert.js).
-    scanner: neutralScan() ? { model: 'narrowband', narrowband: NARROWBAND, unsharp_mask: [0, 0], hyper_tone: { highlights: 0, shadows: 0 } } : {
+    scanner: neutralScan() ? { model: 'narrowband', narrowband: NARROWBAND, unsharp_mask: [0, 0] } : {
       model: 'frontier', black_correction: false, white_correction: false,
       // always sent: the engine merges updates; the Noritsu has none (they are the Frontier's)
-      ...(scanner === 'noritsu' ? { hyper_tone: { highlights: 0, shadows: 0 }, unsharp_mask: [0, 0] }
-        : { hyper_tone: { highlights: hyperLevel(u.htHi), shadows: hyperLevel(u.htLo), dead_ev: DEAD_EV, ...wholeFrame(region) }, ...hyperSharp(u, region) }),
+      ...(scanner === 'noritsu' ? { unsharp_mask: [0, 0] }
+        : hyperSharp(u, region)),
       frontier: {
         // v3.20: Alte luci / Bianchi below 0 darken the scene before the film (dodge.js, local, the negative keeps the detail); above 0 they
         // stay on the scanner curve (gentler than pushing the scene into the shoulder). v2 page: scanner only.
@@ -180,7 +187,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
       // Grana 1× = the old 0.25× (user-preferred); amount 1 = the calibrated Gold 200 grain (GRAIN_UNIT scales between them).
       grain: {
         active: !noGrain && u.grain > 0, rng: 'hash', blur: GRAIN_BLUR, amount: u.grain * GRAIN_UNIT * grainFactor(), seed: photo.grainSeed,
-        origin_px: region ? [region.x0, region.y0] : [0, 0], frame_px: region ? [region.fw, region.fh] : [photo.preview.w, photo.preview.h],
+        ...(region ? { origin_px: [region.x0, region.y0], frame_px: [region.fw, region.fh] } : wholeFrame(null)),
       },
       // v2-calib: strength comes from the profile's antihalation; halation_amount is a multiplier on it (Halation slider).
       // v3.12: film scatter (core 2.2 / tail 9.3 µm) at half size: at full size it took ~35 % of the fine detail
@@ -212,7 +219,6 @@ function syncEngine(u, { noGrain = false, tileMm = 0, region = null } = {}) {
   }
   const json = renderParamsJson(u, noGrain, tileMm, region);
   if (json !== engineParams) { engine.update(json); engineParams = json; }
-  syncHyperMap(u);
   return engine;
 }
 
@@ -232,24 +238,31 @@ function uploadFrame(data, w, h) {
 // chain from the frame texture (sf.set_frame), see lens-gpu.js. CPU fallback
 // below (no WebGPU): float input built here, float output converted here.
 
-/** 8-bit render of a region of `frame` into `target` (RGBA, w×h×4 bytes). */
+/** 8-bit render of a region (x0, y0, w, h: in the output frame, outFrame) of `frame` into `target` (RGBA, w×h×4 bytes). */
 async function renderRegion(frame, x0, y0, w, h, target, u) {
-  const lens = lensOf(u), expo = sceneGain(u);
+  const lens = lensOf(u), expo = sceneGain(u), c = viewCrop();
   if (gpu) {
     const space = frame.raw ? 'rec2020' : frame.p3 ? 'p3' : 'srgb', wb = sceneWb(undefined, space === 'srgb' ? 'srgb' : 'rec2020', u.temp);
-    return engine.process_frame(DODGE ? INPUT_WGSL_V3 : INPUT_WGSL, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb, u.sharp, u.vibrance / 100, !!interno(), u.tilt),
-      DODGE ? v3Gain(u, space) : DISPLAY_GAIN_LUT, w, h, PACK_LUT,
+    const ip = inputPass(u, space);
+    return engine.process_frame(ip.wgsl, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb, u.sharp, u.vibrance / 100, !!interno(), u.tilt, c),
+      ip.arr, w, h, PACK_LUT,
       OUTPUT_WGSL, packParams(packTo(), invUniform(u)), target);
   }
-  const map = tiltMap(frame.w, frame.h, u.tilt);   // Raddrizza (tilt.js); null at 0
+  const map = frameMap(frame.w, frame.h, u.tilt, c), o = cropPx(frame.w, frame.h, c);   // Raddrizza / Ritaglia (tilt.js); null when neither
   const rgb = lensActive(lens) || map
-    ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, expo, lensGeometry(frame.w, frame.h, lens), true, map)
+    ? extractLens(frame.data, frame.w, frame.h, frame.p3, x0, y0, w, h, expo, lensGeometry(o.w, o.h, lens), true, map)
     : extractLinear(frame.data, frame.w, frame.p3, x0, y0, w, h, expo, true);
   if (u.temp) {   // Temperatura luce (the GPU applies it as the input pass's wb gains)
     const g = lightGains(u.temp, frame.p3 ? 'rec2020' : 'srgb');
     for (let i = 0; i < rgb.length; i += 3) { rgb[i] *= g[0]; rgb[i + 1] *= g[1]; rgb[i + 2] *= g[2]; }
   }
-  if (DODGE) dodgeCPU(rgb, w, h, x0, y0, frame.w, frame.h, expo, v3Gain(u, frame.p3 ? 'p3' : 'srgb'), DISPLAY_GAIN_LUT.length, LUMA[frame.p3 ? 'rec2020' : 'srgb'], map);
+  const ip = inputPass(u, frame.p3 ? 'p3' : 'srgb'), at0 = DISPLAY_GAIN_LUT.length;
+  if (ip.dodge) dodgeCPU(rgb, w, h, x0, y0, o.w, o.h, expo, ip.arr, at0, LUMA[frame.p3 ? 'rec2020' : 'srgb'], map, frame.w, frame.h);
+  if (ip.ht) {   // Hyper Tone: the map's gain on the scene light (hypertone.js hyperGainCPU, as the GPU pass)
+    for (let y = 0, j = 0; y < h; y++) {
+      for (let x = 0; x < w; x++, j += 3) { const g = hyperGainCPU(ip.arr, at0, x0 + x, y0 + y, o.w, o.h); rgb[j] *= g; rgb[j + 1] *= g; rgb[j + 2] *= g; }
+    }
+  }
   const out = engine.process(rgb, w, h), d32 = new Uint32Array(target.buffer, target.byteOffset, w * h);
   const px = new Float32Array(3), to = packTo(), inv = invUniform(u);
   for (let p = 0, j = 0; p < w * h; p++, j += 3) {
@@ -271,6 +284,13 @@ function v3Gain(u, space) {
     log(`v3 dodge base ${w}x${h} median ${photo.dodge.M.toFixed(2)} p99 ${photo.dodge.P.toFixed(2)}`);
   }
   return dodgeArray(DISPLAY_GAIN_LUT, photo.dodge, { ...dodgeParams(photo.dodge, u.contrast, u.ev - (photo.autoEv ?? u.ev)), dodge: u.v3dodge }, u.hlc, u.shadows, Math.min(u.highlight, 0), Math.min(u.whites, 0));
+}
+/** The input pass of this render: its WGSL and storage array (DISPLAY_GAIN_LUT, then a local exposure's header and map).
+ * v3: the dodging, Ombre, Alte luci / Bianchi (dodge.js); v4: Hyper Tone (Frontier, hypertone.js); else the plain pass. */
+function inputPass(u, space) {
+  if (DODGE) return { wgsl: INPUT_WGSL_V3, arr: v3Gain(u, space), dodge: true };
+  if (htOn(u)) { syncHyperMap(u); return { wgsl: INPUT_WGSL_HT, arr: hyperArray(DISPLAY_GAIN_LUT, photo.hyper, hyperLevel(u.htHi), hyperLevel(u.htLo)), ht: true }; }
+  return { wgsl: INPUT_WGSL, arr: DISPLAY_GAIN_LUT };
 }
 const q8 = (v) => Math.round(255 * Math.min(1, Math.max(0, v)));
 
@@ -298,11 +318,11 @@ function autoSetup(on, evIn = null) {
 }
 
 // Hyper Tone (Scanner, Frontier): a recovery for the extremes (user), with the machine's separate Highlight and Shadow levels,
-// 5 steps each (SP-3000: Lower, Low, Normal, High, Higher; 0 here = off). Each level moves an area's density by level / 5 x
-// HYPER_MAX of its map EV beyond the mids' dead zone (lib/hypertone.js DEAD_EV), engine params.rs HyperToneParams. Fujifilm
-// publishes no gains: HYPER_MAX 0.5 (the top level) is a choice; with the dead zone the mids are untouched (the first version
-// flattened whole photos, user), so at the top a shadow 3 EV under mid grey is lifted 1 EV and a sky 3 EV over brought down 1.
-const HYPER_MAX = 0.5, HYPER_LEVELS = 5;
+// 5 steps each (SP-3000: Lower, Low, Normal, High, Higher; 0 here = off). Each level moves an area's light by level / 5 x
+// HYPER_MAX of its map EV beyond the mids' dead zone (lib/hypertone.js DEAD_EV), in the input pass before the film (v4.9; it was
+// a density lift in the scanner: milky, mottled shadows, hypertone.js). Fujifilm publishes no gains: HYPER_MAX (the top level) is
+// a choice; with the dead zone the mids are untouched (the first version flattened whole photos, user).
+const HYPER_MAX = 0.8, HYPER_LEVELS = 5;
 const hyperLevel = (v) => (v / HYPER_LEVELS) * HYPER_MAX;
 const HYPER_NAMES = ['off', 'molto basso', 'basso', 'normale', 'alto', 'molto alto'];
 const HYPER_THUMB_PX = 512;   // the map's source thumb: its resolution is the map's (lib/hypertone.js MAP_LONG)
@@ -340,22 +360,20 @@ function hyperSharp(u, region) {
   return { unsharp_mask: [HS_UM * kpx, u.hypersharp * HS_MAX], unsharp_threshold: [HS_T0 * gate, HS_T1 * gate] };
 }
 
-/** The photo's Hyper Tone map in the engine (built once per photo, turn and scanner density, from its thumb at HYPER_THUMB_PX,
- * lib/hypertone.js), when Hyper Tone acts. */
+const htOn = (u) => V4 && scanner === 'frontier' && (u.htHi > 0 || u.htLo > 0);
+/** photo.hyper: the Hyper Tone map (built once per photo, transform and scanner density, from its thumb at HYPER_THUMB_PX,
+ * lib/hypertone.js). */
 function syncHyperMap(u) {
-  if (!((u.htHi > 0 || u.htLo > 0) && scanner === 'frontier')) return;
   // The thumb as the scanner renders it, as on the machine (Hypertone dodges the scanned image): Auto's exposure + baseline (v4 has
   // no exposure slider), the AutoSetup's density key (EV) and the operator's (Densità). Without the key a dark backlit frame that AutoSetup lifts by 2 EV
   // left its sky outside the map's dead zone: Hyper Tone luci 5 did nothing while the sky lost its blue (sunset, measured).
   const gain = 2 ** (scanEv() + baselineEv() + (photo.auto?.[0] ?? 0) - u.labD * LAB_D_EV);   // the operator's density key too
-  if (photo.hyper?.gain !== gain) {
-    const { preview } = photo, { rgb, w, h } = thumbOf(preview, HYPER_THUMB_PX);
-    photo.hyper = { ...hyperToneMap(rgb, w, h, LUMA[preview.raw || preview.p3 ? 'rec2020' : 'srgb'], gain), gain };   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
+  // the map spans the output frame as rendered (turned and cropped like it: the input pass samples it in output-frame px)
+  const key = `${gain}|${u.tilt}|${JSON.stringify(viewCrop())}`;
+  if (photo.hyper?.key !== key) {
+    const { preview } = photo, t = thumbOf(preview, HYPER_THUMB_PX), { data: rgb, w, h } = frameImage(t.rgb, t.w, t.h, 3, u.tilt, viewCrop());
+    photo.hyper = { ...hyperToneMap(rgb, w, h, LUMA[preview.raw || preview.p3 ? 'rec2020' : 'srgb'], gain), key };   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
     log(`hyper tone map ${photo.hyper.w}x${photo.hyper.h}`);
-  }
-  if (engine.hyperFor !== photo.hyper) {
-    engine.set_hyper_tone_map(photo.hyper.map, photo.hyper.w, photo.hyper.h);
-    engine.hyperFor = photo.hyper;
   }
 }
 
@@ -380,17 +398,18 @@ async function render() {
       dirty = false;
       const u = ui();
       if (V4 && !loadingPhoto) prepareScanner();   // the scanner re-reads the negative when Esposizione / Interno moved (cached)
-      const pv = photo.preview, t0 = performance.now(), n = ++renderCount;
+      const pv = photo.preview, { w, h } = outFrame(pv.w, pv.h), t0 = performance.now(), n = ++renderCount;
       // Breadcrumb: if iOS kills the tab mid-render, the next load says so.
-      setBusy(`anteprima #${n} ${pv.w}x${pv.h} ${JSON.stringify(u)}`);
-      syncEngine(u, { region: { x0: 0, y0: 0, fw: pv.w, fh: pv.h, W: pv.w, H: pv.h } });
+      setBusy(`anteprima #${n} ${w}x${h} ${JSON.stringify(u)}`);
+      syncEngine(u, { region: { x0: 0, y0: 0, fw: w, fh: h, W: w, H: h } });
       const cs = outSpace() === 'p3' ? 'display-p3' : 'srgb';
-      if (photo.after?.width !== pv.w || photo.after?.height !== pv.h || photo.after.colorSpace !== cs) photo.after = new ImageData(pv.w, pv.h, { colorSpace: cs });
-      await renderRegion(pv, 0, 0, pv.w, pv.h, new Uint8Array(photo.after.data.buffer), u);
+      if (photo.after?.width !== w || photo.after?.height !== h || photo.after.colorSpace !== cs) photo.after = new ImageData(w, h, { colorSpace: cs });
+      await renderRegion(pv, 0, 0, w, h, new Uint8Array(photo.after.data.buffer), u);
       const t1 = performance.now();
+      if (view.width !== w || view.height !== h) sizeView();   // the crop changed the output frame
       if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); }
       const t2 = performance.now(), ms = (v) => Math.round(v);
-      status(`${pv.w}×${pv.h} · ${ms(t2 - t0)} ms (render ${ms(t1 - t0)} · display ${ms(t2 - t1)})${gpu ? '' : ' CPU'}`);
+      status(`${w}×${h} · ${ms(t2 - t0)} ms (render ${ms(t1 - t0)} · display ${ms(t2 - t1)})${gpu ? '' : ' CPU'}`);
       log(`render #${n} ${ms(t1 - t0)}+${ms(t2 - t1)} ms`);
     } while (dirty && !exporting);
     renderErrors = 0;
@@ -409,15 +428,15 @@ async function render() {
 // RGB + luminance of what is on screen, from the 8-bit display pixels (every
 // other pixel in both directions is plenty). Square-root scale against the
 // tallest bin that is not a clipped end: a dark or sky-heavy frame keeps a
-// readable shape instead of one spike and a flat line.
+// readable shape instead of one spike and a flat line. While the crop is drawn (Trasforma), only the crop box's pixels.
 const histo = $('histo'), hctx = histo.getContext('2d');
 const HBINS = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
 function drawHistogram(img) {
   const bins = HBINS;
   for (const b of bins) b.fill(0);
-  const { data, width, height } = img;
-  for (let y = 0; y < height; y += 2) {
-    for (let i = y * width * 4, end = i + width * 4; i < end; i += 8) {
+  const { data, width } = img, r = cropEditing ? cropPx(img.width, img.height, crop) : { ox: 0, oy: 0, w: img.width, h: img.height };
+  for (let y = r.oy; y < r.oy + r.h; y += 2) {
+    for (let i = (y * width + r.ox) * 4, end = i + r.w * 4; i < end; i += 8) {
       const r = data[i], g = data[i + 1], b = data[i + 2];
       bins[0][r]++; bins[1][g]++; bins[2][b]++;
       bins[3][(r * 54 + g * 183 + b * 19) >> 8]++;
@@ -450,13 +469,13 @@ function drawHistogram(img) {
 const dustLayer = $('dustLayer'), dctx = dustLayer.getContext('2d');
 const dustAmount = () => +$('dust').value;
 function dustMarks() {
-  const { w, h } = photo.preview, key = `${photo.dustSeed}|${w}x${h}`;
+  const { w, h } = outFrame(photo.preview.w, photo.preview.h), key = `${photo.dustSeed}|${w}x${h}`;
   if (photo.dustKey !== key) { photo.dust = dustField(photo.dustSeed, Math.max(w, h) / Math.min(w, h)); photo.dustKey = key; }
   return photo.dust;
 }
 function drawDustLayer() {
   if (!photo) return;
-  const { w, h } = photo.preview;
+  const { w, h } = outFrame(photo.preview.w, photo.preview.h);
   if (dustLayer.width !== w || dustLayer.height !== h) {
     dustLayer.width = w; dustLayer.height = h;
     dustLayer.style.width = w + 'px'; dustLayer.style.height = h + 'px';
@@ -484,12 +503,14 @@ function dustIntoStrip(strip, w, h, y0, rows, a, marks) {
 let dustStripCanvas = null;
 
 let showingBefore = false;
-/** The 'before' view (A/B, a fresh preview): the source as decoded, turned and cropped like the render when Raddrizza is set. */
+/** The 'before' view (A/B, a fresh preview): the source as decoded, turned and cropped like the render (Raddrizza, Ritaglia). */
 function beforeImage() {
-  const pv = photo.preview, deg = +$('tilt').value;
-  if (!deg) return pv.before;
-  if (photo.beforeTilt?.pv !== pv || photo.beforeTilt.deg !== deg) {
-    photo.beforeTilt = { pv, deg, img: new ImageData(tiltRGBA(pv.before.data, pv.w, pv.h, deg), pv.w, pv.h, pv.p3 ? { colorSpace: 'display-p3' } : undefined) };
+  const pv = photo.preview, deg = +$('tilt').value, c = viewCrop();
+  if (!deg && isFull(c)) return pv.before;
+  const key = `${deg}|${JSON.stringify(c)}`;
+  if (photo.beforeTilt?.pv !== pv || photo.beforeTilt.key !== key) {
+    const t = frameImage(pv.before.data, pv.w, pv.h, 4, deg, c);
+    photo.beforeTilt = { pv, key, img: new ImageData(t.data, t.w, t.h, pv.p3 ? { colorSpace: 'display-p3' } : undefined) };
   }
   return photo.beforeTilt.img;
 }
@@ -515,7 +536,7 @@ let zoom = 1, panX = 0, panY = 0, fitted = true;
 
 function applyTransform() {
   view.style.transform = dustLayer.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
-  if (tiltGrid && !tiltGrid.hidden) placeGrid();
+  placeCrop();
   // 100% = one image pixel per device pixel.
   $('zoomLabel').textContent = photo ? `${Math.round(zoom * devicePixelRatio * 100)}%` : '';
 }
@@ -639,6 +660,7 @@ if (V4) {
     tabBtns.forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === t)));
     panes.forEach((p) => { p.hidden = p.dataset.pane !== t; });
     controls.scrollTop = 0;
+    setCropEditing(t === 'transform');   // Ritaglia: the whole frame with the crop box while Trasforma is open
   };
   const savedTab = store.get('fcf_tab');
   if (tabBtns.some((b) => b.dataset.tab === savedTab)) showTab(savedTab);
@@ -683,7 +705,7 @@ async function loadPhoto(file) {
       const preview = { data: view, w: raw.w, h: raw.h, p3: true, raw };
       preview.before = new ImageData(preview.data, preview.w, preview.h, { colorSpace: 'display-p3' });
       log(`raw ${raw.fullW}x${raw.fullH}, preview ${raw.w}x${raw.h}, orientation ${raw.orientation}, baseline ${raw.baseline} EV, ${Math.round(performance.now() - t)} ms (${raw.decodedIn})`);
-      $('indoor').checked = false; rotPending = 0; resetTilt();
+      $('indoor').checked = false; rotPending = 0; resetTransform();
       photo = { file, size: null, preview, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file), rot: 0 };
       uploadRaw(sf, raw);
     } else {
@@ -698,7 +720,7 @@ async function loadPhoto(file) {
         preview.before = new ImageData(preview.data, preview.w, preview.h, preview.p3 ? { colorSpace: 'display-p3' } : undefined);
       } finally { bitmap.close(); }
       log(`decoded ${size.w}x${size.h}, preview ${preview.w}x${preview.h}, p3=${preview.p3}`);
-      $('indoor').checked = false; rotPending = 0; resetTilt();
+      $('indoor').checked = false; rotPending = 0; resetTransform();
       photo = { file, size, preview, auto: NO_AUTO, dustSeed: newDustSeed(), grainSeed: fileSeed(file), rot: 0 };
       if (gpu) {
         uploadFrame(preview.data, preview.w, preview.h);
@@ -727,16 +749,20 @@ function photoUsable() {
 }
 
 /** Canvas, dust layer, 'before' image and fit for the current photo.preview (new photo or a turn). */
-function showPreview() {
-  const { preview } = photo;
-  view.width = preview.w; view.height = preview.h;
-  view.style.width = preview.w + 'px'; view.style.height = preview.h + 'px';
-  view.style.display = 'block'; $('empty').style.display = 'none'; $('tools').hidden = false;
+/** The canvas at the output frame's size (the preview cropped as rendered now), fitted to the screen. */
+function sizeView() {
+  const { w, h } = outFrame(photo.preview.w, photo.preview.h);
+  view.width = w; view.height = h;
+  view.style.width = w + 'px'; view.style.height = h + 'px';
   drawDustLayer();
+  fitToScreen();
+}
+function showPreview() {
+  view.style.display = 'block'; $('empty').style.display = 'none'; $('tools').hidden = false;
+  sizeView();
   const before = beforeImage();
   ctx.putImageData(before, 0, 0);
   drawHistogram(before);
-  fitToScreen();
 }
 
 // ---------- transform: quarter turns ----------
@@ -766,6 +792,7 @@ async function rotate(quarters) {
         uploadRaw(sf, preview.raw);
       } else if (gpu) uploadFrame(preview.data, preview.w, preview.h);
       Object.assign(photo, { rot, preview, dodge: null, hyper: null });   // dodging base, Hyper Tone map: rebuilt from the turned thumb
+      for (let i = 0; i < Math.abs(q); i++) crop = turnCrop(crop, Math.sign(q));   // the same part of the photo stays cropped
       log(`rotate ${rot * 90}°, preview ${preview.w}x${preview.h}`);
       showPreview();
     }
@@ -791,24 +818,76 @@ $('rotR').addEventListener('click', () => rotate(1));
 // ---------- transform: Raddrizza (tilt) ----------
 // Tape-measure dial (lib/ruler.js) over the hidden #tilt range input: the angle goes into the input pass (lib/tilt.js) of the
 // preview and the export. It is relative to the displayed frame, so it stays across the quarter turns (rotations about the same
-// centre commute); a new photo and Azzera impostazioni set it to 0. While it is dragged, a thirds grid lies over the photo.
-function placeGrid() {
-  const s = stage.getBoundingClientRect(), v = view.getBoundingClientRect();
-  Object.assign(tiltGrid.style, { left: `${v.left - s.left}px`, top: `${v.top - s.top}px`, width: `${v.width}px`, height: `${v.height}px` });
-}
-let gridOn = false;
-const tiltDial = tiltRuler($('tiltRuler'), $('tilt'), $('tiltOut'), {
-  onDrag: (on) => {
-    gridOn = on && !!photo;
-    if (gridOn) { tiltGrid.hidden = false; placeGrid(); requestAnimationFrame(() => tiltGrid.classList.toggle('on', gridOn)); }
-    else tiltGrid.classList.remove('on');
-  },
-});
-tiltGrid.addEventListener('transitionend', () => { if (!gridOn) tiltGrid.hidden = true; });
+// centre commute); a new photo and Azzera impostazioni set it to 0. While it is dragged, the crop box shows a ninths grid.
+const tiltDial = tiltRuler($('tiltRuler'), $('tilt'), $('tiltOut'), { onDrag: (on) => $('cropBox').classList.toggle('fine', on) });
 $('tilt').addEventListener('input', () => { if (photo) render(); });
 $('tiltLabel').addEventListener('dblclick', () => tiltDial.set(0));
-/** Back to 0 without a render (new photo: its own first render follows). */
-function resetTilt() { $('tilt').value = 0; tiltDial.sync(); }
+/** Back to no tilt and the whole frame without a render (new photo: its own first render follows). */
+function resetTransform() { $('tilt').value = 0; tiltDial.sync(); crop = FULL; placeCrop(); }
+
+// ---------- transform: Ritaglia (crop) ----------
+// While the Trasforma tab is open (cropEditing) the whole turned frame renders and #cropUI lies on the canvas: the crop box
+// (thirds grid), the cut-away part darkened, not removed (user). A corner resizes it (the opposite corner stays put), the box
+// drags; the lock keeps its proportions. Moving it only moves the box (no render); leaving the tab renders the crop as the
+// output frame (lib/tilt.js). Azzera impostazioni and a new photo: the whole frame; a quarter turn turns it with the photo.
+const CROP_MIN_PX = 48;   // the smallest box side on screen (CSS px): the corner marks still fit inside (a choice)
+let cropLocked = false;
+const clamp01 = (v, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
+function placeCrop() {
+  const ui = $('cropUI'), on = cropEditing && !!photo;
+  ui.hidden = !on;
+  if (!on) return;
+  const s = stage.getBoundingClientRect(), v = view.getBoundingClientRect();
+  Object.assign(ui.style, { left: `${v.left - s.left}px`, top: `${v.top - s.top}px`, width: `${v.width}px`, height: `${v.height}px` });
+  Object.assign($('cropBox').style, { left: `${crop.x * 100}%`, top: `${crop.y * 100}%`, width: `${crop.w * 100}%`, height: `${crop.h * 100}%` });
+}
+/** Trasforma tab shown (`on`) or left: the whole frame with the box over it, or the crop rendered as the frame. */
+function setCropEditing(on) {
+  if (on === cropEditing) return;
+  cropEditing = on;
+  placeCrop();
+  if (photo) render();   // the output frame changes size: render resizes the canvas (sizeView)
+}
+/** `c` resized from corner `h` ('nw' | 'ne' | 'sw' | 'se') by (dx, dy) (fractions of the frame), the opposite corner fixed. In
+ * frame-height units (x × A, A = the frame's aspect) so that a locked box keeps its shape on screen. `min`: the smallest side. */
+function resizedCrop(c, h, dx, dy, A, min, locked) {
+  const west = h[1] === 'w', north = h[0] === 'n';
+  const ax = (west ? c.x + c.w : c.x) * A, ay = north ? c.y + c.h : c.y;          // the fixed corner
+  const roomW = west ? ax : A - ax, roomH = north ? ay : 1 - ay;                  // up to the frame's edge
+  let w = Math.min(roomW, Math.max(min, (west ? -1 : 1) * dx * A + c.w * A));
+  let hh = Math.min(roomH, Math.max(min, (north ? -1 : 1) * dy + c.h));
+  if (locked) {
+    const r = (c.w * A) / c.h;
+    if (w / hh > r) hh = w / r; else w = hh * r;                                  // follow the larger pull
+    const k = Math.min(1, roomW / w, roomH / hh);                                 // then back inside the frame
+    w *= k; hh *= k;
+  }
+  return { x: (west ? ax - w : ax) / A, y: north ? ay - hh : ay, w: w / A, h: hh };
+}
+$('cropBox').addEventListener('pointerdown', (e) => {
+  if (!photo) return;
+  e.preventDefault(); e.stopPropagation();
+  const box = e.currentTarget, h = e.target.dataset.h, v = view.getBoundingClientRect(), start = { ...crop }, x0 = e.clientX, y0 = e.clientY;
+  box.setPointerCapture(e.pointerId);
+  const move = (m) => {
+    const dx = (m.clientX - x0) / v.width, dy = (m.clientY - y0) / v.height;
+    crop = h ? resizedCrop(start, h, dx, dy, v.width / v.height, CROP_MIN_PX / v.height, cropLocked)
+      : { ...start, x: clamp01(start.x + dx, 0, 1 - start.w), y: clamp01(start.y + dy, 0, 1 - start.h) };
+    placeCrop();
+    if (photo.after && !showingBefore) drawHistogram(photo.after);   // the histogram follows the box
+  };
+  const end = () => { box.removeEventListener('pointermove', move); box.removeEventListener('pointerup', end); box.removeEventListener('pointercancel', end); };
+  box.addEventListener('pointermove', move); box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
+});
+$('cropLock').addEventListener('click', () => {
+  cropLocked = !cropLocked;
+  $('cropLock').setAttribute('aria-pressed', String(cropLocked));
+  $('cropLock').textContent = cropLocked ? '🔒 Proporzioni bloccate' : '🔓 Proporzioni libere';
+});
+$('cropReset').addEventListener('click', () => {
+  crop = FULL; placeCrop();
+  if (photo?.after && !showingBefore) drawHistogram(photo.after);
+});
 
 async function runAuto() {
   // render() returns early while another render / export is in flight: wait first (the engine is shared).
@@ -949,11 +1028,12 @@ async function exportFull(ig = false) {
     const rawPv = photo.preview.raw, size = photo.size;
     const rot = photo.rot || 0, turned = rot & 1;
     const fw = rawPv ? rawPv.fullW : turned ? size.h : size.w, fh = rawPv ? rawPv.fullH : turned ? size.w : size.h;
+    const c = viewCrop(), cw = fw * c.w, chh = fh * c.h;   // the output frame (Ritaglia) at full resolution
     const bFrac = $('border').checked ? BORDER_FRACTION : 0;
     // IG: the posted image (iw × ih) fits inside the canvas with a bFrac mat; the film renders at IG_SUPER × that.
-    const igFit = ig ? fitInside(fw, fh, IG_W, IG_H, Math.round(bFrac * IG_H)) : null;
-    const scale = ig ? Math.min(1, IG_SUPER * Math.max(igFit.iw, igFit.ih) / Math.max(fw, fh))
-      : Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (fw * fh)));
+    const igFit = ig ? fitInside(cw, chh, IG_W, IG_H, Math.round(bFrac * IG_H)) : null;
+    const scale = ig ? Math.min(1, IG_SUPER * Math.max(igFit.iw, igFit.ih) / Math.max(cw, chh))
+      : Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (cw * chh)));
     if (ig) forceSRGB = true;
     const longCap = Math.round(Math.max(fw, fh) * scale);
     encoderError = null;   // from here, any error of this export's worker fails it (also one during the decode below)
@@ -982,7 +1062,7 @@ async function exportFull(ig = false) {
         }
       } finally { bitmap.close(); }
     }
-    const { w, h, p3 } = frame;
+    const { w, h } = outFrame(frame.w, frame.h), { p3 } = frame;   // the output frame: the crop of the decoded source
     const progressive = w * h > PROGRESSIVE_PIXEL_LIMIT ? 0 : 2;
     // v3.36: the mat keeps the photo's aspect (a 3:4 photo exports at exactly 3:4): bFrac of the long side on the long edges,
     // scaled by long / short across the short ones (portrait 2736x3648: 36 px left / right, 48 px top / bottom -> 2808x3744).
@@ -1299,7 +1379,7 @@ $('resetAll').addEventListener('click', () => {
   }
   syncOutputs();
   if (V3) for (const id of ['hlc', 'shadows']) $(id).dispatchEvent(new Event('input'));
-  resetTilt();
+  resetTransform();
   if (photo) { drawDustLayer(); render(); }
 });
 $('export').addEventListener('click', () => exportFull());
