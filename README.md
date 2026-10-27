@@ -14,6 +14,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.8**: **offline più robusto**: con una rete che non risponde (una tacca, Wi-Fi senza internet) la pagina non resta
+  più appesa: dopo 3 s si apre quella salvata (la rete, se risponde dopo, aggiorna la copia). L'app chiede al browser di
+  non cancellare la copia offline (`storage.persist`). Su iPhone: usarla dalla schermata Home.
 - **v4.7**: **export ritrovabili**: ogni foto esportata porta la parola `finallycoolfilm` (e "Kodak Gold 200", lo scanner)
   nella descrizione EXIF, nel campo Software e nei metadati XMP (descrizione + parole chiave), anche se l'originale non
   aveva EXIF. Quale campo usi la ricerca di Foto su iPhone non è documentato: scritti tutti e tre. I tag dell'originale

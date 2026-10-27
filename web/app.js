@@ -1371,8 +1371,12 @@ function offerUpdate() {
   v.classList.add('update'); v.textContent += ' · aggiorna ↻'; v.addEventListener('click', reloadNow);
 }
 attachTips();   // after every row exists (the v3 rows above included)
-// Offline (sw.js): only the deployed app registers it (a local / headless run keeps the plain network).
-if ('serviceWorker' in navigator && !BUILD_ID.startsWith('__')) navigator.serviceWorker.register('sw.js').catch((e) => log('sw: ' + (e?.message || e)));
+// Offline (sw.js): only the deployed app registers it (a local / headless run keeps the plain network). persist() asks the
+// browser not to evict the cached app under storage pressure (granted or not is the browser's call; logged).
+if ('serviceWorker' in navigator && !BUILD_ID.startsWith('__')) {
+  navigator.serviceWorker.register('sw.js').catch((e) => log('sw: ' + (e?.message || e)));
+  navigator.storage?.persist?.().then((ok) => log(`storage persist: ${ok}`), () => {});
+}
 checkUpdate();
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
 addEventListener('pageshow', (e) => { if (e.persisted) checkUpdate(); });
