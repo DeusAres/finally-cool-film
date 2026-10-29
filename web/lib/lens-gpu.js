@@ -15,8 +15,12 @@ import { tiltCoef, cropPx, FULL } from './tilt.js';
 const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
 
 // Slider mapping (Texture, Chiarezza) and the stages they drive, in µm on the 36 mm frame.
-// Colour-noise reduction (always on): ring radii (frame px), luminance range k (per stop²).
-const CHROMA_R1 = 1.5, CHROMA_R2 = 3.0, CHROMA_K = 8.0;
+// Colour-noise reduction (always on): ring radii (frame px), luminance range k (per stop²). Where Hyper Tone gives an area more
+// light the sensor's colour noise is lifted with it, into blotches wider than the rings (blue / magenta on dark clothes, user
+// v4.10 screenshot): per EV of lift the rings widen by CHROMA_LIFT_UM (inner; outer x2), on the film (µm), so preview and export
+// agree, and the luminance range k falls by (1 + lift)^2 (the lifted luminance noise no longer shuts the neighbours out).
+// 120 µm (~7 px per EV at the preview) is a choice, by eye on the pub frame IDG_20261026_204630_265 at Ombre 5.
+const CHROMA_R1 = 1.5, CHROMA_R2 = 3.0, CHROMA_K = 8.0, CHROMA_LIFT_UM = 120;
 // Texture = micro-contrast: scale (µm), range k (per stop²), midtone width (stops), strength at ±1.
 const MICRO_UM = 60, MICRO_K = 0.4, MICRO_MID_STOPS = 2.5, MICRO_MAX = 0.8;
 // Chiarezza (v3.26, bipolar, replaces the old Orton glow): local midtone contrast (Lightroom-like Clarity) at CLAR_UM, edge-aware
@@ -143,6 +147,7 @@ fn src(pos: vec2<f32>) -> vec2<f32> {          // Raddrizza + Ritaglia: output f
   let c = (p.xf.zw - 1.0) * 0.5; let d = q - c;
   return c + vec2<f32>(p.tilt.x * d.x + p.tilt.y * d.y, p.tilt.x * d.y - p.tilt.y * d.x);
 }
+fn chromaLift(pos: vec2<f32>) -> f32 { return 0.0; }   // EV of light added here (INPUT_WGSL_HT: Hyper Tone's), for the colour-noise rings
 fn at(pos: vec2<f32>) -> vec4<f32> {           // pos in (output) frame pixel coords (pixel centres at integers)
   return textureSampleLevel(tex, smp, (src(pos) + 0.5) / p.xf.zw, 0.0);
 }
@@ -192,14 +197,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   // luminance-edge-aware, and keep this pixel's own luminance: detail and grain are untouched.
   {
     let y0 = max(dot(c, p.luma.xyz), 1e-5);
-    var acc = c / y0; var wt = 1.0;
+    var acc = c / y0; var wt = 1.0; let lift = chromaLift(pos);
+    let reach = lift * ${wf(CHROMA_LIFT_UM)} * p.fx.w; let ck = ${wf(CHROMA_K)} / ((1.0 + lift) * (1.0 + lift));
     for (var t = 0; t < 16; t++) {
       let ring = t / 8;
       let ang = f32(t) * 0.7853982 + f32(ring) * 0.3926991;
-      let q = at(pos + vec2<f32>(cos(ang), sin(ang)) * select(${wf(CHROMA_R1)}, ${wf(CHROMA_R2)}, ring == 1)).rgb;
+      let q = at(pos + vec2<f32>(cos(ang), sin(ang)) * select(${wf(CHROMA_R1)} + reach, ${wf(CHROMA_R2)} + 2.0 * reach, ring == 1)).rgb;
       let yq = max(dot(q, p.luma.xyz), 1e-5);
       let dl = log2(yq / y0);
-      let w = exp(-dl * dl * ${wf(CHROMA_K)}) * select(1.0, 0.6, ring == 1);
+      let w = exp(-dl * dl * ck) * select(1.0, 0.6, ring == 1);
       acc += w * q / yq; wt += w;
     }
     c = y0 * acc / wt;
@@ -289,7 +295,8 @@ const patch = (src, from, to) => { if (!src.includes(from)) throw new Error(`INP
 export const INPUT_WGSL_V3 = patch(patch(INPUT_WGSL, 'fn at(pos', `${dodgeWGSL('inv', DISPLAY_GAIN_LUT.length)}\nfn at(pos`),
   '\n  c *= p.expo;\n', '\n  c = dodge(c, pos);\n  c *= p.expo;\n');
 // v4 Hyper Tone (Frontier): the same pass with its map's gain on the scene light (hypertone.js hyperWGSL), riding after the LUT.
-export const INPUT_WGSL_HT = patch(patch(INPUT_WGSL, 'fn at(pos', `${hyperWGSL('inv', DISPLAY_GAIN_LUT.length)}\nfn at(pos`),
+export const INPUT_WGSL_HT = patch(patch(INPUT_WGSL, 'fn chromaLift(pos: vec2<f32>) -> f32 { return 0.0; }',
+  `${hyperWGSL('inv', DISPLAY_GAIN_LUT.length)}\nfn chromaLift(pos: vec2<f32>) -> f32 { return max(0.0, log2(hyperGain(pos).g)); }`),
   '\n  c *= p.expo;\n', '\n  c *= hyperGain(pos);\n  c *= p.expo;\n');
 
 const IDENTITY = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
