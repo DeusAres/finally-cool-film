@@ -16,6 +16,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 - **v4.11**: Hyper Tone ombre senza **puntini blu**: dove dà più luce alle zone scure il filtro anti-rumore colore si allarga
   in proporzione (il rumore del sensore, alzato con l'ombra, faceva macchie blu / magenta sui vestiti scuri).
+  Niente più evidenziazione / selezione del testo, lente o menu iOS tenendo premuto sull'interfaccia (il log resta copiabile).
 - **v4.10**: Hyper Tone ombre di nuovo **freddo / ciano** come sul Frontier, ma uniforme per zona: il rosso riceve il 18 %
   in meno del recupero (quanto lo strato rosso della Gold registra in meno nel piede), niente più macchie di pixel.
   **Bordo bianco** e tela IG ora bianco puro 255 (prima era il bianco carta dello scanner, grigio-azzurro sul Frontier).

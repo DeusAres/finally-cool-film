@@ -77,7 +77,6 @@ export function attachTips(root = document) {
   for (const el of root.querySelectorAll('label[for], label[id], button[id]')) {
     const id = el.htmlFor || (el.id === 'tiltLabel' ? 'tilt' : el.id), text = TIPS[id];
     if (!text) continue;
-    el.classList.add('has-tip');
     el.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse') { clearTimeout(timer); timer = setTimeout(() => show(el, text), HOVER_MS); } });
     el.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') hide(); });
     let suppress = 0;   // until then, a click on the label is the release of a tooltip press: not a tap on the control
