@@ -1326,7 +1326,9 @@ const V4_NEUTRAL_SIGMA = 0.06;
 // light greys) and takes the red out (a* -4); ours at v3's 0.26 kept +29 / +35 / +26 and a* +9 under a simulated 3200 K;
 // 0.6 / 0.85 leave +24 / +24 / +12 and +19 / +18 / +6: 0.68 matches the mean. The light's temperature is not known (3200 K
 // assumed): warmer light would mean an even stronger correction, so this is a lower bound.
-const V4_AUTO = { strength: 1.0, k_col: 0.68, highlight_weight: 0.6, target_offset: -0.04, highlight_max_channel: true };
+// 4.14: with V4_TOE_SLOPE the setup densities moved and the 20 real frames came out +2.2 L* bright (rms 3.15 -> 3.46);
+// target_offset -0.04 -> -0.10 (-0.07: rms 2.89, mean +1.2): rms 2.61, mean +0.2 (recon_model.py EVS -1..+2).
+const V4_AUTO = { strength: 1.0, k_col: 0.68, highlight_weight: 0.6, target_offset: -0.10, highlight_max_channel: true };
 // v4 Frontier tone and colour, fitted to a real Frontier (eval/frontier_cp, eval/V4.md): the Color Precision film comparison tool's
 // Gold 200 chart frames (ColorChecker SG + Kodak grey scale, -1..+2 EV; the same negatives also on a Noritsu), our v4 Frontier
 // rendering the same patches on CPU with the operator's density / C M Y keys as free nuisances. Tone: grey L* rms 2.6 -> 1.2;
