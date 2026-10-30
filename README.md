@@ -15,7 +15,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 ## App (v4.0)
 
 - **v4.12**: **formati di ritaglio** in Trasforma, in una striscia a scorrimento con i lati sfumati come il righello:
-  Libero, Originale, 1:1, 4:5, 3:4, 2:3, 9:16 (orizzontali o verticali, ⟲ li gira); il lucchetto è solo un simbolo.
+  Libero, Originale, 1:1, 4:5, 3:4, 2:3, 9:16, ognuno disegnato con la sua forma (orizzontali o verticali, il tasto "gira" li
+  ruota). La riga Ritaglia come Raddrizza: nome, formato scelto al centro, tre icone (gira, lucchetto, foto intera; doppio tocco
+  sul nome = foto intera).
 - **v4.11**: Hyper Tone ombre senza **puntini blu**: dove dà più luce alle zone scure il filtro anti-rumore colore si allarga
   in proporzione (il rumore del sensore, alzato con l'ombra, faceva macchie blu / magenta sui vestiti scuri).
   Niente più evidenziazione / selezione del testo, lente o menu iOS tenendo premuto sull'interfaccia (il log resta copiabile).

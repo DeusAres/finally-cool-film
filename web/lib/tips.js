@@ -39,7 +39,7 @@ const TIPS = {
   quality: 'La qualità del JPEG quando esporti. Più alta = file più grande.',
   border: 'Aggiunge una cornice bianca alla foto esportata.',
   tilt: 'Raddrizza la foto fino a 45°, ritagliando i bordi.',
-  cropLabel: 'Trascina gli angoli del riquadro per ritagliare, o il riquadro per spostarlo. Fuori da Trasforma la foto diventa il ritaglio: vignettatura, grana, polvere ed export seguono quello.',
+  cropLabel: 'Trascina gli angoli del riquadro per ritagliare, o il riquadro per spostarlo; scegli un formato qui sotto. Fuori da Trasforma la foto diventa il ritaglio. Doppio tocco: foto intera.',
   cropLock: 'Lucchetto chiuso: il riquadro tiene le sue proporzioni mentre lo ridimensioni.',
   cropTurn: 'Gira il formato del riquadro: da verticale a orizzontale e viceversa.',
   cropReset: 'Torna alla foto intera.',

@@ -840,7 +840,7 @@ const CROP_FORMATS = ['free', 'orig', [1, 1], [4, 5], [3, 4], [2, 3], [9, 16]];
 const formatName = (f) => (f === 'free' ? 'Libero' : f === 'orig' ? 'Originale' : cropPortrait ? `${f[0]}:${f[1]}` : `${f[1]}:${f[0]}`);
 let cropFormat = 'free', cropPortrait = false;   // 'free' | 'orig' | 'lock' (the box's ratio) | [short, long]; its orientation
 const cropLocked = () => cropFormat !== 'free';
-const frameAspect = () => photo.preview.w / photo.preview.h;   // the turned frame's W / H (Raddrizza keeps it)
+const frameAspect = () => (photo ? photo.preview.w / photo.preview.h : 1);   // the turned frame's W / H (Raddrizza keeps it); no photo: shapes only
 const clamp01 = (v, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
 function placeCrop() {
   const ui = $('cropUI'), on = cropEditing && !!photo;
@@ -907,18 +907,22 @@ function setCropFormat(f) {
   cropFormat = f;
   if (photo) cropPortrait = crop.h > crop.w * frameAspect();
   if (photo && f !== 'free' && f !== 'lock') fitCrop(formatRatio(f));
-  for (const b of document.querySelectorAll('[data-crop-format]')) {
-    const g = CROP_FORMATS[+b.dataset.cropFormat];
-    b.setAttribute('aria-checked', String(g === f));
-    b.textContent = formatName(g);
-  }
+  for (const b of document.querySelectorAll('[data-crop-format]')) drawFormat(b, CROP_FORMATS[+b.dataset.cropFormat], f);
   $('cropLock').setAttribute('aria-pressed', String(cropLocked()));
-  $('cropLock').textContent = cropLocked() ? '🔒' : '🔓';
+  $('cropOut').textContent = f === 'lock' ? 'Bloccato' : formatName(f);
+  $('cropTurn').disabled = Array.isArray(f) && f[0] === f[1];   // a square has nothing to turn
   placeCrop();
   if (photo?.after && !showingBefore) drawHistogram(photo.after);
 }
+/** A format's button: its shape (CROP_SHAPE_PX on the long side, in the current orientation; Libero a dashed square) and name. */
+const CROP_SHAPE_PX = 30;
+function drawFormat(b, g, chosen) {
+  const r = g === 'free' ? 1 : formatRatio(g) ?? 1, s = CROP_SHAPE_PX;
+  b.setAttribute('aria-checked', String(g === chosen));
+  b.innerHTML = `<i style="width:${Math.round(r >= 1 ? s : s * r)}px;height:${Math.round(r >= 1 ? s / r : s)}px"></i>${formatName(g)}`;
+}
 CROP_FORMATS.forEach((f, i) => {
-  const b = Object.assign(document.createElement('button'), { type: 'button', className: 'chip', textContent: formatName(f) });
+  const b = Object.assign(document.createElement('button'), { type: 'button' });
   b.setAttribute('role', 'radio'); b.dataset.cropFormat = i;
   b.addEventListener('click', () => { setCropFormat(f); b.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' }); });
   $('cropFormats').append(b);
@@ -929,7 +933,9 @@ $('cropTurn').addEventListener('click', () => {   // the box's proportions turne
   fitCrop(crop.h / (crop.w * frameAspect()));
   setCropFormat(cropFormat);
 });
-$('cropReset').addEventListener('click', () => { crop = FULL; setCropFormat('free'); });
+const cropWhole = () => { crop = FULL; setCropFormat('free'); };
+$('cropReset').addEventListener('click', cropWhole);
+$('cropLabel').addEventListener('dblclick', cropWhole);   // as Raddrizza's label: back to the start
 setCropFormat('free');
 
 async function runAuto() {
