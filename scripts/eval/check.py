@@ -8,7 +8,7 @@ render and compare with eval/check/baseline.json. Run it before every push that 
     python3 scripts/eval/check.py --compare DIR   # also pixel-compare with the PNGs of an earlier run (refactors: expect 0);
                                                   # DIR = a copy of eval/out/check made before the change (it is overwritten)
     python3 scripts/eval/check.py --chart         # also the ColorChecker score (builds sf-eval, see build-sf-eval.sh)
-    python3 scripts/eval/check.py --cases cat2_interno,wall_burn
+    python3 scripts/eval/check.py --cases v4_cat,wall_burn
 
 Metrics per render (PNG of the app canvas, read as Display P3 as render.cjs writes it; exports: sRGB JPEG):
   bands    mean Lab a*/b* per L* band 3-20 / 20-40 / 40-60 / 60-80 / 80-101 (colour casts by tone: magenta fur, teal shadows)
