@@ -290,7 +290,7 @@ function v3Gain(u, space) {
  * v3: the dodging, Ombre, Alte luci / Bianchi (dodge.js); v4: Hyper Tone (Frontier, hypertone.js); else the plain pass. */
 function inputPass(u, space) {
   if (DODGE) return { wgsl: INPUT_WGSL_V3, arr: v3Gain(u, space), dodge: true };
-  if (htOn(u)) { syncHyperMap(u); return { wgsl: INPUT_WGSL_HT, arr: hyperArray(DISPLAY_GAIN_LUT, photo.hyper, hyperLevel(u.htHi), hyperLevel(u.htLo)), ht: true }; }
+  if (htOn(u)) return { wgsl: INPUT_WGSL_HT, arr: hyperPassArray(u), ht: true };
   return { wgsl: INPUT_WGSL, arr: DISPLAY_GAIN_LUT };
 }
 const q8 = (v) => Math.round(255 * Math.min(1, Math.max(0, v)));
@@ -363,20 +363,33 @@ function hyperSharp(u, region) {
 }
 
 const htOn = (u) => V4 && scanner === 'frontier' && (u.htHi > 0 || u.htLo > 0);
-/** photo.hyper: the Hyper Tone map (built once per photo, transform and scanner density, from its thumb at HYPER_THUMB_PX,
- * lib/hypertone.js). */
+/** photo.hyper: the Hyper Tone map of the output frame (lib/hypertone.js): built from the thumb at HYPER_THUMB_PX once per photo
+ * and scanner density (photo.hyperBase, the guided filter: the costly part), then turned and cropped like the render, a cheap
+ * resample of the smooth map, so a Raddrizza drag or a crop does not rebuild it. */
 function syncHyperMap(u) {
   // The thumb as the scanner renders it, as on the machine (Hypertone dodges the scanned image): Auto's exposure + baseline (v4 has
   // no exposure slider), the AutoSetup's density key (EV) and the operator's (Densità). Without the key a dark backlit frame that AutoSetup lifts by 2 EV
   // left its sky outside the map's dead zone: Hyper Tone luci 5 did nothing while the sky lost its blue (sunset, measured).
   const gain = 2 ** (scanEv() + baselineEv() + (photo.auto?.[0] ?? 0) + u.labD * LAB_D_EV);   // the operator's density key too
-  // the map spans the output frame as rendered (turned and cropped like it: the input pass samples it in output-frame px)
-  const key = `${gain}|${u.tilt}|${JSON.stringify(viewCrop())}`;
-  if (photo.hyper?.key !== key) {
-    const { preview } = photo, t = thumbOf(preview, HYPER_THUMB_PX), { data: rgb, w, h } = frameImage(t.rgb, t.w, t.h, 3, u.tilt, viewCrop());
-    photo.hyper = { ...hyperToneMap(rgb, w, h, LUMA[preview.raw || preview.p3 ? 'rec2020' : 'srgb'], gain), key };   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
-    log(`hyper tone map ${photo.hyper.w}x${photo.hyper.h}`);
+  if (photo.hyperBase?.gain !== gain) {
+    const { preview } = photo, { rgb, w, h } = thumbOf(preview, HYPER_THUMB_PX);
+    photo.hyperBase = { ...hyperToneMap(rgb, w, h, LUMA[preview.raw || preview.p3 ? 'rec2020' : 'srgb'], gain), gain };   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
+    log(`hyper tone map ${photo.hyperBase.w}x${photo.hyperBase.h}`);
   }
+  // the map spans the output frame as rendered (turned and cropped like it: the input pass samples it in output-frame px)
+  const b = photo.hyperBase, key = `${u.tilt}|${JSON.stringify(viewCrop())}`;
+  if (photo.hyper?.base !== b || photo.hyper.key !== key) {
+    const { data: map, w, h } = frameImage(b.map, b.w, b.h, 1, u.tilt, viewCrop());
+    photo.hyper = { map, w, h, base: b, key };
+  }
+}
+/** The Hyper Tone pass's storage array (hypertone.js hyperArray), kept while the map and the levels stay (a slider elsewhere
+ * re-renders without rebuilding the ~1 MB array). */
+function hyperPassArray(u) {
+  syncHyperMap(u);
+  const kHi = hyperLevel(u.htHi), kLo = hyperLevel(u.htLo), c = photo.hyperArr;
+  if (c?.hyper !== photo.hyper || c.kHi !== kHi || c.kLo !== kLo) photo.hyperArr = { hyper: photo.hyper, kHi, kLo, arr: hyperArray(DISPLAY_GAIN_LUT, photo.hyper, kHi, kLo) };
+  return photo.hyperArr.arr;
 }
 
 /** v4: the inversion anchors of this frame (lib/invert.js), from the engine's negative scan of the metered thumb (no grain,
@@ -793,7 +806,7 @@ async function rotate(quarters) {
         preview.raw = withRotation(pv.raw, rot);
         uploadRaw(sf, preview.raw);
       } else if (gpu) uploadFrame(preview.data, preview.w, preview.h);
-      Object.assign(photo, { rot, preview, dodge: null, hyper: null });   // dodging base, Hyper Tone map: rebuilt from the turned thumb
+      Object.assign(photo, { rot, preview, dodge: null, hyper: null, hyperBase: null });   // dodging base, Hyper Tone map: rebuilt from the turned thumb
       for (let i = 0; i < Math.abs(q); i++) crop = turnCrop(crop, Math.sign(q));   // the same part of the photo stays cropped
       log(`rotate ${rot * 90}°, preview ${preview.w}x${preview.h}`);
       showPreview();
@@ -858,6 +871,12 @@ function setCropEditing(on) {
   placeCrop();
   if (photo) render();   // the output frame changes size: render resizes the canvas (sizeView)
 }
+/** The histogram of the crop box, once per frame however many pointer moves arrive (iPhone: up to 120 a second; a pass reads
+ * ~0.75 M pixels of the preview). */
+let histoFrame = 0;
+function histoSoon() {
+  if (!histoFrame) histoFrame = requestAnimationFrame(() => { histoFrame = 0; if (photo?.after && !showingBefore) drawHistogram(photo.after); });
+}
 /** `c` resized from corner `h` ('nw' | 'ne' | 'sw' | 'se') by (dx, dy) (fractions of the frame), the opposite corner fixed. In
  * frame-height units (x × A, A = the frame's aspect) so that a locked box keeps its shape on screen. `min`: the smallest side. */
 function resizedCrop(c, h, dx, dy, A, min, locked) {
@@ -884,7 +903,7 @@ $('cropBox').addEventListener('pointerdown', (e) => {
     crop = h ? resizedCrop(start, h, dx, dy, v.width / v.height, CROP_MIN_PX / v.height, cropLocked())
       : { ...start, x: clamp01(start.x + dx, 0, 1 - start.w), y: clamp01(start.y + dy, 0, 1 - start.h) };
     placeCrop();
-    if (photo.after && !showingBefore) drawHistogram(photo.after);   // the histogram follows the box
+    histoSoon();   // the histogram follows the box
   };
   const end = () => { box.removeEventListener('pointermove', move); box.removeEventListener('pointerup', end); box.removeEventListener('pointercancel', end); };
   box.addEventListener('pointermove', move); box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
@@ -913,7 +932,7 @@ function setCropFormat(f) {
   $('cropOut').textContent = f === 'lock' ? 'Bloccato' : formatName(f);
   $('cropTurn').disabled = Array.isArray(f) && f[0] === f[1];   // a square has nothing to turn
   placeCrop();
-  if (photo?.after && !showingBefore) drawHistogram(photo.after);
+  histoSoon();
 }
 /** A format's button: its shape (CROP_SHAPE_PX on the long side, in the current orientation; Libero a dashed square) and name. */
 const CROP_SHAPE_PX = 30;
