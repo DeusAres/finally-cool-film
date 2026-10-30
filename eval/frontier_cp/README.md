@@ -206,4 +206,7 @@ The same frames on the tool's Noritsu, with the same method; the Frontier's scan
   [1.0, 0.75]: Frontier -3 / -1 / 0 / +1 / +2 / +3 EV 8.55 / 3.80 / 3.82 / 3.70 / 3.70 / 4.52 -> 7.21 / 3.63 / 3.96 / 3.56 / 3.43 /
   4.18; Noritsu -3 / 0 / +2 8.48 / 4.31 / 4.49 -> 7.31 / 4.42 / 4.58. Still open: at -3 EV chroma ~1.2x real and whites ~8 L*
   low; whites 1-2.4 L* low at every exposure, 4-6 at +3 / +4; skin hue +3..+10 deg (both scanners).
+  Level with that toe (recon_model.py EVS -1..+2, the 20 real frames): Frontier rms 3.15 -> 3.46 L*, mean +2.2 (brighter);
+  V4_AUTO target_offset -0.04 -> -0.10 (-0.07: 2.89): rms 2.61, mean +0.2. Noritsu unchanged by it: rms 4.6, mean +0.7
+  (highlight_margin -0.14: 6.1, worse).
 
