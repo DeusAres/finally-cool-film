@@ -14,6 +14,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.14**: Frontier, **gialli-arancio caldi** (foglie d'autunno, ambra) non più marroni: la rotazione verso il rosso che serve
+  alla pelle non tocca più i colori vividi. Sul chart Frontier vero: ambra ΔE00 4.7 → 2.9 (tinta −7° → 0°), errore medio
+  3.8-4.2 → 3.7-3.8, pelle invariata o meglio.
 - **v4.13**: **Densità** (Frontier / Noritsu) al contrario: + schiarisce la stampa, − la scurisce (come Luminosità di Nessuno).
   Prestazioni: con Hyper Tone attivo Raddrizza e ritaglio non ricalcolano più la mappa (~80 ms per scatto su desktop → ~6 ms:
   la mappa si fa una volta e poi si gira / ritaglia); l'istogramma durante il ritaglio si aggiorna una volta per fotogramma.

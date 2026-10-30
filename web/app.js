@@ -1347,6 +1347,10 @@ const V4_AUTO = { strength: 1.0, k_col: 0.68, highlight_weight: 0.6, target_offs
 // 4.02 / 4.15 -> 3.79 / 4.17 / 3.89 / 3.85 (-1 / 0 / +1 / +2 EV), separation 18-28 deg, skin hue +8..+14 -> +2..+11 deg.
 // The band moves the setup densities: AutoSetup's target_offset -0.07 -> -0.04 (V4_AUTO); the 20 real frames 2.6 -> 3.2 L* rms
 // (overexposed frames now a little darker, Charts +1 / +2 EV -6), the price of the colour.
+// 4.14, ambers: warm_hue_shift turned vivid amber / golden orange 7 deg too red and 9 % too dull (chart, the autumn-leaf patches
+// L6 G7 I7 I8 E3; user: sunlit leaves came out brown): the engine now fades it out for vivid colours (frontier.rs WARM_VIVID),
+// skin keeps it. dE00 -1 / 0 / +1 / +2 EV 3.79 / 4.17 / 3.89 / 3.85 -> 3.80 / 3.82 / 3.70 / 3.70; ambers 4.73 -> 2.91 (hue
+// -7.4 -> -0.3 deg), skin hue +10.2 -> +8.9 deg (0 EV).
 const V4_FRONTIER = { gradation_a: 9.6, black_point: 0.023, white_point: 0.97, shoulder_start: 0.95, shoulder_sharpness: 0,
   saturation: 0.92, saturation_blue: 0.05, blue_hue_shift: 18, green_hue_shift: 20, sensor_peak_nm: [650, 555, 450], warm_hue_shift: 6,
   hue_lightness: [0.87, 0.97, 0.53, 0.83, 0.92, 0.91], hue_saturation: [0.87, 1.09, 0.99, 1.09, 0.85, 0.78], hue_shift: [2.3, 4.5, 6.6, 1.6, -2.9, 15.1] };

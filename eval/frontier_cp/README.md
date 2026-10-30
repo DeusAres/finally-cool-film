@@ -191,3 +191,9 @@ The same frames on the tool's Noritsu, with the same method; the Frontier's scan
     59.5). On the Frontier the same scheme makes outdoors brighter (61-66 vs real 53), so the Frontier keeps v3's level.
   - Tungsten: the Noritsu leaves b* -3 / +7 / +5 over daylight. k_col 1.15 and clamp_colour 0.3 match (1.0 / 1.3 leave
     +11 / +9 / +7 and +3 / -5 / -5).
+- **Ambers (4.14).** Per patch at 0 EV the orange-yellow band (Lab hue 55-82, the colour of autumn leaves: L6 G7 I7 I8 E3 D7)
+  was 7.4 deg too red and 0.91 of the real chroma (dE00 4.73), pure yellows fine (user: sunlit leaves brown, IDG_20261029_161142_237).
+  The cause is `warm_hue_shift` 6: its band weight grows with chroma, so it rotated vivid ambers fully and skin only partly.
+  Without it ambers are right (-0.1 deg) but skin goes +16.9 deg yellow. Engine `WARM_VIVID` fades the rotation out over relative
+  chroma 0.8-1.1 (skin 0.4-0.65, vivid ambers 1.1-1.6 on the real frames): chromatic dE00 -1 / 0 / +1 / +2 EV 3.79 / 4.17 / 3.89 /
+  3.85 -> 3.80 / 3.82 / 3.70 / 3.70, ambers 2.79-3.01 (hue -0.3..+2.7 deg), skin hue +10.2 -> +8.9 deg at 0 EV.
