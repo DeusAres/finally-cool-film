@@ -197,3 +197,13 @@ The same frames on the tool's Noritsu, with the same method; the Frontier's scan
   Without it ambers are right (-0.1 deg) but skin goes +16.9 deg yellow. Engine `WARM_VIVID` fades the rotation out over relative
   chroma 0.8-1.1 (skin 0.4-0.65, vivid ambers 1.1-1.6 on the real frames): chromatic dE00 -1 / 0 / +1 / +2 EV 3.79 / 4.17 / 3.89 /
   3.85 -> 3.80 / 3.82 / 3.70 / 3.70, ambers 2.79-3.01 (hue -0.3..+2.7 deg), skin hue +10.2 -> +8.9 deg at 0 EV.
+- **Extremes (4.14): -3 / +3 / +4 EV.** The tool's PDFs (Charts set) carry -3 / +3 / +4 EV frames of both scanners (Frontier
+  3112 px wide, Noritsu 2768: resized to 3128 x 2082 before measure_real.py, else the SG boxes land off the patches). Chromatic
+  dE00 Frontier -3 / +3 / +4: 8.55 / 4.52 / 5.20, Noritsu 8.48 / 4.40 / 4.33. At -3 EV the real scans have milky blue-grey blacks
+  (L* 19, b* -13), whites at 97 and chroma 0.75 of ours; ours had warm blacks (b* +5) and whites at 89. The v3 toe setting
+  (setup_toe_slope R 0.9 / B 1.0, there to take the cast out of deep shadows) removed that cool cast: B 1.3 / 1.6 made the blacks
+  yellower (dE00 9.7 / 10.9), B 0.5 matched them (b* -12.8, dE00 7.15) but cost 0.3-0.4 at normal exposures. app.js V4_TOE_SLOPE
+  [1.0, 0.75]: Frontier -3 / -1 / 0 / +1 / +2 / +3 EV 8.55 / 3.80 / 3.82 / 3.70 / 3.70 / 4.52 -> 7.21 / 3.63 / 3.96 / 3.56 / 3.43 /
+  4.18; Noritsu -3 / 0 / +2 8.48 / 4.31 / 4.49 -> 7.31 / 4.42 / 4.58. Still open: at -3 EV chroma ~1.2x real and whites ~8 L*
+  low; whites 1-2.4 L* low at every exposure, 4-6 at +3 / +4; skin hue +3..+10 deg (both scanners).
+

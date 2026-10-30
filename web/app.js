@@ -178,7 +178,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
         // the magenta key goes greener with Contrasto (-0.03 per unit): Contrasto amplifies the scene's red-magenta in the light mids (white
         // fur turned pink). warm_hue_shift / saturation_warm off for every photo (v3.19's sunset tuning turned yellow-orange fur pink).
         model: { saturation: 1.01, saturation_blue: 0.15, blue_hue_shift: 17, green_hue_shift: 24, saturation_warm: 0, warm_hue_shift: 0, cool_neutral_warm: interno() ? 0 : 1.0, highlight_neutral: 0.6, balance_cmy: interno() ? [0, -0.03 - 0.03 * Math.max(u.contrast, 0), 0.0] : [0, 0.005, 0.02], sensor_peak_nm: [650, 540, 450], sensor_fwhm_nm: [40, 50, 40],
-                 black_point: 0.012, gradation_a: 6.2, setup_toe_slope: interno() ? [1.4, 0.92] : [0.9, 1.0], setup_neutral_ev: interno() ? 2.0 : 1.5, auto: { k_col: 0.3, ...(V4 ? { neutral_sigma: V4_NEUTRAL_SIGMA, ...(scanner === 'noritsu' ? V4_NORITSU_AUTO : V4_AUTO) } : {}) },
+                 black_point: 0.012, gradation_a: 6.2, setup_toe_slope: interno() ? [1.4, 0.92] : V4 ? V4_TOE_SLOPE : [0.9, 1.0], setup_neutral_ev: interno() ? 2.0 : 1.5, auto: { k_col: 0.3, ...(V4 ? { neutral_sigma: V4_NEUTRAL_SIGMA, ...(scanner === 'noritsu' ? V4_NORITSU_AUTO : V4_AUTO) } : {}) },
                  ...(V4 ? labModel(u, scanner === 'noritsu' ? V4_NORITSU : V4_FRONTIER) : {}) },
       },
     },
@@ -1351,6 +1351,12 @@ const V4_AUTO = { strength: 1.0, k_col: 0.68, highlight_weight: 0.6, target_offs
 // L6 G7 I7 I8 E3; user: sunlit leaves came out brown): the engine now fades it out for vivid colours (frontier.rs WARM_VIVID),
 // skin keeps it. dE00 -1 / 0 / +1 / +2 EV 3.79 / 4.17 / 3.89 / 3.85 -> 3.80 / 3.82 / 3.70 / 3.70; ambers 4.73 -> 2.91 (hue
 // -7.4 -> -0.3 deg), skin hue +10.2 -> +8.9 deg (0 EV).
+// v4 (both scanners): the toe beyond the neutralised range keeps more of Gold's own cool cast (blue slope 1.0 -> 0.75, red
+// 0.9 -> 1.0). Real Frontier / Noritsu chart scans at -3 EV (Color Precision PDFs, eval/frontier_cp) have milky blue-grey blacks
+// (b* -13); ours were warm (+5) and the frame 8.5 dE00 off. Chromatic dE00 Frontier -3 / -1 / 0 / +1 / +2 / +3 EV 8.55 / 3.80 /
+// 3.82 / 3.70 / 3.70 / 4.52 -> 7.21 / 3.63 / 3.96 / 3.56 / 3.43 / 4.18; Noritsu -3 / 0 / +2 8.48 / 4.31 / 4.49 -> 7.31 / 4.42 / 4.58.
+// Blue 0.5-0.6 matched the -3 EV blacks exactly but cost 0.3-0.4 at 0 EV: 0.75 is the compromise (a choice on those numbers).
+const V4_TOE_SLOPE = [1.0, 0.75];
 const V4_FRONTIER = { gradation_a: 9.6, black_point: 0.023, white_point: 0.97, shoulder_start: 0.95, shoulder_sharpness: 0,
   saturation: 0.92, saturation_blue: 0.05, blue_hue_shift: 18, green_hue_shift: 20, sensor_peak_nm: [650, 555, 450], warm_hue_shift: 6,
   hue_lightness: [0.87, 0.97, 0.53, 0.83, 0.92, 0.91], hue_saturation: [0.87, 1.09, 0.99, 1.09, 0.85, 0.78], hue_shift: [2.3, 4.5, 6.6, 1.6, -2.9, 15.1] };
