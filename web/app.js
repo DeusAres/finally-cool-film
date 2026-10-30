@@ -824,15 +824,23 @@ const tiltDial = tiltRuler($('tiltRuler'), $('tilt'), $('tiltOut'), { onDrag: (o
 $('tilt').addEventListener('input', () => { if (photo) render(); });
 $('tiltLabel').addEventListener('dblclick', () => tiltDial.set(0));
 /** Back to no tilt and the whole frame without a render (new photo: its own first render follows). */
-function resetTransform() { $('tilt').value = 0; tiltDial.sync(); crop = FULL; placeCrop(); }
+function resetTransform() { $('tilt').value = 0; tiltDial.sync(); crop = FULL; setCropFormat('free'); }
 
 // ---------- transform: Ritaglia (crop) ----------
 // While the Trasforma tab is open (cropEditing) the whole turned frame renders and #cropUI lies on the canvas: the crop box
 // (thirds grid), the cut-away part darkened, not removed (user). A corner resizes it (the opposite corner stays put), the box
-// drags; the lock keeps its proportions. Moving it only moves the box (no render); leaving the tab renders the crop as the
-// output frame (lib/tilt.js). Azzera impostazioni and a new photo: the whole frame; a quarter turn turns it with the photo.
+// drags. A format (Libero, Originale, the usual print / screen ratios, user) or the lock (the box's own ratio) keeps its
+// proportions; ⟲ turns the format (portrait <-> landscape). Moving it only moves the box (no render); leaving the tab renders
+// the crop as the output frame (lib/tilt.js). Azzera impostazioni and a new photo: the whole frame, Libero; a quarter turn turns
+// the box with the photo.
 const CROP_MIN_PX = 48;   // the smallest box side on screen (CSS px): the corner marks still fit inside (a choice)
-let cropLocked = false;
+// Libero, Originale (the frame's ratio), then [short, long] sides, shown short:long in portrait and long:short in landscape
+// (the usual prints and screens: a choice)
+const CROP_FORMATS = ['free', 'orig', [1, 1], [4, 5], [3, 4], [2, 3], [9, 16]];
+const formatName = (f) => (f === 'free' ? 'Libero' : f === 'orig' ? 'Originale' : cropPortrait ? `${f[0]}:${f[1]}` : `${f[1]}:${f[0]}`);
+let cropFormat = 'free', cropPortrait = false;   // 'free' | 'orig' | 'lock' (the box's ratio) | [short, long]; its orientation
+const cropLocked = () => cropFormat !== 'free';
+const frameAspect = () => photo.preview.w / photo.preview.h;   // the turned frame's W / H (Raddrizza keeps it)
 const clamp01 = (v, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
 function placeCrop() {
   const ui = $('cropUI'), on = cropEditing && !!photo;
@@ -872,7 +880,7 @@ $('cropBox').addEventListener('pointerdown', (e) => {
   box.setPointerCapture(e.pointerId);
   const move = (m) => {
     const dx = (m.clientX - x0) / v.width, dy = (m.clientY - y0) / v.height;
-    crop = h ? resizedCrop(start, h, dx, dy, v.width / v.height, CROP_MIN_PX / v.height, cropLocked)
+    crop = h ? resizedCrop(start, h, dx, dy, v.width / v.height, CROP_MIN_PX / v.height, cropLocked())
       : { ...start, x: clamp01(start.x + dx, 0, 1 - start.w), y: clamp01(start.y + dy, 0, 1 - start.h) };
     placeCrop();
     if (photo.after && !showingBefore) drawHistogram(photo.after);   // the histogram follows the box
@@ -880,15 +888,49 @@ $('cropBox').addEventListener('pointerdown', (e) => {
   const end = () => { box.removeEventListener('pointermove', move); box.removeEventListener('pointerup', end); box.removeEventListener('pointercancel', end); };
   box.addEventListener('pointermove', move); box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
 });
-$('cropLock').addEventListener('click', () => {
-  cropLocked = !cropLocked;
-  $('cropLock').setAttribute('aria-pressed', String(cropLocked));
-  $('cropLock').textContent = cropLocked ? '🔒 Proporzioni bloccate' : '🔓 Proporzioni libere';
-});
-$('cropReset').addEventListener('click', () => {
-  crop = FULL; placeCrop();
+/** The box re-fitted to the ratio `r` (W / H in px): as large as the frame allows, centred where the box was. */
+function fitCrop(r) {
+  const A = frameAspect(), cx = (crop.x + crop.w / 2) * A, cy = crop.y + crop.h / 2;   // frame-height units, as resizedCrop
+  const h = Math.min(1, A / r), w = h * r;
+  crop = { x: clamp01(cx - w / 2, 0, A - w) / A, y: clamp01(cy - h / 2, 0, 1 - h), w: w / A, h };
+}
+/** W / H of the format `f` in the current orientation (null: free). */
+function formatRatio(f) {
+  if (f === 'free') return null;
+  if (f === 'lock') return (crop.w * frameAspect()) / crop.h;
+  const r = f === 'orig' ? Math.min(frameAspect(), 1 / frameAspect()) : f[0] / f[1];   // short / long
+  return cropPortrait ? r : 1 / r;
+}
+/** Choose a format (`f` as in CROP_FORMATS, or 'lock'): the box takes its ratio (in the box's own orientation), the chips and
+ * the lock show it. */
+function setCropFormat(f) {
+  cropFormat = f;
+  if (photo) cropPortrait = crop.h > crop.w * frameAspect();
+  if (photo && f !== 'free' && f !== 'lock') fitCrop(formatRatio(f));
+  for (const b of document.querySelectorAll('[data-crop-format]')) {
+    const g = CROP_FORMATS[+b.dataset.cropFormat];
+    b.setAttribute('aria-checked', String(g === f));
+    b.textContent = formatName(g);
+  }
+  $('cropLock').setAttribute('aria-pressed', String(cropLocked()));
+  $('cropLock').textContent = cropLocked() ? '🔒' : '🔓';
+  placeCrop();
   if (photo?.after && !showingBefore) drawHistogram(photo.after);
+}
+CROP_FORMATS.forEach((f, i) => {
+  const b = Object.assign(document.createElement('button'), { type: 'button', className: 'chip', textContent: formatName(f) });
+  b.setAttribute('role', 'radio'); b.dataset.cropFormat = i;
+  b.addEventListener('click', () => { setCropFormat(f); b.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' }); });
+  $('cropFormats').append(b);
 });
+$('cropLock').addEventListener('click', () => setCropFormat(cropLocked() ? 'free' : 'lock'));
+$('cropTurn').addEventListener('click', () => {   // the box's proportions turned (portrait <-> landscape) about its centre
+  if (!photo) return;
+  fitCrop(crop.h / (crop.w * frameAspect()));
+  setCropFormat(cropFormat);
+});
+$('cropReset').addEventListener('click', () => { crop = FULL; setCropFormat('free'); });
+setCropFormat('free');
 
 async function runAuto() {
   // render() returns early while another render / export is in flight: wait first (the engine is shared).
