@@ -8,7 +8,7 @@ import sim
 from sgref import REF
 name, model = sys.argv[1], json.loads(sys.argv[2]); ev = float(sys.argv[3]) if len(sys.argv) > 3 else 0.0
 SCAN = os.environ.get('SCAN', 'Frontier')
-FR = {-1: 'minus1EV', 0: '0EV', 1: 'plus1EV', 2: 'plus2EV'}
+FR = {-3: 'minus3EV', -1: 'minus1EV', 0: '0EV', 1: 'plus1EV', 2: 'plus2EV', 3: 'plus3EV', 4: 'plus4EV'}   # -3 / +3 / +4: from the tool's PDFs
 real = json.load(open('real.json')); names = real['names']; rl = np.array(real['frames'][f'Gold-{FR[int(ev)]}-{SCAN}']['sg_lab'])
 ref = np.array([REF[n] for n in names]); neu = np.hypot(ref[:, 1], ref[:, 2]) < 3; mid = neu & (ref[:, 0] > 25) & (ref[:, 0] < 85)
 def render(keys):
