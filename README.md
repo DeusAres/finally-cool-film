@@ -14,6 +14,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.13**: **Densità** (Frontier / Noritsu) al contrario: + schiarisce la stampa, − la scurisce (come Luminosità di Nessuno).
 - **v4.12**: **formati di ritaglio** in Trasforma, in una striscia a scorrimento con i lati sfumati come il righello:
   Libero, Originale, 1:1, 4:5, 3:4, 2:3, 9:16, ognuno disegnato con la sua forma (orizzontali o verticali, il tasto "gira" li
   ruota). La riga Ritaglia come Raddrizza: nome, formato scelto al centro, tre icone (gira, lucchetto, foto intera; doppio tocco

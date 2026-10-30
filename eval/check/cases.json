@@ -91,7 +91,7 @@
    "photo": "samples/indigo/IDG_20261022_182651_466",
    "query": "?v4",
    "ui": {
-    "labD": 4,
+    "labD": -4,
     "_click": [
      "scanFrontier"
     ]

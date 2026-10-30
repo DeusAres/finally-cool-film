@@ -8,7 +8,7 @@ const TIPS = {
   scanFrontier: 'Come una scansione fatta da un laboratorio con un Frontier: più contrasto, colori un po’ più sobri.',
   scanNoritsu: 'Come una scansione Noritsu: bianchi più aperti, ombre più calde, colori più pieni.',
   nbBright: 'Schiarisce o scurisce i toni di mezzo. I bianchi e i neri restano dove sono.',
-  labD: 'Come chiedere al laboratorio una stampa più chiara (−) o più scura (+).',
+  labD: 'Come chiedere al laboratorio una stampa più chiara (+) o più scura (−).',
   labGrad: 'Il contrasto della stampa: Soft più morbido, Hard più deciso.',
   labHi: 'Le luci: Hard le apre di più, Soft le tiene più basse.',
   labLo: 'Le ombre: Soft le schiarisce, Hard le rende più profonde.',

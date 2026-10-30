@@ -330,8 +330,9 @@ const HYPER_THUMB_PX = 512;   // the map's source thumb: its resolution is the m
 // The lab operator's keys (Scanner tab, Frontier and Noritsu; SP-3000 manual, "Condition Setup and Maintenance" PP3-B1271E2:
 // density key, Gradation Selection Hard2..Soft3, Tone Adjustment highlight / shadow hard / soft, Saturation -9..+9, Bright Mode
 // colour intensity -2..+4). The manual gives the levels, not what a step does: the step sizes below are choices.
-// Densità: + = denser print (darker), the lab's sign; 1/4 EV per step (FrontierParams.density, EV, + = brighter). Nessuno's
-// Luminosità (+ = brighter) moves the inversion's mid grey by the same step (invert.js; a choice: one step size in the tab).
+// Densità: + = brighter print (v4.13, user: the lab's own sign, + = denser / darker, read backwards), 1/4 EV per step
+// (FrontierParams.density, EV, + = brighter). Nessuno's Luminosità goes the same way and moves the inversion's mid grey by the
+// same step (invert.js; a choice: one step size in the tab).
 const LAB_D_EV = 0.25;
 // Gradazione: about 14 % of mid-tone slope per level (contrast key: slope x (1 + 1.9 c) up, x (1 + 0.85 c) down, frontier.rs).
 const GRAD_C = [-0.383, -0.271, -0.145, 0, 0.074, 0.157], GRAD_NAMES = ['Soft3', 'Soft2', 'Soft1', 'Normal', 'Hard1', 'Hard2'];
@@ -343,7 +344,7 @@ const TONE_HI = 0.5, TONE_LO = 0.15, TONE_NAMES = ['Soft', 'Standard', 'Hard'];
 // hue_saturation (red / yellow, where skin sits, untouched; greys have no hue).
 const LAB_SAT = 0.05, LAB_BRIGHT = 0.08;
 const labKeys = (u) => ({
-  density: -u.labD * LAB_D_EV, contrast: u.contrast + GRAD_C[u.labGrad + 3], highlight: u.highlight + u.labHi * TONE_HI,
+  density: u.labD * LAB_D_EV, contrast: u.contrast + GRAD_C[u.labGrad + 3], highlight: u.highlight + u.labHi * TONE_HI,
   black_lift: u.black - u.labLo * TONE_LO, saturation: 1 + u.labSat * LAB_SAT,
 });
 const labModel = (u, model) => (u.labBright === 0 ? model
@@ -368,7 +369,7 @@ function syncHyperMap(u) {
   // The thumb as the scanner renders it, as on the machine (Hypertone dodges the scanned image): Auto's exposure + baseline (v4 has
   // no exposure slider), the AutoSetup's density key (EV) and the operator's (Densità). Without the key a dark backlit frame that AutoSetup lifts by 2 EV
   // left its sky outside the map's dead zone: Hyper Tone luci 5 did nothing while the sky lost its blue (sunset, measured).
-  const gain = 2 ** (scanEv() + baselineEv() + (photo.auto?.[0] ?? 0) - u.labD * LAB_D_EV);   // the operator's density key too
+  const gain = 2 ** (scanEv() + baselineEv() + (photo.auto?.[0] ?? 0) + u.labD * LAB_D_EV);   // the operator's density key too
   // the map spans the output frame as rendered (turned and cropped like it: the input pass samples it in output-frame px)
   const key = `${gain}|${u.tilt}|${JSON.stringify(viewCrop())}`;
   if (photo.hyper?.key !== key) {
