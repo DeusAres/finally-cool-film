@@ -832,7 +832,7 @@ impl Stage {
         }
         let ww = if self.sat_warm != 0.0 || self.warm_shift != 0.0 { warm_weight(&lin, l) } else { 0.0 };
         if ww > 0.0 && self.warm_shift != 0.0 {
-            lin = rotate_hue(&lin, l, -self.warm_shift * ww);
+            lin = rotate_hue(&lin, l, -self.warm_shift * ww * (1.0 - smooth(WARM_VIVID[0], WARM_VIVID[1], rel_chroma(&lin, l))));
         }
         if self.cool_warm != 0.0 {
             lin = cool_neutral(&lin, l, self.cool_warm);
@@ -930,6 +930,17 @@ fn opp_chroma(lin: &[f64; 3]) -> f64 {
     let o1 = (lin[0] - lin[1]) * std::f64::consts::FRAC_1_SQRT_2;
     let o2 = (lin[0] + lin[1] - 2.0 * lin[2]) / 6f64.sqrt();
     (o1 * o1 + o2 * o2).sqrt()
+}
+
+/// Relative chroma (opponent chroma / linear luma) over which `warm_hue_shift` fades out: the rotation is for skin and dull warm
+/// tones (relative chroma ~0.4-0.65 on the real Frontier's chart frames), not for vivid amber / golden oranges (1.1-1.6: autumn
+/// leaves), which the real Frontier keeps where they are (chart, Gold 0 EV: amber patches 7 deg too red with the full rotation,
+/// -0.1 without; user's autumn DNG, IDG_20261029_161142_237: leaves brown instead of gold).
+const WARM_VIVID: [f64; 2] = [0.8, 1.1];
+fn rel_chroma(lin: &[f64; 3], l: f64) -> f64 {
+    let o1 = (lin[0] - lin[1]) * std::f64::consts::FRAC_1_SQRT_2;
+    let o2 = (lin[0] + lin[1] - 2.0 * lin[2]) / 6f64.sqrt();
+    (o1 * o1 + o2 * o2).sqrt() / l.max(1e-6)
 }
 
 /// Weight (0..1) of the yellow-orange band (golden / orange clouds of a low sun, amber): opponent hue 44-52 up / 80-100 down
