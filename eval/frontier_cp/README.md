@@ -209,4 +209,10 @@ The same frames on the tool's Noritsu, with the same method; the Frontier's scan
   Level with that toe (recon_model.py EVS -1..+2, the 20 real frames): Frontier rms 3.15 -> 3.46 L*, mean +2.2 (brighter);
   V4_AUTO target_offset -0.04 -> -0.10 (-0.07: 2.89): rms 2.61, mean +0.2. Noritsu unchanged by it: rms 4.6, mean +0.7
   (highlight_margin -0.14: 6.1, worse).
+- **Tried and left (4.14).** White point 0.97 -> 0.985 / 1.0: white patches at 0 EV -1.5 -> -0.2 / +0.7 L*, but chromatic dE00 worse at
+  every exposure (0 EV 3.96 -> 3.99 / 4.13, +3 4.18 -> 4.25 / 4.33) and the large white errors at -3 / +3 EV stay (-7.7 / -4.1 ->
+  -6.0 / -2.5 at best): not taken. warm_hue_shift 6 -> 9 / 12 (skin only now, WARM_VIVID): skin hue at 0 EV +8.9 -> +6.9 / -1.1 deg but
+  -1 / +2 EV overshoot (-0.5 / -4.2) and their dE00 rise (3.63 / 3.43 -> 3.90 / 3.75): the 0 EV skin error is that frame's, not a
+  constant offset; not taken. Chroma ours / real by exposure: -3 1.27, -1 0.99, 0 1.02, +2 1.00, +3 1.11: right in the normal range,
+  too saturated only far out (one frame each): open.
 
