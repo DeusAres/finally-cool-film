@@ -10,6 +10,8 @@
 // it follows the step, so the base does not bleed over a skyline (no halo).
 // No DOM: shared by app.js and node eval scripts.
 
+import { NOISE_FLOOR_SIGMAS } from './util.js';
+
 // Choices, not measurements (first version, to tune on photos): window radius as a fraction of the thumb's long side
 // (the size of what counts as an "area"), the edge threshold in EV, the map's long side (the pass samples it bilinearly,
 // so a step in the map is spread over frame / MAP_LONG pixels: at 96 that was a visible light rim on a 2000 px rock against
@@ -61,11 +63,13 @@ function shrink(src, w, h, tw, th) {
 /**
  * The Hyper Tone map of a scene-linear thumb (`rgb` w×h×3, upright as rendered) with luminance weights `luma`, exposed for the
  * film by `gain` (the exposure gain the render applies): { map: Float32Array (EV beyond DEAD_EV from mid grey, bright > 0), w, h }
- * at MAP_LONG on the long side.
+ * at MAP_LONG on the long side. `noise`: the thumb's luminance noise floor (dng.js noiseFloor at its pitch; 0: unknown), the
+ * log's offset (util.js NOISE_FLOOR_SIGMAS): in log2 of the bare luminance, a frame's darkest areas, all sensor noise, spread
+ * over many stops, the filter kept that as edges and the map lifted it as speckle (night frame IDG_20261028_222823_718).
  */
-export function hyperToneMap(rgb, w, h, luma, gain = 1) {
-  const n = w * h, L = new Float32Array(n);
-  for (let i = 0; i < n; i++) L[i] = Math.log2(Math.max(Y_MIN, luma[0] * rgb[3 * i] + luma[1] * rgb[3 * i + 1] + luma[2] * rgb[3 * i + 2]));
+export function hyperToneMap(rgb, w, h, luma, gain = 1, noise = 0) {
+  const n = w * h, L = new Float32Array(n), off = NOISE_FLOOR_SIGMAS * noise;
+  for (let i = 0; i < n; i++) L[i] = Math.log2(Math.max(Y_MIN, off + luma[0] * rgb[3 * i] + luma[1] * rgb[3 * i + 1] + luma[2] * rgb[3 * i + 2]));
   const r = Math.max(1, Math.round(RADIUS_FRAC * Math.max(w, h))), eps = EDGE_EV * EDGE_EV;
   const LL = L.map((v) => v * v), mL = box(L, w, h, r), mLL = box(LL, w, h, r);
   const a = new Float32Array(n), b = new Float32Array(n);

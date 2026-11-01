@@ -1,5 +1,5 @@
 // Raw decode off the main thread (module worker, one per decode, started by raw.js decodeInWorker; see there).
-// Protocol: in { buf: the file's bytes (transferred), opt: { maxLongSide, rot, thumbs, stream } }.
+// Protocol: in { buf: the file's bytes (transferred), opt: { maxLongSide, rot, thumbs, means, stream } }.
 //   out, preview (!stream): { r } (raw.js previewOf the decode, its pixel arrays transferred);
 //   out, export (stream): { head } (the same without pixels), then one { strip, y0 } (half floats, transferred) per 'more';
 //   or { error } at any point. A multi-second decode no longer freezes the page; main terminates the worker when it is done.
@@ -12,7 +12,7 @@ self.onmessage = async ({ data: { buf, opt } }) => {
   try {
     const r = await decodeRaw(buf, opt);
     if (!opt.stream) {
-      const p = previewOf(r, opt.thumbs), thumbs = p.thumbs.flatMap((t) => Object.values(t).map(({ rgb }) => rgb.buffer));
+      const p = previewOf(r, opt.thumbs, opt.means), thumbs = [...p.thumbs, ...p.means].flatMap((t) => Object.values(t).map(({ rgb }) => rgb.buffer));
       self.postMessage({ r: p }, [p.view.buffer, p.frame.buffer, ...thumbs]);
       return;
     }

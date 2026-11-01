@@ -8,7 +8,7 @@
 // Adobe ColorMatrix of the model (XYZ D65 -> camera, as dcraw / LibRaw adobe_coeff, /10000).
 // Not supported: 14-bit ORF of the OM-1 generation (another codec), lens corrections.
 
-import { parseTIFF, tiffMagic, cameraColour, developCFA, PAD } from './dng.js';
+import { parseTIFF, tiffMagic, cameraColour, developCFA, PAD, CFA_WHITE, cfaValue } from './dng.js';
 
 /** Adobe ColorMatrix (D65) per Olympus model, x10000, from LibRaw's colordata (Adobe DNG Converter values). */
 const ADOBE = {
@@ -223,17 +223,17 @@ export async function decodeORF(arrayBuffer, { maxLongSide } = {}) {
   const { out: raw, errors } = olympusDecompress(u8, offs[0], offs[0] + cnts[0], W, H);
   if (errors > W * H * 1e-4) throw new Error('ORF: dati compressi non validi');
 
-  // linearize into the padded CFA, as dng.js put(): (v - black) * wb[c] / wbMax, sensor white = 65535
-  const PW = W + 2 * PAD, PH = H + 2 * PAD, cfa = new Uint16Array(PW * PH);
+  // linearize into the padded CFA, as dng.js put(): (v - black) * wb[c] / wbMax, sensor white = CFA_WHITE, signed
+  const PW = W + 2 * PAD, PH = H + 2 * PAD, cfa = new Int16Array(PW * PH);
   // clipped photosites (>= the measured clip level) go to exactly the channel's sensor white, the level the
   // highlight recovery expects; the scale of everything below is unchanged (white = 2^bits - 1)
-  const scale = [0, 1, 2].map((c) => (wb[c] / wbMax) * 65535 / (white - black[c]));
-  const clip = clipLevel(raw, white), sat = wb.map((g) => Math.ceil((g / wbMax) * 65535));
+  const scale = [0, 1, 2].map((c) => (wb[c] / wbMax) * CFA_WHITE / (white - black[c]));
+  const clip = clipLevel(raw, white), sat = wb.map((g) => Math.ceil((g / wbMax) * CFA_WHITE));
   for (let y = 0; y < H; y++) {
     const po = (y + PAD) * PW + PAD, ro = y * W;
     for (let x = 0; x < W; x++) {
       const v = raw[ro + x], c = colorAt(y, x), f = (v - black[c]) * scale[c];
-      cfa[po + x] = v >= clip ? sat[c] : f <= 0 ? 0 : f >= 65535 ? 65535 : f + 0.5;
+      cfa[po + x] = v >= clip ? sat[c] : cfaValue(f);
     }
   }
 

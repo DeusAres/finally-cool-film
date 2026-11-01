@@ -14,6 +14,14 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.15**: **Hyper Tone ombre senza puntinismo** (foto notturna del concerto, Ombre 5): il pubblico al buio non è più un
+  tappeto di puntini blu ma si vede, con le luci nette. Tre cause, tutte corrette: il decoder DNG tagliava a zero il rumore
+  sotto il nero e ne faceva un velo blu (ora tiene il segno e media prima di tagliare); la mappa di Hyper Tone partiva da una
+  miniatura a punti e prendeva il rumore del sensore per dettaglio (ora è la media dell'area, e il log tiene conto del rumore
+  del sensore, letto dal profilo di rumore che l'iPhone scrive nel DNG); dove la mappa schiarisce, il rumore del sensore non
+  viene più alzato con l'area (solo l'area e i dettagli veri, le luci restano nette) e i colori che il sensore non distingue
+  vanno al neutro invece che a macchie. Zona scura del concerto: rumore 28.7 → 9.1 livelli, colore 15.5 → 5.1. Le altre
+  foto del check non cambiano (solo le ombre più profonde di un tramonto, un filo più neutre).
 - **v4.14**: Frontier, **gialli-arancio caldi** (foglie d'autunno, ambra) non più marroni: la rotazione verso il rosso che serve
   alla pelle non tocca più i colori vividi. Sul chart Frontier vero: ambra ΔE00 4.7 → 2.9 (tinta −7° → 0°), errore medio
   3.8-4.2 → 3.7-3.8, pelle invariata o meglio.

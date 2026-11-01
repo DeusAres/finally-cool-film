@@ -9,7 +9,7 @@ import { LENS_CONST, lensGeometry } from './lens.js';
 import { P3_TO_REC2020, LUMA, RGB_TO_XYZ, inv3, displayGainWGSL, DISPLAY_GAIN_LUT } from './color.js';
 import { dodgeWGSL } from './dodge.js';
 import { hyperWGSL } from './hypertone.js';
-import { FRAME_UM, PREVIEW_KPX, wf, wv3 } from './util.js';
+import { FRAME_UM, PREVIEW_KPX, NOISE_FLOOR_SIGMAS, wf, wv3 } from './util.js';
 import { tiltCoef, cropPx, FULL } from './tilt.js';
 
 const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
@@ -20,7 +20,23 @@ const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
 // v4.10 screenshot): per EV of lift the rings widen by CHROMA_LIFT_UM (inner; outer x2), on the film (µm), so preview and export
 // agree, and the luminance range k falls by (1 + lift)^2 (the lifted luminance noise no longer shuts the neighbours out).
 // 120 µm (~7 px per EV at the preview) is a choice, by eye on the pub frame IDG_20261026_204630_265 at Ombre 5.
-const CHROMA_R1 = 1.5, CHROMA_R2 = 3.0, CHROMA_K = 8.0, CHROMA_LIFT_UM = 120;
+// The chroma is the ratio of the weighted sums (RGB over luminance), not the mean of per-tap ratios: near black a tap's
+// luminance is noise around 0 and its ratio explodes (simulated, 17 taps, SNR 1: median chroma error 45 vs 0.5; the night
+// frame IDG_20261028_222823_718). The luminance range is measured on log2(y + the frame's noise floor) (util.js
+// NOISE_FLOOR_SIGMAS, dng.js noiseFloor scaled to the pixel pitch): taps that differ by noise alone stay in, a real step still
+// shuts them out (below the shifted zero: held at half the floor, one stop below it, not at log2(0)).
+// Hyper Tone (lift > 0) lifts the area, not the sensor's noise: the pixel's deviation from the area's weighted mean keeps its
+// unlifted size (x 2^-lift before the gain), so the lift reaches the film as light and the film's own grain is what shows
+// (before: Ombre 5 on the night frame took the luminance noise from 6.3 to 28.7 levels, grain off or on alike).
+// The mean it keeps the deviation from is dense (NR_GRID x NR_GRID taps NR_PITCH px apart, each 2x2 px: 64 px, noise / ~7,
+// enough for ~3 EV of lift): the night frame's sigma of the area mean was 0.36 x its level with the rings alone (simulated).
+// A deviation beyond NR_KEEP sigmas of the floor (smoothstep) is detail and is lifted whole: by eye on the night frame,
+// [1, 1] (Wiener) let the noise back (sigma 10 -> 20 levels), [2, 4] some, [3, 6] none, and either keeps the lamps sharp
+// (the floor is the read noise, under the shot noise a little above it).
+// Night frame at Ombre 5 (dark crowd, output levels): luminance noise sigma 28.7 -> 9.1, colour 15.5 -> 5.1, its blue cast
+// (R G B 40 51 97 -> 22 26 23) gone; with these and the denoised map (hypertone.js, raw.js rawThumb). Ombre 0: 6.3 -> 4.7.
+const CHROMA_R1 = 1.5, CHROMA_R2 = 3.0, CHROMA_K = 8.0, CHROMA_LIFT_UM = 120, NR_Y_MIN = 1e-5, NR_GRID = 4, NR_PITCH = 2;
+const NR_KEEP = [3, 6];
 // Texture = micro-contrast: scale (µm), range k (per stop²), midtone width (stops), strength at ±1.
 const MICRO_UM = 60, MICRO_K = 0.4, MICRO_MID_STOPS = 2.5, MICRO_MAX = 0.8;
 // Chiarezza (v3.26, bipolar, replaces the old Orton glow): local midtone contrast (Lightroom-like Clarity) at CLAR_UM, edge-aware
@@ -132,6 +148,7 @@ struct P {
   vib: vec4<f32>,                              // x: Vividezza 0..1 (0: stage skipped), y = 1: engine input in sRGB primaries (else Rec.2020), z: ceiling scale (Interno)
   tilt: vec4<f32>,                             // Raddrizza (tilt.js): x = k cos, y = k sin, z = 1 on (0: no turn)
   xf: vec4<f32>,                               // Ritaglia (tilt.js): xy = the crop's offset in the turned frame, zw = the source frame size (px)
+  nr: vec4<f32>,                               // the frame's sensor noise floor at this pitch, sigma of: x luminance, yzw R G B (0: unknown, JPEG)
 };
 @group(0) @binding(0) var tex: texture_2d<f32>;
 @group(0) @binding(1) var smp: sampler;
@@ -195,20 +212,60 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   // with every look stage off) into digital-looking colour speckle; Gold scans show σC 0.4-0.9.
   // As a lab does: average the chroma (RGB / luminance) over two rings (CHROMA_R1/R2 px),
   // luminance-edge-aware, and keep this pixel's own luminance: detail and grain are untouched.
+  // The frame is signed (raw: dng.js keeps the noise below black); from here on c >= 0.
   {
-    let y0 = max(dot(c, p.luma.xyz), 1e-5);
-    var acc = c / y0; var wt = 1.0; let lift = chromaLift(pos);
+    let nf = max(${wf(NOISE_FLOOR_SIGMAS)} * p.nr.x, ${wf(NR_Y_MIN)});
+    let y0 = dot(c, p.luma.xyz); let lift = chromaLift(pos);
+    var sc = c; var sy = y0; var wt = 1.0; var w2 = 1.0; var lr = y0;
     let reach = lift * ${wf(CHROMA_LIFT_UM)} * p.fx.w; let ck = ${wf(CHROMA_K)} / ((1.0 + lift) * (1.0 + lift));
+    var gq: array<vec3<f32>, ${NR_GRID * NR_GRID}>;
+    if (lift > 0.0) {
+      // Hyper Tone: a dense grid, NR_GRID² bilinear taps at pixel corners (each the mean of 2x2 px) NR_PITCH px apart at
+      // the preview, finer pixels proportionally further (the rings below are sparse: a mean of them stamps every noisy
+      // pixel 16 times around itself, blobs on the night frame). Its plain mean is the reference the taps are weighed
+      // against: weighed against this pixel, a noise outlier shuts its neighbours out and keeps itself (specks).
+      let s = ${wf(NR_PITCH)} * max(1.0, p.fx.w / ${wf(PREVIEW_KPX)});
+      var ys = y0;
+      for (var t = 0; t < ${NR_GRID * NR_GRID}; t++) {
+        let g = vec2<f32>(f32(t % ${NR_GRID}), f32(t / ${NR_GRID})) - ${wf((NR_GRID - 1) / 2)};
+        gq[t] = at(pos + g * s + sign(g) * 0.5).rgb; ys += dot(gq[t], p.luma.xyz);
+      }
+      lr = ys / ${wf(NR_GRID * NR_GRID + 1)};
+    }
+    let l0 = log2(max(lr + nf, 0.5 * nf));
     for (var t = 0; t < 16; t++) {
       let ring = t / 8;
       let ang = f32(t) * 0.7853982 + f32(ring) * 0.3926991;
       let q = at(pos + vec2<f32>(cos(ang), sin(ang)) * select(${wf(CHROMA_R1)} + reach, ${wf(CHROMA_R2)} + 2.0 * reach, ring == 1)).rgb;
-      let yq = max(dot(q, p.luma.xyz), 1e-5);
-      let dl = log2(yq / y0);
+      let yq = dot(q, p.luma.xyz);
+      let dl = log2(max(yq + nf, 0.5 * nf)) - l0;
       let w = exp(-dl * dl * ck) * select(1.0, 0.6, ring == 1);
-      acc += w * q / yq; wt += w;
+      sc += w * q; sy += w * yq; wt += w; w2 += w * w;
     }
-    c = y0 * acc / wt;
+    var y = y0;   // lift 0: this pixel's own luminance
+    if (lift > 0.0) {
+      var lw = 1.0; var ly = y0;
+      for (var t = 0; t < ${NR_GRID * NR_GRID}; t++) {
+        let yq = dot(gq[t], p.luma.xyz);
+        let dl = log2(max(yq + nf, 0.5 * nf)) - l0;
+        let w = exp(-dl * dl * ck);
+        sc += w * gq[t]; sy += w * yq; ly += w * yq; lw += w; w2 += 0.25 * w * w;   // a tap: 4 px, a quarter of the variance
+      }
+      let ym = ly / lw;
+      // The pixel's departure from the area: kept at its unlifted size where it is noise, lifted with the area where it
+      // stands out of the noise (NR_KEEP x the luminance floor p.nr.x): a lamp or a lit face in the dark keeps its edge, no
+      // halo of the area mean around it.
+      let d = y0 - ym; let k = smoothstep(${wf(NR_KEEP[0])} * p.nr.x, ${wf(NR_KEEP[1])} * p.nr.x, abs(d));
+      y = ym + d * mix(exp2(-lift), 1.0, k);
+    }
+    y = max(y, 0.0);
+    // The neighbourhood's colour, each channel's departure from grey kept by how far it stands out of that mean's own noise
+    // (Wiener: d² / (d² + noise²); the channels' noise floors p.nr.yzw, / the taps' weights): where the sensor cannot tell
+    // the colour (a night crowd's blue at SNR ~0.2) it goes grey instead of into coloured blotches.
+    let my = sy / wt; let dv = sc / wt - vec3<f32>(my); let sm = p.nr.yzw * sqrt(w2) / wt;
+    let m = max(vec3<f32>(my) + dv * dv * dv / max(dv * dv + sm * sm, vec3<f32>(1e-30)), vec3<f32>(0.0));
+    let ml = dot(m, p.luma.xyz);
+    c = select(vec3<f32>(y), y * m / ml, ml > ${wf(NR_Y_MIN)});   // nothing to tell: grey
   }
   // Nitidezza (SHARP_UM): see the constants. p.fx.z = gain (+ SHARP_MAX x slider / - SHARP_SOFT x slider).
   if (p.fx.z != 0.0) {
@@ -300,7 +357,7 @@ export const INPUT_WGSL_HT = patch(patch(INPUT_WGSL, 'fn chromaLift(pos: vec2<f3
   '\n  c *= p.expo;\n', '\n  c *= hyperGain(pos);\n  c *= p.expo;\n');
 
 const IDENTITY = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
-const UNIFORM_FLOATS = 52;
+const UNIFORM_FLOATS = 56;
 
 /**
  * Uniforms of INPUT_WGSL for the region (x0, y0, w, h) of a W×H frame, scaled by `scale`
@@ -310,7 +367,7 @@ const UNIFORM_FLOATS = 52;
  * `tilt`: Raddrizza angle in degrees (tilt.js; 0: no transform); `crop`: Ritaglia (tilt.js; FULL: the whole frame). W×H is the
  * source frame, the region and the lens are in the output frame (the crop).
  */
-export function inputUniform(W, H, space, x0, y0, w, h, scale, lens, expo, clarity = 0, texture = 0, wb = [1, 1, 1], sharp = 0, vibrance = 0, interno = false, tilt = 0, crop = FULL) {
+export function inputUniform(W, H, space, x0, y0, w, h, scale, lens, expo, clarity = 0, texture = 0, wb = [1, 1, 1], sharp = 0, vibrance = 0, interno = false, tilt = 0, crop = FULL, noise = [0, 0, 0, 0]) {
   // W×H: the source frame; the output frame (lens, region, µm scale) is its crop (tilt.js)
   const { ox, oy, w: OW, h: OH } = cropPx(W, H, crop);
   const kpx = Math.max(OW, OH) / FRAME_UM;   // frame px per µm
@@ -327,6 +384,7 @@ export function inputUniform(W, H, space, x0, y0, w, h, scale, lens, expo, clari
     Math.max(0, Math.min(1, vibrance)), space === 'srgb' ? 1 : 0, interno ? VIB_INTERNO : 1, 0,
     ...(ab ? [ab[0], ab[1], 1, 0] : [0, 0, 0, 0]),
     ox, oy, W, H,
+    ...noise,
   ]);
   if (u.length !== UNIFORM_FLOATS) throw new Error('inputUniform: layout drift');
   return u;

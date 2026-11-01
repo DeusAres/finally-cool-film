@@ -238,13 +238,26 @@ function uploadFrame(data, w, h) {
 // chain from the frame texture (sf.set_frame), see lens-gpu.js. CPU fallback
 // below (no WebGPU): float input built here, float output converted here.
 
+/** The sensor noise floor of `frame` (the preview's or an export's decode of this photo) at its pixel pitch, [luminance, R, G,
+ * B] (noiseAt). Zeros: a JPEG. */
+function frameNoise(frame) {
+  return frame.raw ? noiseAt(Math.max(frame.w, frame.h)) : [0, 0, 0, 0];
+}
+/** This photo's noise floor (dng.js noiseFloor, of the preview decode) for an image of it `longSide` px long: x the pitch ratio
+ * (white noise: sigma per pixel ~ 1 / the pixel's side). Zeros: a JPEG, an ORF, a DNG without a NoiseProfile (the noise-aware
+ * parts then do what they did before). */
+function noiseAt(longSide) {
+  const pv = photo.preview, nz = pv.raw?.noise;
+  return nz ? nz.map((v) => v * longSide / Math.max(pv.w, pv.h)) : [0, 0, 0, 0];
+}
+
 /** 8-bit render of a region (x0, y0, w, h: in the output frame, outFrame) of `frame` into `target` (RGBA, w×h×4 bytes). */
 async function renderRegion(frame, x0, y0, w, h, target, u) {
   const lens = lensOf(u), expo = sceneGain(u), c = viewCrop();
   if (gpu) {
     const space = frame.raw ? 'rec2020' : frame.p3 ? 'p3' : 'srgb', wb = sceneWb(undefined, space === 'srgb' ? 'srgb' : 'rec2020', u.temp);
     const ip = inputPass(u, space);
-    return engine.process_frame(ip.wgsl, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb, u.sharp, u.vibrance / 100, !!interno(), u.tilt, c),
+    return engine.process_frame(ip.wgsl, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb, u.sharp, u.vibrance / 100, !!interno(), u.tilt, c, frameNoise(frame)),
       ip.arr, w, h, PACK_LUT,
       OUTPUT_WGSL, packParams(packTo(), invUniform(u)), target);
   }
@@ -275,7 +288,7 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
 }
 /** A fresh copy of the photo's scene-linear thumb at `longSide`: the raw's own (decoded with it, raw.js previewThumb), or the
  * JPEG preview's. */
-const thumbOf = (preview, longSide = THUMB_PX) => (preview.raw ? previewThumb(preview.raw, longSide) : jpegThumb(preview, longSide));
+const thumbOf = (preview, longSide = THUMB_PX, mean = false) => (preview.raw ? previewThumb(preview.raw, longSide, mean) : jpegThumb(preview, longSide));
 
 /** v3: DISPLAY_GAIN_LUT + the dodging header and base map (base: once per photo, from the AutoSetup thumbnail). */
 function v3Gain(u, space) {
@@ -372,8 +385,8 @@ function syncHyperMap(u) {
   // left its sky outside the map's dead zone: Hyper Tone luci 5 did nothing while the sky lost its blue (sunset, measured).
   const gain = 2 ** (scanEv() + baselineEv() + (photo.auto?.[0] ?? 0) + u.labD * LAB_D_EV);   // the operator's density key too
   if (photo.hyperBase?.gain !== gain) {
-    const { preview } = photo, { rgb, w, h } = thumbOf(preview, HYPER_THUMB_PX);
-    photo.hyperBase = { ...hyperToneMap(rgb, w, h, LUMA[preview.raw || preview.p3 ? 'rec2020' : 'srgb'], gain), gain };   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
+    const { preview } = photo, { rgb, w, h } = thumbOf(preview, HYPER_THUMB_PX, true);   // a raw's mean thumb (raw.js rawMeanThumb)
+    photo.hyperBase = { ...hyperToneMap(rgb, w, h, LUMA[preview.raw || preview.p3 ? 'rec2020' : 'srgb'], gain, noiseAt(Math.max(w, h))[0]), gain };   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
     log(`hyper tone map ${photo.hyperBase.w}x${photo.hyperBase.h}`);
   }
   // the map spans the output frame as rendered (turned and cropped like it: the input pass samples it in output-frame px)
@@ -714,7 +727,7 @@ async function loadPhoto(file) {
       // DNG (raw.js): scene-linear Rec.2020, half-float frame; output in Display P3.
       if (!gpu) throw new Error('I file RAW (DNG / ORF) richiedono WebGPU');
       // the 'before' view, half-float frame and thumbs come converted (raw.js previewOf); the view lives on as preview.data only
-      const t = performance.now(), { view, ...raw } = await loadRaw(file, PREVIEW_LONG_SIDE, 0, { signal: abort.signal, thumbs: [THUMB_PX, HYPER_THUMB_PX] });
+      const t = performance.now(), { view, ...raw } = await loadRaw(file, PREVIEW_LONG_SIDE, 0, { signal: abort.signal, thumbs: [THUMB_PX], means: [HYPER_THUMB_PX] });
       while (rendering || exporting) await sleep(20);
       if (my !== loadSeq) return;
       const preview = { data: view, w: raw.w, h: raw.h, p3: true, raw };

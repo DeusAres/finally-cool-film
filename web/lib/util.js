@@ -18,6 +18,11 @@ export const PREVIEW_LONG_SIDE = 2000;
 /** Preview pixels per µm of film: the reference pitch of thresholds tuned on the preview (a finer export pixel is noisier). */
 export const PREVIEW_KPX = PREVIEW_LONG_SIDE / FRAME_UM;
 
+/** Noise floors (dng.js noiseFloor) are used as log2(y + NOISE_FLOOR_SIGMAS x sigma) wherever luminance is compared in stops
+ * (lens-gpu.js colour-noise reduction, hypertone.js map): values that differ by the sensor's noise alone stay close, a real
+ * step does not. 2 sigmas: ~98% of the signed noise around black stays above the shifted zero. A choice. */
+export const NOISE_FLOOR_SIGMAS = 2;
+
 // Strips of about this many bytes when a full-size frame is decoded or uploaded piecewise, so it never sits whole in memory.
 const STRIP_BYTES = 4 << 20;
 /** Rows per strip of a frame `w` px wide at `bpp` bytes per pixel (4: 8-bit RGBA, 8: half-float RGBA). */

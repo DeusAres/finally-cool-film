@@ -31,7 +31,7 @@ export function rawObject(d, rot = 0) {
   const o = d.meta?.orientation || 1, swap = o >= 5;
   const [cw, ch] = (d.meta?.crop || [0, 0, d.w, d.h]).slice(2);   // full (cropped) sensor size
   const ow = swap ? d.h : d.w, oh = swap ? d.w : d.h, ofw = swap ? ch : cw, ofh = swap ? cw : ch;
-  return withRotation({ sw: d.w, sh: d.h, ow, oh, ofw, ofh, rgb: d.rgb, baseline: d.exposure || 0, orientation: o }, rot);
+  return withRotation({ sw: d.w, sh: d.h, ow, oh, ofw, ofh, rgb: d.rgb, baseline: d.exposure || 0, orientation: o, noise: d.noise || [0, 0, 0, 0] }, rot);
 }
 
 /** Decode and assemble, in this thread (the worker's job; here only as the fallback and in node: eval/dng2npy.mjs). */
@@ -89,7 +89,7 @@ function decodeInWorker(file, buf, opt, sf, signal) {
 // The fallback: decode in this thread; with `sf`, upload and drop the float image (the export's form).
 async function decodeHere(buf, opt, sf) {
   const r = await decodeRaw(buf, opt);
-  if (!sf) return { ...previewOf(r, opt.thumbs), decodedIn: 'main' };
+  if (!sf) return { ...previewOf(r, opt.thumbs, opt.means), decodedIn: 'main' };
   uploadRaw(sf, r);
   return { ...r, rgb: null, decodedIn: 'main' };
 }
@@ -97,13 +97,13 @@ async function decodeHere(buf, opt, sf) {
 /**
  * Decode (optionally downscaled); returns { w, h, baseline, orientation, fullW, fullH, decodedIn ('worker' | 'main'), ... },
  * sizes AFTER orientation. `rot`: the user's extra quarter turns clockwise (withRotation). Without `sf`, the preview
- * (previewOf, with a thumb per long side in `thumbs`). `sf`: upload the frame to the GPU as it decodes (export) and return
+ * (previewOf, with a thumb per long side in `thumbs`, a mean thumb per long side in `means`). `sf`: upload the frame to the GPU as it decodes (export) and return
  * the decode without pixels (rgb null). `signal`: an AbortSignal that stops the decode (a newer photo); the load then
  * rejects with its reason.
  */
-export async function loadRaw(file, maxLongSide, rot = 0, { sf = null, signal = null, thumbs = [] } = {}) {
+export async function loadRaw(file, maxLongSide, rot = 0, { sf = null, signal = null, thumbs = [], means = [] } = {}) {
   signal?.throwIfAborted();
-  const buf = await file.arrayBuffer(), opt = { maxLongSide, rot, thumbs };
+  const buf = await file.arrayBuffer(), opt = { maxLongSide, rot, thumbs, means };
   signal?.throwIfAborted();   // aborted while the file was read (hundreds of ms for a big raw)
   const p = workerOk && decodeInWorker(file, buf, opt, sf, signal);
   return p ? p : decodeHere(buf, opt, sf);
@@ -191,32 +191,71 @@ function frameRows(r, y0, n, out) {
 /**
  * What the app keeps of a preview decode `r` (everything converted here, in the worker, once): r without its float image,
  * plus `frame`, its half-float RGBA frame before the user's turn (uploadRaw turns it), `view`, the 'before' view as turned
- * by r.rot (rawPreviewRGBA), and `thumbs[turn][longSide]` (rawThumb, for every quarter turn: a turned thumb samples other
- * pixels, so it cannot be reordered from the upright one).
+ * by r.rot (rawPreviewRGBA), `thumbs[turn][longSide]` (rawThumb, for every quarter turn: a turned thumb samples other
+ * pixels, so it cannot be reordered from the upright one) and `means[turn][longSide]` (rawMeanThumb, turned).
  */
-export function previewOf(r, thumbSides = []) {
+export function previewOf(r, thumbSides = [], meanSides = []) {
   const { rgb, ...p } = r, upright = withRotation(r, 0);
   return {
     ...p, view: rawPreviewRGBA(r), frame: f16Rows(upright, 0, upright.h),
     thumbs: [0, 1, 2, 3].map((t) => Object.fromEntries(thumbSides.map((s) => [s, rawThumb(withRotation(r, t), s)]))),
+    means: turnedMeans(upright, meanSides),
   };
 }
 
-/** A copy of a preview's thumb at `longSide` for its turn (previewOf; the caller may scale it in place). */
-export function previewThumb(r, longSide) {
-  const t = r.thumbs[r.rot][longSide];
-  if (!t) throw new Error(`no ${longSide} px raw thumb (loadRaw thumbs)`);
+// means[turn][side]: the upright mean thumb (one area mean over the decode per side), turned by reordering its pixels (util.js turnRows)
+function turnedMeans(upright, sides) {
+  const words = (a) => new Uint32Array(a.buffer, a.byteOffset, a.length);   // a float RGB pixel = 3 words
+  const base = Object.fromEntries(sides.map((s) => [s, rawMeanThumb(upright, s)]));
+  return [0, 1, 2, 3].map((t) => Object.fromEntries(sides.map((s) => {
+    const { rgb, w, h } = base[s];
+    if (!t) return [s, base[s]];
+    const out = new Float32Array(rgb.length), ow = t & 1 ? h : w, oh = t & 1 ? w : h;
+    turnRows(words(rgb), w, h, t, 0, oh, words(out));
+    return [s, { rgb: out, w: ow, h: oh }];
+  })));
+}
+
+/** A copy of a preview's thumb (`mean`: its mean thumb) at `longSide` for its turn (previewOf; the caller may scale it in place). */
+export function previewThumb(r, longSide, mean = false) {
+  const t = (mean ? r.means : r.thumbs)[r.rot][longSide];
+  if (!t) throw new Error(`no ${longSide} px raw ${mean ? 'mean ' : ''}thumb (loadRaw ${mean ? 'means' : 'thumbs'})`);
   return { rgb: t.rgb.slice(), w: t.w, h: t.h };
 }
 
-/** Scene-linear Rec.2020 thumb (sensor values, oriented, no baseline) for the engine's auto-exposure / AutoSetup. */
+/** Scene-linear Rec.2020 thumb (sensor values, oriented, no baseline) for the engine's auto-exposure / AutoSetup: point samples
+ * (what their metering was measured and set on), clamped >= 0 (the decode is signed). */
 export function rawThumb(r, longSide) {
   const s = Math.min(1, longSide / Math.max(r.w, r.h)), w = Math.max(1, Math.round(r.w * s)), h = Math.max(1, Math.round(r.h * s));
   const rgb = new Float32Array(w * h * 3);
   for (let y = 0, o = 0; y < h; y++) {
     for (let x = 0; x < w; x++, o += 3) {
       const i = srcIndex(r, Math.min(r.w - 1, Math.floor((x + 0.5) / s)), Math.min(r.h - 1, Math.floor((y + 0.5) / s))) * 3;
-      rgb[o] = r.rgb[i]; rgb[o + 1] = r.rgb[i + 1]; rgb[o + 2] = r.rgb[i + 2];
+      rgb[o] = Math.max(0, r.rgb[i]); rgb[o + 1] = Math.max(0, r.rgb[i + 1]); rgb[o + 2] = Math.max(0, r.rgb[i + 2]);
+    }
+  }
+  return { rgb, w, h };
+}
+
+/** The thumb for the Hyper Tone map: each pixel the mean of the decode's pixels it covers (a point sample keeps the full
+ * per-pixel sensor noise: on the night frame IDG_20261028_222823_718 the map read it as detail and lifted it as speckle),
+ * clamped >= 0 after the mean (the signed decode's noise below black averages out first). */
+export function rawMeanThumb(r, longSide) {
+  const s = Math.min(1, longSide / Math.max(r.w, r.h)), w = Math.max(1, Math.round(r.w * s)), h = Math.max(1, Math.round(r.h * s));
+  const rgb = new Float32Array(w * h * 3), x0 = new Int32Array(w + 1), src = r.rgb;
+  for (let x = 0; x <= w; x++) x0[x] = Math.min(r.w, Math.round(x * r.w / w));
+  for (let y = 0, o = 0; y < h; y++) {
+    const ya = Math.round(y * r.h / h), yb = Math.max(ya + 1, Math.round((y + 1) * r.h / h));
+    for (let x = 0; x < w; x++, o += 3) {
+      let R = 0, G = 0, B = 0;
+      for (let sy = ya; sy < yb; sy++) {
+        for (let sx = x0[x]; sx < Math.max(x0[x] + 1, x0[x + 1]); sx++) {
+          const i = srcIndex(r, sx, sy) * 3;
+          R += src[i]; G += src[i + 1]; B += src[i + 2];
+        }
+      }
+      const k = 1 / ((yb - ya) * Math.max(1, x0[x + 1] - x0[x]));
+      rgb[o] = Math.max(0, R * k); rgb[o + 1] = Math.max(0, G * k); rgb[o + 2] = Math.max(0, B * k);
     }
   }
   return { rgb, w, h };

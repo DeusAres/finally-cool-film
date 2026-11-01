@@ -13,8 +13,12 @@
 // no white estimate is needed) -> Bradford to D65 -> linear Rec.2020.
 //
 // Scale: the white-balanced sensor clip level of a neutral maps to 1.0 (diffuse
-// white ~ 1 before BaselineExposure). Values are clamped >= 0. Blown highlights are
-// clipped to neutral. Orientation is NOT applied (see meta.orientation).
+// white ~ 1 before BaselineExposure). Blown highlights are clipped to neutral. Orientation is NOT applied (see
+// meta.orientation).
+// Signed: below black the sensor's noise is kept as it is (negative values), never clamped to 0 per pixel. A clamp
+// rectifies the noise around black into a positive floor, strongest in the noisiest channel: measured on the night frame
+// IDG_20261028_222823_718 (dark crowd, preview size) blue 1.80e-3 clamped vs 0.43e-3 signed (red, green within 15%), the
+// "blue" shadows Hyper Tone lifted into view. Consumers clamp after averaging (lens-gpu.js input pass, raw.js rawThumb).
 //
 // Unsupported (ignored): ProfileGainTableMap (52543/52544), semantic SubIFDs, XMP,
 // opcodes other than GainMap, OpcodeList1/2.
@@ -254,6 +258,7 @@ function inv3(m) {
 }
 
 const XYZ_TO_REC2020 = [1.7166512, -0.3556708, -0.2533663, -0.6666844, 1.6164812, 0.0157685, 0.0176399, -0.0427706, 0.9421031];
+const REC2020_LUMA = inv3(XYZ_TO_REC2020).slice(3, 6);   // Y row of Rec.2020 -> XYZ: the luminance weights (noiseFloor)
 const BRADFORD = [0.8951, 0.2664, -0.1614, -0.7502, 1.7135, 0.0367, 0.0389, -0.0685, 1.0296];
 const D65 = [0.95047, 1, 1.08883];
 const D50 = [0.96422, 1, 0.82521];
@@ -526,7 +531,7 @@ function areaResize(src, sw, sh, dw, dh) {
   return out;
 }
 
-// Highlight recovery on camera RGB in CFA units (channel c hits sensor white at sat[c] = wb[c]/wbMax*65535).
+// Highlight recovery on camera RGB in CFA units (channel c hits sensor white at sat[c] = wb[c]/wbMax*CFA_WHITE).
 // Local "colour propagation": satStats grids the frame (16 px cells) with, per cell, the mean ratio
 // q_c = v_c / mean(other two) of bright but unclipped pixels (no channel above 0.92 sat, brightest above 0.5),
 // weighted by brightness. Empty cells are filled by push-pull (sums pooled 2x2 up a pyramid, holes inherit the
@@ -620,7 +625,7 @@ function satQ(sat, x, y) {
 
 // ---------------------------------------------------------------- Malvar-He-Cutler
 // One CFA phase of one row: every other pixel starting at x0, CFA index i, output row offset ob.
-// Fused with per-column gains (gR/gG/gB) and the 3x3 colour matrix M; clamps >= 0.
+// Fused with per-column gains (gR/gG/gB) and the 3x3 colour matrix M; signed (see the header).
 
 function mhcGreen(a, w, rgb, i, ob, x0, n, swap, gR, gG, gB, M, sat) {
   const w2 = 2 * w;
@@ -632,7 +637,7 @@ function mhcGreen(a, w, rgb, i, ob, x0, n, swap, gR, gG, gB, M, sat) {
     const hv = (c5 + 4 * (a[i - 1] + a[i + 1]) - (W2 + E2) - dg + 0.5 * (N2 + S2)) * 0.125;
     const vv = (c5 + 4 * (a[i - w] + a[i + w]) - (N2 + S2) - dg + 0.5 * (W2 + E2)) * 0.125;
     let r = swap ? vv : hv, b = swap ? hv : vv;
-    r = (r > 0 ? r : 0) * gR[x]; b = (b > 0 ? b : 0) * gB[x];
+    r *= gR[x]; b *= gB[x];
     let g = C0 * gG[x];
     const r0 = r, g0 = g;
     if (r > sat.lo0 || g > sat.lo1 || b > sat.lo2) {
@@ -641,7 +646,7 @@ function mhcGreen(a, w, rgb, i, ob, x0, n, swap, gR, gG, gB, M, sat) {
     }
     const R = m0 * r + m1 * g + m2 * b, G = m3 * r + m4 * g + m5 * b, B = m6 * r + m7 * g + m8 * b;
     const o = ob + x * 3;
-    rgb[o] = R > 0 ? R : 0; rgb[o + 1] = G > 0 ? G : 0; rgb[o + 2] = B > 0 ? B : 0;
+    rgb[o] = R; rgb[o + 1] = G; rgb[o + 2] = B;
   }
 }
 
@@ -653,8 +658,7 @@ function mhcRB(a, w, rgb, i, ob, x0, n, swap, gR, gG, gB, M, sat) {
     const ax2 = a[i - w2] + a[i + w2] + a[i - 2] + a[i + 2];
     let g = (4 * C0 + 2 * (a[i - w] + a[i + w] + a[i - 1] + a[i + 1]) - ax2) * 0.125;
     let oo = (6 * C0 + 2 * (a[i - w - 1] + a[i - w + 1] + a[i + w - 1] + a[i + w + 1]) - 1.5 * ax2) * 0.125;
-    g = (g > 0 ? g : 0) * gG[x];
-    oo = oo > 0 ? oo : 0;
+    g *= gG[x];
     let r = (swap ? oo : C0) * gR[x], b = (swap ? C0 : oo) * gB[x];
     const r0 = r, g0 = g;
     if (r > sat.lo0 || g > sat.lo1 || b > sat.lo2) {
@@ -663,13 +667,19 @@ function mhcRB(a, w, rgb, i, ob, x0, n, swap, gR, gG, gB, M, sat) {
     }
     const R = m0 * r + m1 * g + m2 * b, G = m3 * r + m4 * g + m5 * b, B = m6 * r + m7 * g + m8 * b;
     const o = ob + x * 3;
-    rgb[o] = R > 0 ? R : 0; rgb[o + 1] = G > 0 ? G : 0; rgb[o + 2] = B > 0 ? B : 0;
+    rgb[o] = R; rgb[o + 1] = G; rgb[o + 2] = B;
   }
 }
 
 // ---------------------------------------------------------------- main
 
 export const PAD = 2;
+/** The padded CFA (developCFA): an Int16Array, linearized and white balanced, sensor white of the strongest-gain channel =
+ * CFA_WHITE; signed so the noise below black survives (see the header). 15 bits above black: the iPhone's DNG white level
+ * (32767), and below the noise of any 16-bit raw. */
+export const CFA_WHITE = 32767, CFA_MIN = -32768;
+/** A linearized CFA value `f` as stored: rounded, clipped to the Int16 range. */
+export const cfaValue = (f) => (f >= CFA_WHITE ? CFA_WHITE : f <= CFA_MIN ? CFA_MIN : Math.round(f));
 
 export async function decodeDNG(arrayBuffer, { maxLongSide } = {}) {
   const buf = ArrayBuffer.isView(arrayBuffer)
@@ -712,17 +722,17 @@ export async function decodeDNG(arrayBuffer, { maxLongSide } = {}) {
   const wb = neutral.map(n => maxN / n); // >= 1, min = 1
   const baseline = P.one(ifd0, 50730, 0);
 
-  // ---- decode + linearize into padded Uint16 CFA (WB'd / wbMax, clip -> 65535)
+  // ---- decode + linearize into the padded CFA (WB'd / wbMax, clip -> CFA_WHITE)
   const PW = aW + 2 * PAD, PH = aH + 2 * PAD;
-  const cfa = new Uint16Array(PW * PH);
+  const cfa = new Int16Array(PW * PH);
   const u8 = new Uint8Array(buf);
   const lin = linTable ? Uint16Array.from(linTable) : null;
   // per-phase black & scale (black repeat dims dividing 2 are exact; DeltaH/V added per pixel)
-  // Headroom: gains are divided by wbMax so 65535 = sensor-white of the strongest-gain channel and R/B
+  // Headroom: gains are divided by wbMax so CFA_WHITE = sensor-white of the strongest-gain channel and R/B
   // don't clip before the sensor does (cost: <= log2(wbMax) ~1.2 bits of green precision). wbMax is
   // multiplied back in at the float conversion (s below).
   const wbMax = Math.max(...wb);
-  const scaleC = [0, 1, 2].map(c => (wb[c] / wbMax) * 65535 / (white - blackAt(0, 0)));
+  const scaleC = [0, 1, 2].map(c => (wb[c] / wbMax) * CFA_WHITE / (white - blackAt(0, 0)));
   const put = (tile, tw, th, x0, y0) => {
     const xe = Math.min(x0 + tw, W), ye = Math.min(y0 + th, H);
     for (let y = Math.max(y0, aT); y < Math.min(ye, aT + aH); y++) {
@@ -735,15 +745,14 @@ export async function decodeDNG(arrayBuffer, { maxLongSide } = {}) {
       const s1 = scaleC[colorAt(ay, 1)] * (white - blackAt(0, 0)) / (white - b1);
       const xs = Math.max(x0, aL), xe2 = Math.min(xe, aL + aW);
       if (!lin && !dH) {
-        // hot path: per-phase constants, Uint16Array store truncates (+0.5 rounds)
+        // hot path: per-phase constants
         let x = xs;
-        if ((x - aL) & 1) { const f = (tile[to + x] - b1) * s1; cfa[po + x] = f <= 0 ? 0 : f >= 65535 ? 65535 : f + 0.5; x++; }
+        if ((x - aL) & 1) { cfa[po + x] = cfaValue((tile[to + x] - b1) * s1); x++; }
         for (; x + 1 < xe2; x += 2) {
-          const f0 = (tile[to + x] - b0) * s0, f1 = (tile[to + x + 1] - b1) * s1;
-          cfa[po + x] = f0 <= 0 ? 0 : f0 >= 65535 ? 65535 : f0 + 0.5;
-          cfa[po + x + 1] = f1 <= 0 ? 0 : f1 >= 65535 ? 65535 : f1 + 0.5;
+          cfa[po + x] = cfaValue((tile[to + x] - b0) * s0);
+          cfa[po + x + 1] = cfaValue((tile[to + x + 1] - b1) * s1);
         }
-        if (x < xe2) { const f = (tile[to + x] - b0) * s0; cfa[po + x] = f <= 0 ? 0 : f >= 65535 ? 65535 : f + 0.5; }
+        if (x < xe2) cfa[po + x] = cfaValue((tile[to + x] - b0) * s0);
         continue;
       }
       for (let x = xs; x < xe2; x++) {
@@ -751,7 +760,7 @@ export async function decodeDNG(arrayBuffer, { maxLongSide } = {}) {
         if (lin) v = lin[v < lin.length ? v : lin.length - 1];
         const odd = (x - aL) & 1;
         const f = (v - (odd ? b1 : b0) - (dH ? dH[x - aL] || 0 : 0)) * (odd ? s1 : s0);
-        cfa[po + x] = f <= 0 ? 0 : f >= 65535 ? 65535 : f + 0.5;
+        cfa[po + x] = cfaValue(f);
       }
     }
   };
@@ -796,18 +805,18 @@ export async function decodeDNG(arrayBuffer, { maxLongSide } = {}) {
   meta.cct = col.cct; meta.whiteXY = col.whiteXY; meta.cameraToRec2020 = col.M;
   const maps = parseGainMaps(P.bytes(raw, 51022) || P.bytes(ifd0, 51022));
   meta.gainMaps = maps.length;
-  const out = developCFA({ cfa, PW, PH, aW, aH, cx, cy, cw, ch, colorAt, wb, M: col.M, maps, maxLongSide });
+  const noiseProfile = P.values(raw, 51041) || P.values(ifd0, 51041);
+  const out = developCFA({ cfa, PW, PH, aW, aH, cx, cy, cw, ch, colorAt, wb, M: col.M, maps, maxLongSide, noiseProfile });
   return { ...out, space: 'rec2020', exposure: baseline, meta };
 }
 
 /**
- * Shared back end of the raw decoders: `cfa` is the padded (PAD) Uint16 Bayer image of the active area
- * (aW x aH), linearized and white balanced as decodeDNG's `put` does (per channel wb[c] / max(wb), sensor
- * white of the strongest-gain channel = 65535); `M` maps white-balanced camera RGB (clip = 1) to linear
- * Rec.2020; `maps` are GainMaps (or []). Pads, demosaics (or bins) the crop (cx, cy, cw, ch) and resizes to
- * `maxLongSide`. Returns { w, h, rgb }.
+ * Shared back end of the raw decoders: `cfa` is the padded (PAD) Bayer image of the active area (aW x aH, CFA_WHITE),
+ * linearized and white balanced as decodeDNG's `put` does (per channel wb[c] / max(wb)); `M` maps white-balanced camera RGB (clip = 1) to linear
+ * Rec.2020; `maps` are GainMaps (or []); `noiseProfile` the DNG NoiseProfile (or null). Pads, demosaics (or bins) the
+ * crop (cx, cy, cw, ch) and resizes to `maxLongSide`. Returns { w, h, rgb, noise } (noise: noiseFloor).
  */
-export function developCFA({ cfa, PW, PH, aW, aH, cx, cy, cw, ch, colorAt, wb, M: Mcam, maps, maxLongSide }) {
+export function developCFA({ cfa, PW, PH, aW, aH, cx, cy, cw, ch, colorAt, wb, M: Mcam, maps, maxLongSide, noiseProfile = null }) {
   const wbMax = Math.max(...wb);
   // reflect-101 padding (preserves CFA phase)
   for (let y = PAD; y < PH - PAD; y++) {
@@ -820,8 +829,8 @@ export function developCFA({ cfa, PW, PH, aW, aH, cx, cy, cw, ch, colorAt, wb, M
   }
 
   // ---- colour
-  const s = wbMax / 65535;
-  const sat = wb.map(w => w / wbMax * 65535); // per-channel sensor-white in CFA units
+  const s = wbMax / CFA_WHITE;
+  const sat = wb.map(w => w / wbMax * CFA_WHITE); // per-channel sensor-white in CFA units
   satStats(cfa, PW, PAD, cx, cy, cw, ch, colorAt, sat);
   const M = Mcam.map(v => v * s);
   const [m0, m1, m2, m3, m4, m5, m6, m7, m8] = M;
@@ -852,7 +861,7 @@ export function developCFA({ cfa, PW, PH, aW, aH, cx, cy, cw, ch, colorAt, wb, M
           r = satLift(r, g, b, sat[0], qq && qq[0]); g = satLift(g, r0, b, sat[1], qq && qq[1]); b = satLift(b, r0, g0, sat[2], qq && qq[2]);
         }
         const R = m0 * r + m1 * g + m2 * b, G = m3 * r + m4 * g + m5 * b, B = m6 * r + m7 * g + m8 * b;
-        rgb[o] = R > 0 ? R : 0; rgb[o + 1] = G > 0 ? G : 0; rgb[o + 2] = B > 0 ? B : 0;
+        rgb[o] = R; rgb[o + 1] = G; rgb[o + 2] = B;
       }
     }
   } else {
@@ -888,5 +897,22 @@ export function developCFA({ cfa, PW, PH, aW, aH, cx, cy, cw, ch, colorAt, wb, M
     rgb = areaResize(rgb, outW, outH, dw, dh);
     outW = dw; outH = dh;
   }
-  return { w: outW, h: outH, rgb };
+  return { w: outW, h: outH, rgb, noise: noiseFloor(noiseProfile, wb, Mcam, cw * ch / (outW * outH)) };
+}
+
+// The sensor's noise floor in the decoded image (lens-gpu.js colour-noise reduction, hypertone.js map): from the DNG's
+// NoiseProfile (tag 51041: per CFA plane, variance = S x + O of the raw normalized to 0..1, measured by the maker for this shot's
+// ISO), its read noise O alone (the floor: the darkest areas, where the noise matters). Propagated: x wb (white balance), a
+// decoded pixel the mean of `area` photosites (a quarter of them red, a quarter blue, half green; demosaic and resize are
+// linear, so their means are the plane's), through the colour matrix to linear Rec.2020 (planes independent). Measured the
+// other way, on the image's darkest areas, it read texture as noise on frames without real blacks (100x on a lit cat).
+/** [luminance (Rec.2020), R, G, B] noise sigma of the decode; zeros without a NoiseProfile (and for ORF). */
+function noiseFloor(profile, wb, M, area) {
+  if (!profile || profile.length < 2) return [0, 0, 0, 0];
+  const O = [0, 1, 2].map((c) => profile[profile.length >= 6 ? 2 * c + 1 : 1]);
+  const v = [0, 1, 2].map((c) => O[c] * wb[c] * wb[c] / Math.max(1, area * (c === 1 ? 0.5 : 0.25)));   // variance per plane
+  const row = (r) => Math.sqrt(r[0] * r[0] * v[0] + r[1] * r[1] * v[1] + r[2] * r[2] * v[2]);
+  const rows = [0, 1, 2].map((k) => [M[3 * k], M[3 * k + 1], M[3 * k + 2]]);
+  const luma = [0, 1, 2].map((j) => REC2020_LUMA[0] * rows[0][j] + REC2020_LUMA[1] * rows[1][j] + REC2020_LUMA[2] * rows[2][j]);
+  return [row(luma), ...rows.map(row)];
 }
