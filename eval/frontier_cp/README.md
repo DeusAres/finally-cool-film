@@ -20,6 +20,7 @@ Run from a WORK directory (needs sf-eval, scripts/eval/build-sf-eval.sh; python 
     python3 -I measure_charts.py CHARTS/Gold-0EV-Frontier.png CHARTS/*.png > charts_measure.json  # Spyder + Kodak (Charts)
     CP_SLIDER=SLIDER python3 -I recon.py && python3 -I autorecon.py NAME '{auto params}'      # Auto on the rebuilt real frames
     CP_SLIDER=SLIDER python3 -I recon_model.py NAME '{auto params}' [SET/FRAME ...]   # level error on any frame (SCAN=Noritsu)
+    # (recon_model.py / sgref.py read ColorCheckerSG_After_Nov2014.txt and slider/ from the current directory: run in WORK)
     python3 -I sim.py ext '{"scanner":{"frontier":{"model":{"gradation_a":0.001,"shoulder_sharpness":0,"black_point":0,
         "white_point":1,"range_density":2.4,"cool_neutral_warm":0,"highlight_neutral":0}}}}' -1 0 1 2   # linear curve: density per patch
     python3 -I fit_tone.py Frontier gradation_a,black_point,white_point '{"shoulder_sharpness":0,"shoulder_start":0.95}'

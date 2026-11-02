@@ -213,7 +213,7 @@ function renderParamsJson(u, noGrain = false, tileMm = 0, region = null) {
 const NO_GAMUT = { algorithm: 'off' };
 function syncEngine(u, { noGrain = false, tileMm = 0, region = null } = {}) {
   if (!engine) {
-    engine = new sf.Engine(FILM, PAPER, JSON.stringify(deepMerge(BASE_PARAMS, inputParams(photo.preview.p3), V4 ? V4_STOCK : {},
+    engine = new sf.Engine(FILM, PAPER, JSON.stringify(deepMerge(BASE_PARAMS, inputParams(photo.preview.p3),
       { io: { output_gamut_compress: NO_GAMUT } })));
     engineParams = '';
   }
@@ -1308,12 +1308,6 @@ const V4_DIR = { inhibition_samelayer: 1.0, inhibition_interlayer: 1.0 };
 // (blue share of the upper sky 69 % vs the DNG's 19 %); on the barn of the gold200 dataset the white wall came out cyan. With the
 // setup, both follow the DNG (the film's own rendering stays: Gold reads a blue sky deeper than its RGB, by its spectral layers).
 const NARROWBAND = { setup: true };
-// v4 film layer speeds (engine FilmRenderingParams.layer_speed_ev, a calibration input: set when the engine is built). Real Gold
-// 200 (eval/gold200, two scenes, each at the film exposure that best explains its negative: -0.5 / -2 EV) has its red layer
-// relatively faster than the datasheet curves: red +0.75 EV takes the mids' green / cool cast down (mean |a*| over tones
-// 8.6 -> 4.2, hue error +14 / +8 -> +7 / +2 deg); +1 EV does slightly better in the shadows but turns the lights red (a* +5.9).
-// Second calibration step; to refine with more references.
-const V4_STOCK = { film_render: { layer_speed_ev: [0.75, 0, 0] } };
 // v4 Frontier AutoSetup reads the colour from near-neutral pixels (engine FrontierAutoParams.neutral_sigma, density): a frame
 // filled by one colour no longer pulls it towards grey (the Frontier's "subject failure"). Measured (sf-eval, v4 Frontier):
 // green park ORF Y key -0.065 -> -0.018 (its grey path no longer pink), tungsten cat C +0.035 -> +0.024 (a real cast still read),
@@ -1397,8 +1391,13 @@ const V4_NORITSU = { gradation_a: 9.26, black_point: 0.025, white_point: 1.0, sh
 // check on its 20 Gold frames (recon_model.py EVS): rms 4.7 L*; the Frontier's mean / highlight blend does no better (4.9+ on the
 // fit scenes, eval/frontier_cp/README.md). Its highlights on the densest channel (as V4_AUTO since 4.4) with margin -0.04: rms
 // 4.7 -> 4.3 L* (-0.08 / 0.0: 4.6 / 5.5), but its cap then prints a sunset with a saturated sky near black (median L* 62 -> 25,
-// v4_sky_noritsu): not taken.
-const V4_NORITSU_AUTO = { strength: 1.0, target_offset: 0.15, highlight_margin: -0.08, k_col: 1.15, clamp_colour: 0.3 };
+// v4_sky_noritsu): not taken. 4.16: target 0.15 -> 0.10. Per set the level is bound either by the highlight guard (Charts,
+// Studio, Daylight, Night: their keys at 0 EV sit on the -0.08 cap, the target does not reach them) or by the mean (Landscape,
+// alone: +4.8 L*); a lower target fixes the one set the mean binds: Landscape -0.4, Charts -3.4 -> -4.8, the rest unchanged,
+// rms 4.6 -> 4.2 L* (each frame rendered over a range of keys, verified in the engine). Percentile 90 / margin -0.16 reaches
+// 3.45 but moves Charts / Studio by 2-2.5 L* on 5 scenes: not taken. What is left is per scene (Daylight +6 that no frame
+// statistic explains, Charts -5): structural.
+const V4_NORITSU_AUTO = { strength: 1.0, target_offset: 0.10, highlight_margin: -0.08, k_col: 1.15, clamp_colour: 0.3 };
 const SCATTER_SCALE = 0.5;   // film scatter size multiplier (engine default 1), see renderParams
 // v3.32: dye-cloud blur 0.65 -> 0.45 (reference px, ~12 -> ~8 um): measured on 10 full-frame Gold 200 scans the grain has ~12 % of
 // its power below 40 um wavelength and r50 ~13.5 um; ours had 3 % / 18.6 um (soft). At 0.45
