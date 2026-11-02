@@ -1271,7 +1271,7 @@ pub fn auto_setup(base: &FrontierBase, cmy: &[f32], width: usize, height: usize)
     };
     let target = base.d_ref + p.target_offset;
     let k_den = p.k_den * p.strength;
-    let k_col0 = p.k_col * p.strength;
+    let k_col = p.k_col * p.strength;
     // Density: bring the trimmed mean to mid-scale, but never past the highlight guard. A lab
     // operator prints for the subject's highlights: the bright, large-area part of the frame
     // (the `highlight_pct` percentile of G, which skips specular points and whiskers) must sit
@@ -1298,21 +1298,12 @@ pub fn auto_setup(base: &FrontierBase, cmy: &[f32], width: usize, height: usize)
         d_den = d_den.min(p.strength * cap);
     }
     let d_den = d_den.clamp(-p.clamp_density, p.clamp_density);
-    let k_col = thin_k_col(p, d_den / base.d_per_ev, k_col0);
     let mut out = [(d_den / base.d_per_ev) as f32, 0.0, 0.0, 0.0];
     for c in 0..3 {
         let dd = (k_col * (colour[1] - colour[c])).clamp(-p.clamp_colour, p.clamp_colour);
         out[1 + c] = (-dd) as f32; // a density gain is the opposite colour key
     }
     out
-}
-
-/// Colour-correction strength for a frame whose density key lifts `ev` EV: `k_col0` up to `thin_ev_lo`,
-/// smoothly `thin_k_col * strength` from `thin_ev_hi` (a thin negative's cast is read, not left alone).
-fn thin_k_col(p: &FrontierAutoParams, ev: f64, k_col0: f64) -> f64 {
-    let t = ((ev - p.thin_ev_lo) / (p.thin_ev_hi - p.thin_ev_lo).max(1e-6)).clamp(0.0, 1.0);
-    let t = t * t * (3.0 - 2.0 * t);
-    k_col0 + t * (p.thin_k_col * p.strength - k_col0)
 }
 
 fn percentile(sorted: &[f64], pct: f64) -> f64 {
@@ -1775,18 +1766,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn thin_colour_strength_is_exact_for_normal_frames() {
-        let p = crate::params::FrontierAutoParams::default();
-        let k0 = p.k_col * p.strength;
-        for ev in [-1.0, 0.0, 0.3, p.thin_ev_lo] {
-            assert_eq!(super::thin_k_col(&p, ev, k0), k0, "ev {ev}");
-        }
-        let k = |ev| super::thin_k_col(&p, ev, k0);
-        assert!(k(1.2) < k0 && k(1.2) > k(p.thin_ev_hi));
-        assert!((k(2.5) - p.thin_k_col * p.strength).abs() < 1e-12);
-    }
-
     /// highlight_weight: the same chart (greys and whites, right third) on black and on a mid-grey wall. The mean alone
     /// lifts the frame on black far more; with the highlights read in, the gap shrinks (both frames share them). Exposure
     /// moves the key as much as without it (both terms shift alike).
@@ -1819,10 +1798,11 @@ mod tests {
         assert!(step(&p0) < -0.3, "a stop brighter should darken the key: {}", step(&p0));
     }
 
-    /// A 2.5 EV thin, warm-lit grey frame: the density key reaches past the old 0.30 logD clamp and the
-    /// colour key corrects more of the cast than on a normally exposed frame with the same cast.
+    /// A 2.5 EV thin, warm-lit grey frame: the density key reaches past the old 0.30 logD clamp and the cast is still
+    /// read (an inherited ramp took k_col to 0 above a 0.8 EV lift, the opposite of its doc: a warm frame 1 EV under kept
+    /// b* +35 vs +26 without it, eval/frontier_cp/README.md 4.16).
     #[test]
-    fn thin_warm_frame_gets_full_lift_and_stronger_colour() {
+    fn thin_warm_frame_gets_full_lift_and_its_colour_read() {
         let Some(p) = pipeline() else { return };
         let n = 16usize;
         let warm = |v: f64| {
@@ -1833,6 +1813,6 @@ mod tests {
         let normal = p.frontier_auto_setup(warm(0.18)).unwrap();
         assert!(thin[0] > 1.3, "2.5 EV thin frame should lift > 1.3 EV (k_den 0.8, strength 0.7 here): {thin:?}");
         assert!(normal[0].abs() < 0.3, "{normal:?}");
-        assert!(thin[3].abs() < normal[3].abs(), "thin frame colour key {thin:?} vs normal {normal:?}");
+        assert!(thin[3] * normal[3] > 0.0 && thin[3].abs() > 0.5 * normal[3].abs(), "thin frame colour key {thin:?} vs normal {normal:?}");
     }
 }

@@ -450,12 +450,6 @@ pub struct FrontierAutoParams {
     /// The highlight percentile on each pixel's densest channel instead of G (false: G, as before).
     #[serde(default)]
     pub highlight_max_channel: bool,
-    /// Thin negatives (Interno): once the density key lifts more than `thin_ev_lo` EV the lab trusts its
-    /// colour reading more, ramping `k_col` to `thin_k_col` at `thin_ev_hi` EV. Frames needing <= `thin_ev_lo`
-    /// (every normally exposed frame) keep `k_col` exactly.
-    pub thin_k_col: f64,
-    pub thin_ev_lo: f64,
-    pub thin_ev_hi: f64,
     /// Colour reading robust to one-colour subjects (the Frontier's "subject failure": a lawn, the sea, a red wall pulled
     /// towards grey): each thumb pixel's weight in the colour mean is 1 / (1 + (chroma / neutral_sigma)^2), chroma = the
     /// largest |D_c - D_G| in setup density (0 on a neutral). Large saturated areas then barely count; a real cast moves
@@ -482,9 +476,6 @@ impl Default for FrontierAutoParams {
             highlight_margin: 0.1672,
             highlight_weight: 0.0,
             highlight_max_channel: false,
-            thin_k_col: 0.0,
-            thin_ev_lo: 0.8,
-            thin_ev_hi: 1.6,
             neutral_sigma: 0.0,
         }
     }

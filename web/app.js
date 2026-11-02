@@ -1335,7 +1335,10 @@ const V4_NEUTRAL_SIGMA = 0.06;
 // assumed): warmer light would mean an even stronger correction, so this is a lower bound.
 // 4.14: with V4_TOE_SLOPE the setup densities moved and the 20 real frames came out +2.2 L* bright (rms 3.15 -> 3.46);
 // target_offset -0.04 -> -0.10 (-0.07: rms 2.89, mean +1.2): rms 2.61, mean +0.2 (recon_model.py EVS -1..+2).
-const V4_AUTO = { strength: 1.0, k_col: 0.68, highlight_weight: 0.6, target_offset: -0.10, highlight_max_channel: true };
+// 4.16: the refitted tone (V4_FRONTIER gradation_a 11.15) printed the frames darker (same harness, 4.15 -> refit: rms 3.24 ->
+// 3.69, mean -1.3 -> -2.0; this run reads 3.24 where 4.14's read 2.61, the frame set / slider build differ): -0.10 -> -0.07,
+// rms 3.25, mean -0.85 (-0.04: 3.20 but Daylight +6 L*).
+const V4_AUTO = { strength: 1.0, k_col: 0.68, highlight_weight: 0.6, target_offset: -0.07, highlight_max_channel: true };
 // v4 Frontier tone and colour, fitted to a real Frontier (eval/frontier_cp, eval/V4.md): the Color Precision film comparison tool's
 // Gold 200 chart frames (ColorChecker SG + Kodak grey scale, -1..+2 EV; the same negatives also on a Noritsu), our v4 Frontier
 // rendering the same patches on CPU with the operator's density / C M Y keys as free nuisances. Tone: grey L* rms 2.6 -> 1.2;
@@ -1365,10 +1368,19 @@ const V4_AUTO = { strength: 1.0, k_col: 0.68, highlight_weight: 0.6, target_offs
 // (b* -13); ours were warm (+5) and the frame 8.5 dE00 off. Chromatic dE00 Frontier -3 / -1 / 0 / +1 / +2 / +3 EV 8.55 / 3.80 /
 // 3.82 / 3.70 / 3.70 / 4.52 -> 7.21 / 3.63 / 3.96 / 3.56 / 3.43 / 4.18; Noritsu -3 / 0 / +2 8.48 / 4.31 / 4.49 -> 7.31 / 4.42 / 4.58.
 // Blue 0.5-0.6 matched the -3 EV blacks exactly but cost 0.3-0.4 at 0 EV: 0.75 is the compromise (a choice on those numbers).
+// 4.16, whites (-1..-2.6 L* at every EV): the 555 nm green band of 4.6 reads G with ~11 % less density per stop (G gamma 0.53 ->
+// 0.47) and the tone was never refitted: grey L* rms 2.29 (540 nm: 1.17). fit_tone.py at 555 nm: gradation_a 9.6 -> 11.15
+// (black / white unchanged), rms 1.15; the per-hue ops refitted on it (proto_all.py jointly on -1 / 0 / +1 / +2 EV). Grey L* rms
+// -1 / 0 / +1 / +2 2.52 / 1.81 / 2.43 / 2.37 -> 1.89 / 1.57 / 1.85 / 2.00, whites -1.9 / -1.3 / -2.4 / -2.6 -> -0.8 / -0.1 /
+// -1.4 / -1.3; chromatic dE00 -3..+4 7.21 / 3.63 / 3.96 / 3.56 / 3.43 / 4.18 / 5.22 -> 6.96 / 3.52 / 4.10 / 3.46 / 3.52 / 4.09 /
+// 4.98 (mean over -1..+2 unchanged); blacks ~1.2 L* deeper. Skin: the real lab's skin hue follows each frame's light-grey cast
+// (ours - real a*/b* -2.0/+1.7 at -1 EV ... +1.2/-0.4 at +3), with it removed ours is +0.1 deg on average: no rotation added.
+// -3 EV left (6.96): the real lab prints a thin frame with ~1.5x the 0 EV tone contrast but no more chroma, which a fixed
+// per-channel curve cannot do (a film-toe question, eval/frontier_cp/README.md).
 const V4_TOE_SLOPE = [1.0, 0.75];
-const V4_FRONTIER = { gradation_a: 9.6, black_point: 0.023, white_point: 0.97, shoulder_start: 0.95, shoulder_sharpness: 0,
+const V4_FRONTIER = { gradation_a: 11.15, black_point: 0.023, white_point: 0.97, shoulder_start: 0.95, shoulder_sharpness: 0,
   saturation: 0.92, saturation_blue: 0.05, blue_hue_shift: 18, green_hue_shift: 20, sensor_peak_nm: [650, 555, 450], warm_hue_shift: 6,
-  hue_lightness: [0.87, 0.97, 0.53, 0.83, 0.92, 0.91], hue_saturation: [0.87, 1.09, 0.99, 1.09, 0.85, 0.78], hue_shift: [2.3, 4.5, 6.6, 1.6, -2.9, 15.1] };
+  hue_lightness: [0.91, 0.93, 0.57, 0.80, 0.95, 0.93], hue_saturation: [0.86, 1.08, 0.94, 1.07, 0.77, 0.76], hue_shift: [2.4, 1.3, 6.0, 4.1, -2.9, 15.3] };
 // v4 Noritsu (Scanner tab): the Frontier's scanner model with a Noritsu's tone, colour and AutoSetup, fitted as V4_FRONTIER on the
 // same Color Precision Gold 200 frames scanned on their Noritsu (eval/frontier_cp). It overrides every v3 Gold-look op (none of
 // them is the Noritsu's). Tone: a 9.26, black 0.025, white 1.0 (opener whites than the Frontier's 0.97), grey L* rms 1.25.
@@ -1378,8 +1390,12 @@ const V4_FRONTIER = { gradation_a: 9.6, black_point: 0.023, white_point: 0.97, s
 // -> 4.31-4.49 at the 4 EVs, helps 7 patches (B4 9.6 -> 2.4, H3 11.0 -> 4.7), worsens none by more than 0.2. Balance: the Noritsu's greys are warm in the shadows / mids, neutral in the lights (mid b*
 // +13 on the chart frame, +7 outdoors, against the Frontier's +4.5 / +2): C M Y +0.02 / +0.05 / +0.075 over the Frontier's
 // balance, the mean of the chart-frame fit (0.03 / 0.068 / 0.103) and the outdoor frame's about half of it.
+// 4.16, skin: with each frame's light-grey cast removed, the Noritsu's skin is still +4..+5 deg yellow at every EV, the chain's
+// error the Frontier corrects with warm_hue_shift 6 (WARM_VIVID keeps the ambers): the same here. Skin hue at 0 EV +7.6 -> +2.7
+// deg, chromatic dE00 -3 / -1 / 0 / +1 / +2 7.31 / 4.48 / 4.42 / 4.49 / 4.58 -> 7.26 / 4.30 / 4.25 / 4.24 / 4.43, +3 / +4 4.71 /
+// 4.93 -> 4.90 / 5.07 (the price; 4: 4.27 at 0 EV, 4.79 at +3, softer). A choice for the common exposures.
 const V4_NORITSU = { gradation_a: 9.26, black_point: 0.025, white_point: 1.0, shoulder_start: 0.95, shoulder_sharpness: 0,
-  saturation: 1.0, saturation_blue: 0, blue_hue_shift: 0, green_hue_shift: 0, saturation_warm: 0, warm_hue_shift: 0,
+  saturation: 1.0, saturation_blue: 0, blue_hue_shift: 0, green_hue_shift: 0, saturation_warm: 0, warm_hue_shift: 6,
   cool_neutral_warm: 0, highlight_neutral: 0, balance_cmy: [0.02, 0.055, 0.095],
   hue_shift: [2, -4.8, 3.1, 1.8, 1.6, 30.8], hue_lightness: [1.16, 0.99, 0.69, 0.86, 0.91, 0.94], hue_saturation: [0.84, 0.94, 0.96, 0.91, 0.62, 0.87] };
 // Noritsu AutoSetup. Unlike the Frontier it barely lifts a dark frame (chart on black: mid grey 67 vs 70 on the grey wall, the

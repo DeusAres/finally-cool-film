@@ -216,4 +216,17 @@ The same frames on the tool's Noritsu, with the same method; the Frontier's scan
   -1 / +2 EV overshoot (-0.5 / -4.2) and their dE00 rise (3.63 / 3.43 -> 3.90 / 3.75): the 0 EV skin error is that frame's, not a
   constant offset; not taken. Chroma ours / real by exposure: -3 1.27, -1 0.99, 0 1.02, +2 1.00, +3 1.11: right in the normal range,
   too saturated only far out (one frame each): open.
-
+- **4.16 (subagent round).**
+  - Whites: the 555 nm green band (4.6) reads G with ~11 % less density per stop and the tone was never refitted (grey rms 2.29
+    L*). `fit_tone.py` at 555 nm: gradation_a 11.15, per-hue ops refitted jointly on -1..+2 EV (`proto_all` multi-EV): grey rms
+    -1..+2 2.52 / 1.81 / 2.43 / 2.37 -> 1.89 / 1.57 / 1.85 / 2.00, whites -1.3 -> -0.1 at 0 EV, chromatic mean unchanged,
+    -3 / +3 / +4 better; blacks ~1.2 L* deeper. AutoSetup target -0.10 -> -0.07 to hold the 20 frames' level.
+  - Skin: the real lab's skin hue follows each frame's light-grey cast; with it removed the Frontier is +0.1 deg (no change), the
+    Noritsu +4..+5 at every EV: warm_hue_shift 6 there too (0 EV skin +7.6 -> +2.7, dE00 -3..+2 better by 0.05-0.25, +3 / +4
+    worse by 0.14-0.19).
+  - -3 EV: the real lab prints a thin frame with ~1.5x (Frontier) / 1.2x (Noritsu) the 0 EV tone contrast at the same output
+    level, ours 1.1x, and keeps the light patches' chroma (ours +22 %: lower on a steeper curve). Contrast / highlight keys and a
+    -3.5 EV render trade one for the other: left, a film-toe question.
+  - Engine AutoSetup: an inherited ramp took k_col to 0 above a 0.8 EV density lift (the opposite of its doc): removed. Under a
+    simulated 3200 K the mid grey kept b* +35 at -1 EV with it, +26 without.
+  - Noritsu level: target_offset 0.15 -> 0.10 (rms 4.6 -> 4.2 L*, see app.js V4_NORITSU_AUTO).
