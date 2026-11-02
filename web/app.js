@@ -213,7 +213,7 @@ function renderParamsJson(u, noGrain = false, tileMm = 0, region = null) {
 const NO_GAMUT = { algorithm: 'off' };
 function syncEngine(u, { noGrain = false, tileMm = 0, region = null } = {}) {
   if (!engine) {
-    engine = new sf.Engine(FILM, PAPER, JSON.stringify(deepMerge(BASE_PARAMS, inputParams(photo.preview.p3),
+    engine = new sf.Engine(FILM, PAPER, JSON.stringify(deepMerge(BASE_PARAMS, inputParams(photo.preview.p3), V4 ? V4_STOCK : {},
       { io: { output_gamut_compress: NO_GAMUT } })));
     engineParams = '';
   }
@@ -1308,6 +1308,13 @@ const V4_DIR = { inhibition_samelayer: 1.0, inhibition_interlayer: 1.0 };
 // (blue share of the upper sky 69 % vs the DNG's 19 %); on the barn of the gold200 dataset the white wall came out cyan. With the
 // setup, both follow the DNG (the film's own rendering stays: Gold reads a blue sky deeper than its RGB, by its spectral layers).
 const NARROWBAND = { setup: true };
+// v4 film layer speeds (engine FilmRenderingParams.layer_speed_ev, set when the engine is built): red +0.75 EV, fitted on real Gold
+// 200 (eval/gold200) for the mids' green cast with the per-channel inversion. The setups (NARROWBAND, the scanners' film-type
+// setup) put each channel back on the stock's grey axis, so its colour effect is gone (with / without: < 0.5 mean L* a* b* per
+// tone band, and re-measured on the gold200 scenes: no systematic cast left, eval/V4.md 4.16). It still sets where the red layer
+// sits on its curve, so its grain: without it the sea frame's edges / texture go 0.86 / 0.76 -> 0.95 / 0.80 (check.py). Kept for
+// that: the v4 grain strength (V4_FILM) was measured with it. To revisit with the grain.
+const V4_STOCK = { film_render: { layer_speed_ev: [0.75, 0, 0] } };
 // v4 Frontier AutoSetup reads the colour from near-neutral pixels (engine FrontierAutoParams.neutral_sigma, density): a frame
 // filled by one colour no longer pulls it towards grey (the Frontier's "subject failure"). Measured (sf-eval, v4 Frontier):
 // green park ORF Y key -0.065 -> -0.018 (its grey path no longer pink), tungsten cat C +0.035 -> +0.024 (a real cast still read),

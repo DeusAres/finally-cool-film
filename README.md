@@ -14,6 +14,12 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.16**: **Frontier più fedele al laboratorio vero** (chart reali Color Precision): la curva era rimasta quella di prima del
+  cambio di sensore verde della 4.6; rifatta, i bianchi non sono più spenti (a 0 EV −1.3 → −0.1 L*, grigi rms ~2.3 → ~1.8),
+  colori invariati in media, anche −3 / +3 / +4 EV migliorano; foto un filo più contrastate e 1-2 L* più scure, come il lab.
+  **Noritsu**: pelle meno gialla (+7.6° → +2.7° a 0 EV) e livello di stampa più giusto sulle 20 foto vere (errore 4.6 → 4.2 L*,
+  i paesaggi non sono più troppo chiari). Verificato anche Nessuno contro dati veri: la pellicola corrisponde al datasheet
+  Kodak E-7022 e sul dataset Gold 200 non c'è più nessuna dominante da correggere.
 - **v4.15**: **Hyper Tone ombre senza puntinismo** (foto notturna del concerto, Ombre 5): il pubblico al buio non è più un
   tappeto di puntini blu ma si vede, con le luci nette. Tre cause, tutte corrette: il decoder DNG tagliava a zero il rumore
   sotto il nero e ne faceva un velo blu (ora tiene il segno e media prima di tagliare); la mappa di Hyper Tone partiva da una

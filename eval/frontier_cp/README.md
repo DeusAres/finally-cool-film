@@ -227,6 +227,7 @@ The same frames on the tool's Noritsu, with the same method; the Frontier's scan
   - -3 EV: the real lab prints a thin frame with ~1.5x (Frontier) / 1.2x (Noritsu) the 0 EV tone contrast at the same output
     level, ours 1.1x, and keeps the light patches' chroma (ours +22 %: lower on a steeper curve). Contrast / highlight keys and a
     -3.5 EV render trade one for the other: left, a film-toe question.
-  - Engine AutoSetup: an inherited ramp took k_col to 0 above a 0.8 EV density lift (the opposite of its doc): removed. Under a
-    simulated 3200 K the mid grey kept b* +35 at -1 EV with it, +26 without.
+  - Engine AutoSetup: an inherited ramp takes k_col to 0 above a 0.8 EV density lift (its doc said the opposite; fixed). Under a
+    simulated 3200 K the mid grey keeps b* +35 at -1 EV with it, +26 without; but without it the Noritsu printed the user's dark
+    sunset (IDG_20261022_182651_466) with a green-cyan sky (mids a* 14 -> 7). Kept: no real thin tungsten frame to weigh it.
   - Noritsu level: target_offset 0.15 -> 0.10 (rms 4.6 -> 4.2 L*, see app.js V4_NORITSU_AUTO).
