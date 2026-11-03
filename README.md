@@ -14,6 +14,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.23**: nuova interfaccia: i tempi di render tornano visibili (in alto a sinistra sulla foto; un tocco apre il log).
+  Vibrazione: iOS la permette solo dentro un tocco, non durante il trascinamento: lo slider fa un tick al rilascio; nel menu
+  cartella c'è una prova (interruttore di iOS e tick dell'app) per capire se il telefono la blocca.
 - **v4.22**: **luci LED blu**: un blu fuori gamut (rosso e verde negativi dopo la matrice colore) usciva come un buco nero
   (concerto IDG_20261028_204614_966, il palco). I negativi oltre il rumore del sensore ora sono tagliati come prima della
   4.15; quelli del rumore vicino al nero restano (niente velo blu). Le altre foto del check non cambiano.

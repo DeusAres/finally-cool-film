@@ -63,8 +63,13 @@ const EASE = 'cubic-bezier(.2,.8,.2,1)';
 // Export: border 0..BORDER_MAX % of the long side (0 = off), swatches; the app reads #borderPct / #borderColor (app.js).
 const BORDER_MAX = 10, BORDER_STEP = 0.5, SWATCHES = ['#ffffff', '#f3ead8', '#d9d4cc', '#111111'];
 
-/** Haptic tick. Android: navigator.vibrate. iOS Safari has no vibrate API; since iOS 18 toggling a `switch` checkbox plays the
- * system tick (unverified on the user's phone: a known trick), so a hidden one is clicked through its label. */
+/** Haptic tick. Android: navigator.vibrate. iOS Safari has no vibrate API; toggling a `switch` checkbox (Safari 17.4+) plays
+ * the system tick (WebKit performSwitchHapticFeedback), so a hidden one is clicked through its label. WebKit plays it only
+ * within a user gesture (bug 285120, Jan 2025: tap / click / touchend handlers, not an `input` event during a drag), and
+ * second-hand reports say iOS 26.5 stopped it for script toggles altogether (unverified; the menu's test switch tells). On
+ * the user's iPhone the drag ticks did nothing (4.17-4.22): a slider ticks once on release instead (HAPTIC_ON_DRAG: only
+ * where navigator.vibrate exists). Research: subagent, 2026-11-03. */
+const HAPTIC_ON_DRAG = !!navigator.vibrate;
 const haptic = (() => {
   let label = null;
   return () => {
@@ -208,11 +213,13 @@ export function initUI2(api) {
     if (!r) return;
     const el = $(id), min = +el.min, max = +el.max, base = api.baseOf(id);
     const step = +el.step || (max - min) / 100, stepped = (max - min) / step <= 12;   // a stepped slider ticks at each step
-    let last = +el.value;
+    let last = +el.value, crossed = false;
     r.oninput = () => {
       const v = +r.value;
-      // ticks: crossing the base value, each step of a stepped slider, the ends
-      if ((last - base) * (v - base) < 0 || (v === base && last !== base) || (stepped && v !== last) || ((v === min || v === max) && v !== last)) haptic();
+      // ticks: crossing the base value, each step of a stepped slider, the ends (iOS: one tick on release, see haptic)
+      if ((last - base) * (v - base) < 0 || (v === base && last !== base) || (stepped && v !== last) || ((v === min || v === max) && v !== last)) {
+        if (HAPTIC_ON_DRAG) haptic(); else crossed = true;
+      }
       last = v;
       el.value = v; el.dispatchEvent(new Event('input', { bubbles: true }));
       q('.u2val').textContent = valueOf(id);
@@ -221,6 +228,7 @@ export function initUI2(api) {
       chip.classList.toggle('mod', modified(id)); chip.querySelector('.v').textContent = modified(id) ? valueOf(id) : '';
     };
     r.onchange = () => { el.dispatchEvent(new Event('change', { bubbles: true })); commit(); };
+    r.addEventListener('touchend', () => { if (crossed) haptic(); crossed = false; });   // a gesture event: WebKit plays it here
     q('.u2reset').onclick = () => { r.value = base; r.oninput(); commit(); haptic(); };
     const a = q('.u2auto');
     if (a) a.onclick = async () => { $('auto').click(); haptic(); setTimeout(() => { draw(false); commit(); }, 400); };
@@ -270,9 +278,13 @@ export function initUI2(api) {
     <button class="u2go u2gopri" id="u2open">${svg('photo')}<span><b>Apri foto</b><i>DNG, ORF, JPEG, HEIC</i></span></button>
     <button class="u2go" id="u2resetall">${svg('reset')}<span><b>Azzera tutte le modifiche</b><i>torna alla pellicola com'è</i></span></button>
     <button class="u2go" id="u2classic">${svg('base')}<span><b>Interfaccia classica</b><i>la nuova è in prova</i></span></button>
+    <div class="u2hap"><label><input type="checkbox" switch> Interruttore di iOS</label><button id="u2hapt">Tick dell'app</button>
+      <i>Prova vibrazione: se l'interruttore vibra e il tick no, iOS blocca la vibrazione da script; se non vibra nemmeno
+      l'interruttore, è spenta in Impostazioni › Suoni e feedback aptico.</i></div>
     <p class="u2credits">${document.querySelector('.credits')?.innerHTML || ''}</p>`, (s) => {
     s.querySelector('#u2open').onclick = () => { close(); $('pick').click(); };
     s.querySelector('#u2resetall').onclick = () => { $('resetAll').click(); commit(); draw(false); close(); };
+    s.querySelector('#u2hapt').onclick = () => haptic();
     s.querySelector('#u2classic').onclick = () => { store.set('fcf_ui2', null); location.replace(location.pathname + location.search.replace(/[?&]ui2\b/, '')); };
   });
 
@@ -421,6 +433,10 @@ body.ui2 #status:empty { display: none; }
 .u2go:disabled { opacity: .45; }
 .u2prog { margin-top: 14px; } .u2st { font-size: 13px; color: var(--muted); margin-bottom: 8px; min-height: 17px; }
 .u2bar { height: 8px; border-radius: 4px; background: #2f2a25; overflow: hidden; } .u2bar i { display: block; height: 100%; width: 3%; background: var(--accent); transition: width .3s; }
+.u2hap { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 12px; padding: 12px 14px; border: 1px solid #3a342e; border-radius: 14px; font-size: 14px; }
+.u2hap label { display: flex; align-items: center; gap: 8px; } .u2hap input { width: 44px; height: 26px; }
+.u2hap button { margin-left: auto; border: 1px solid #3a342e; background: #24211d; color: var(--fg); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px; }
+.u2hap i { flex-basis: 100%; font-style: normal; font-size: 12px; color: var(--muted); }
 .u2credits { font-size: 11.5px; color: var(--muted); margin: 16px 0 0; }
 .u2credits a { color: var(--muted); }
 `;
