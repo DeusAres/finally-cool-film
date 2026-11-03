@@ -105,13 +105,10 @@ export function initUI2(api) {
     <div class="u2slot" id="u2slot"></div>
     <nav class="u2nav">${GROUPS.map((g) => `<button data-g="${g.id}">${svg(g.icon)}<span>${g.name}</span></button>`).join('')}</nav></div>`);
   const slot = $('u2slot');
+  // the status line (render times, messages; a tap opens the log, as in the classic UI) on the photo's top left, small
   const st = $('status'); $('stage').append(st);
-  let stT = 0;
-  new MutationObserver(() => {
-    const t = st.textContent, quiet = !t || /^\d+×\d+ · /.test(t);
-    st.classList.toggle('show', !quiet); clearTimeout(stT);
-    if (!quiet && !st.dataset.action && !/^Errore|^Export fallito/.test(t)) stT = setTimeout(() => st.classList.remove('show'), 4000);
-  }).observe(st, { childList: true, characterData: true, subtree: true });
+  new MutationObserver(() => st.classList.toggle('msg', !/^\d+×\d+ · /.test(st.textContent)))
+    .observe(st, { childList: true, characterData: true, subtree: true });
   const reduce = matchMedia('(prefers-reduced-motion: reduce)');
 
   // --- undo / redo: a snapshot after every finished edit (slider release, a tap)
@@ -392,9 +389,10 @@ body.ui2 #histo { left: auto; right: 8px; }
 .u2tr #cropFormats { padding: 2px 40px 0; } .u2tr #cropFormats button { height: 58px; gap: 4px; }
 .u2tr .tilt, .u2tr .crop { margin: 0; }
 .u2nav { display: flex; border-top: 1px solid var(--line); padding: 2px 6px max(4px, calc(env(safe-area-inset-bottom) - 16px)); }
-body.ui2 #status { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); max-width: calc(100% - 180px); padding: 6px 12px; border-radius: 999px;
-  background: rgba(14,13,12,.78); backdrop-filter: blur(8px); color: var(--fg); min-height: 0; z-index: 3; opacity: 0; pointer-events: none; transition: opacity .2s; }
-body.ui2 #status.show { opacity: 1; pointer-events: auto; }
+body.ui2 #status { position: absolute; left: 8px; top: 8px; max-width: calc(100% - 150px); padding: 3px 8px; border-radius: 6px;
+  background: rgba(14,13,12,.55); color: var(--muted); font: 10.5px ui-monospace, Menlo, monospace; min-height: 0; z-index: 3; cursor: pointer; }
+body.ui2 #status.msg { color: var(--fg); background: rgba(14,13,12,.8); font-size: 12px; }
+body.ui2 #status:empty { display: none; }
 .u2nav button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; border: 0; background: none; color: var(--muted); font: 11px -apple-system, system-ui, sans-serif; padding: 5px 0; }
 .u2nav button svg { width: 23px; height: 23px; }
 .u2nav button.on { color: var(--accent); }
