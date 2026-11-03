@@ -18,6 +18,7 @@ import { frameMap, frameImage, cropPx, turnCrop, isFull, FULL } from './lib/tilt
 import { tiltRuler } from './lib/ruler.js';
 import { hyperToneMap, hyperArray, hyperGainCPU } from './lib/hypertone.js';
 import { attachTips } from './lib/tips.js';
+import { initUI2 } from './lib/ui2.js';
 
 // Engine default; sets the physical pixel size of the engine's own effects (grain, halation, DIR diffusion) as the frame's
 // long side in mm. Not util.js FRAME_UM (36 mm, the 24×36 frame, for the JS effects): the engine's look was tuned at 35,
@@ -55,6 +56,12 @@ let engineParams = '';      // JSON last given to `engine.update` (re-sending it
 const QUERY = new URLSearchParams(location.search);
 const V3 = !QUERY.has('v2');
 const V4 = V3 && !QUERY.has('v3');
+// UI 2 (lib/ui2.js, in prova): ?ui2 turns it on and remembers it (a home-screen app keeps its own storage: also File > Nuova
+// interfaccia), ?ui1 or its menu turns it off. v4 only.
+if (QUERY.has('ui2')) store.set('fcf_ui2', '1');
+if (QUERY.has('ui1')) store.set('fcf_ui2', null);
+const UI2 = V4 && store.get('fcf_ui2') === '1';
+let ui2 = null;   // its handle once started (end of this file)
 // v3 highlight dodging (Luci auto, lib/dodge.js) changes the scene light before the film: off in v4 (the film alone).
 const DODGE = V3 && !V4;
 let photo = null;           // { file, size: { w, h } of the full decode, preview, after, auto: scanner AutoSetup [d, c, m, y], rot: quarter turns clockwise, ... }
@@ -773,6 +780,7 @@ async function loadPhoto(file) {
  * whose own load was superseded before it got here). */
 function photoUsable() {
   $('export').disabled = $('auto').disabled = $('exportIG').disabled = false;
+  ui2?.photoLoaded();
   $('exportIG').hidden = $('newPhoto').hidden = false;
 }
 
@@ -1082,6 +1090,13 @@ function download(blob, name) {
 // The mat (Bordo bianco, IG canvas) is pure white (user, v4.10): it was the scanner's own paper white, ~244 / 244 / 246 on the
 // Frontier, which read as a grey-blue border; the photo's brightest whites may now look a touch less white beside it.
 const MAT_WHITE = [255, 255, 255];
+/** The export's mat: its width as a fraction of the long side and its colour. UI 2: its border slider (0 = none, % of the long
+ * side) and colour (#borderPct / #borderColor, lib/ui2.js); classic: the switch, BORDER_FRACTION, white. */
+const borderFrac = () => (UI2 && $('borderPct') ? +$('borderPct').value / 100 : $('border').checked ? BORDER_FRACTION : 0);
+const matColour = () => {
+  const h = UI2 && $('borderColor')?.value;
+  return h && /^#[0-9a-f]{6}$/i.test(h) ? [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)) : MAT_WHITE;
+};
 
 // `ig`: Instagram export (v3.27, any orientation): an IG_W × IG_H (3:4) sRGB canvas, the whole photo fitted inside it (mat colour
 // around, so Instagram never crops it), rendered at IG_SUPER × the posted size, then Lanczos-downscaled in linear light and
@@ -1104,7 +1119,7 @@ async function exportFull(ig = false) {
     const rot = photo.rot || 0, turned = rot & 1;
     const fw = rawPv ? rawPv.fullW : turned ? size.h : size.w, fh = rawPv ? rawPv.fullH : turned ? size.w : size.h;
     const c = viewCrop(), cw = fw * c.w, chh = fh * c.h;   // the output frame (Ritaglia) at full resolution
-    const bFrac = $('border').checked ? BORDER_FRACTION : 0;
+    const bFrac = borderFrac(), mat = matColour();
     // IG: the posted image (iw × ih) fits inside the canvas with a bFrac mat; the film renders at IG_SUPER × that.
     const igFit = ig ? fitInside(cw, chh, IG_W, IG_H, Math.round(bFrac * IG_H)) : null;
     const scale = ig ? Math.min(1, IG_SUPER * Math.max(igFit.iw, igFit.ih) / Math.max(cw, chh))
@@ -1156,7 +1171,7 @@ async function exportFull(ig = false) {
     const quality = +$('quality').value, distance = jpegDistance(quality);
     log(`export quality ${quality} (distance ${distance.toFixed(2)})`);
     const igFull = ig ? new Uint8Array(w * h * 3) : null;   // IG: the whole supersampled render, downscaled at the end
-    if (!ig) enc.postMessage({ cmd: 'start', width: w, height: h, distance, progressive, yuv444: 1, border: borderX, borderY, mat: MAT_WHITE });
+    if (!ig) enc.postMessage({ cmd: 'start', width: w, height: h, distance, progressive, yuv444: 1, border: borderX, borderY, mat });
 
     for (let s = 0; s < strips; s++) {
       const ty = s * EXPORT_TILE, ch = Math.min(EXPORT_TILE, h - ty);
@@ -1186,7 +1201,7 @@ async function exportFull(ig = false) {
       status('Esporto IG: ridimensiono e rendo nitido…');
       const { iw, ih } = igFit, small = downscale(igFull, w, h, iw, ih);
       sharpenForScreen(small, iw, ih);
-      const canvas = new Uint8Array(IG_W * IG_H * 3), matRGB = MAT_WHITE;
+      const canvas = new Uint8Array(IG_W * IG_H * 3), matRGB = mat;
       for (let i = 0; i < IG_W * IG_H * 3; i += 3) canvas.set(matRGB, i);
       const ox = (IG_W - iw) >> 1, oy = (IG_H - ih) >> 1;
       for (let y = 0; y < ih; y++) canvas.set(small.subarray(y * iw * 3, (y + 1) * iw * 3), ((oy + y) * IG_W + ox) * 3);
@@ -1492,6 +1507,31 @@ $('resetAll').addEventListener('click', () => {
   if (photo) { drawDustLayer(); render(); }
 });
 $('export').addEventListener('click', () => exportFull());
+// UI 2 (lib/ui2.js): the edit state it snapshots for undo / redo is every slider, the scanner, Raddrizza and the crop; a tool
+// resets to what Azzera impostazioni gives it (the photo's exposure, the film's grain / halation, else 0).
+const UI2_IDS = () => [...Object.keys(FORMAT)];
+if (V4) {
+  $('resetAll').insertAdjacentHTML('afterend', `<button class="btn ghost wide" id="ui2toggle">${UI2 ? 'Interfaccia classica' : 'Prova la nuova interfaccia'}</button>`);
+  $('ui2toggle').addEventListener('click', () => { store.set('fcf_ui2', UI2 ? null : '1'); location.reload(); });
+}
+if (UI2) {
+  ui2 = initUI2({
+    baseOf: (id) => (id === 'ev' ? photo?.autoEv ?? 0 : id in V4_FILM ? V4_FILM[id] : 0),
+    snapshot: () => ({ v: Object.fromEntries(UI2_IDS().map((id) => [id, $(id).value])), tilt: $('tilt').value, crop: { ...crop }, cropFormat, cropPortrait, scanner }),
+    restore: (st) => {
+      for (const [id, v] of Object.entries(st.v)) $(id).value = v;
+      syncOutputs();
+      $('tilt').value = st.tilt; tiltDial.sync();
+      crop = { ...st.crop }; cropPortrait = st.cropPortrait; cropFormat = st.cropFormat;
+      for (const b of document.querySelectorAll('[data-crop-format]')) drawFormat(b, CROP_FORMATS[+b.dataset.cropFormat], cropFormat);
+      $('cropOut').textContent = cropFormat === 'lock' ? 'Bloccato' : formatName(cropFormat);
+      placeCrop(); histoSoon();
+      if (st.scanner !== scanner) setScanner(st.scanner); else if (photo) { drawDustLayer(); render(); }
+    },
+    openTab: (t) => document.querySelector(`#tabs [data-tab="${t}"]`)?.click(),
+    exportFull: (ig) => exportFull(ig),
+  });
+}
 $('exportIG').addEventListener('click', () => exportFull(true));
 $('border').checked = store.get('fcf_border') !== '0';   // on by default
 $('border').addEventListener('change', () => store.set('fcf_border', $('border').checked ? '1' : '0'));

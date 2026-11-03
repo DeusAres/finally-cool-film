@@ -14,6 +14,12 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.17**: **nuova interfaccia, in prova** (File → "Prova la nuova interfaccia", oppure `?ui2`; si torna indietro dal menu
+  cartella): uno slider grande alla volta con nome, valore e Azzera; gli strumenti in fila (un punto arancio su quelli
+  modificati); quattro gruppi, Base / Scanner / Trasforma / Effetti; annulla / ripeti; Esporta apre un pannello con qualità,
+  bordo (slider: 0 = niente bordo) e colore del bordo, poi Foto intera o Instagram, con l'avanzamento. Cambio di gruppo e di
+  strumento con un breve scorrimento sfumato; piccola vibrazione agli scatti degli slider (Android; su iPhone da verificare).
+  L'interfaccia classica non cambia.
 - **v4.16**: **Frontier più fedele al laboratorio vero** (chart reali Color Precision): la curva era rimasta quella di prima del
   cambio di sensore verde della 4.6; rifatta, i bianchi non sono più spenti (a 0 EV −1.3 → −0.1 L*, grigi rms ~2.3 → ~1.8),
   colori invariati in media, anche −3 / +3 / +4 EV migliorano; foto un filo più contrastate e 1-2 L* più scure, come il lab.
