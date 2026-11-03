@@ -14,6 +14,10 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.18**: nuova interfaccia (in prova), dopo la prima prova sull'iPhone: Densità / Luminosità e Magenta / Giallo passano in
+  Scanner (sono chiavi dello scanner; la scelta Nessuno / Frontier / Noritsu è il primo strumento del gruppo), Base tiene
+  camera e pellicola (Esposizione, Luce, Vividezza, Grana, Halation); cambiando strumento si muove solo lo slider, la fila
+  resta ferma; pannello più compatto, la riga di stato in basso diventa un avviso sulla foto.
 - **v4.17**: **nuova interfaccia, in prova** (File → "Prova la nuova interfaccia", oppure `?ui2`; si torna indietro dal menu
   cartella): uno slider grande alla volta con nome, valore e Azzera; gli strumenti in fila (un punto arancio su quelli
   modificati); quattro gruppi, Base / Scanner / Trasforma / Effetti; annulla / ripeti; Esporta apre un pannello con qualità,

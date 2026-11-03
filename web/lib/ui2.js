@@ -8,13 +8,15 @@ const $ = (id) => document.getElementById(id);
 
 // Groups and their tools (input ids, in order). A tool whose row is in a hidden block (the scanner's own rows) is left out.
 const GROUPS = [
-  { id: 'base', name: 'Base', icon: 'base', tools: ['ev', 'labD', 'nbBright', 'temp', 'mshift', 'yshift', 'vibrance', 'grain'] },
-  { id: 'scanner', name: 'Scanner', icon: 'look', tools: ['labGrad', 'labHi', 'labLo', 'labSat', 'labBright', 'htLo', 'htHi', 'hypersharp'] },
+  // Base: the camera and the film (stage boundaries, CLAUDE.md); the scanner's keys (density, colour) are the Scanner's.
+  { id: 'base', name: 'Base', icon: 'base', tools: ['ev', 'temp', 'vibrance', 'grain', 'halation'] },
+  { id: 'scanner', name: 'Scanner', icon: 'look', tools: ['scan', 'labD', 'nbBright', 'mshift', 'yshift', 'labGrad', 'labHi', 'labLo', 'labSat', 'labBright', 'htLo', 'htHi', 'hypersharp'] },
   { id: 'transform', name: 'Trasforma', icon: 'crop', tools: [] },
-  { id: 'effects', name: 'Effetti', icon: 'fx', tools: ['halation', 'texture', 'clarity', 'sharp', 'ca', 'vignette', 'falloff', 'dust'] },
+  { id: 'effects', name: 'Effetti', icon: 'fx', tools: ['texture', 'clarity', 'sharp', 'ca', 'vignette', 'falloff', 'dust'] },
 ];
 // Short names for the strip (the full label, from the row, is the big slider's title).
-const SHORT = { ev: 'Esposiz.', labD: 'Densità', nbBright: 'Luminos.', temp: 'Luce', mshift: 'Magenta', yshift: 'Giallo', vibrance: 'Vividezza',
+const SCANS = ['scanNone', 'scanFrontier', 'scanNoritsu'];
+const SHORT = { scan: 'Scanner', ev: 'Esposiz.', labD: 'Densità', nbBright: 'Luminos.', temp: 'Luce', mshift: 'Magenta', yshift: 'Giallo', vibrance: 'Vividezza',
   grain: 'Grana', labGrad: 'Gradaz.', labHi: 'Luci', labLo: 'Ombre', labSat: 'Saturaz.', labBright: 'Bright', htLo: 'HT ombre',
   htHi: 'HT luci', hypersharp: 'Hyper Sh.', halation: 'Halation', texture: 'Texture', clarity: 'Chiarezza', sharp: 'Nitidezza',
   ca: 'Aberraz.', vignette: 'Vignett.', falloff: 'Falloff', dust: 'Polvere' };
@@ -47,7 +49,7 @@ const I = {
   photo: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/>',
   ig: '<rect x="3.5" y="3.5" width="17" height="17" rx="5"/><circle cx="12" cy="12" r="4"/>',
 };
-const ICON = { ev: 'ev', labD: 'dens', nbBright: 'dens', temp: 'temp', mshift: 'tint', yshift: 'tint', vibrance: 'drop', grain: 'grain',
+const ICON = { scan: 'look', ev: 'ev', labD: 'dens', nbBright: 'dens', temp: 'temp', mshift: 'tint', yshift: 'tint', vibrance: 'drop', grain: 'grain',
   labGrad: 'curve', labHi: 'hi', labLo: 'lo', labSat: 'sat', labBright: 'ev', htLo: 'lo', htHi: 'hi', hypersharp: 'sharp',
   halation: 'glow', texture: 'grain', clarity: 'sat', sharp: 'sharp', ca: 'lens', vignette: 'lens', falloff: 'lens', dust: 'fx' };
 const svg = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[k]}</svg>`;
@@ -92,6 +94,13 @@ export function initUI2(api) {
     <div class="u2slot" id="u2slot"></div>
     <nav class="u2nav">${GROUPS.map((g) => `<button data-g="${g.id}">${svg(g.icon)}<span>${g.name}</span></button>`).join('')}</nav></div>`);
   const slot = $('u2slot');
+  const st = $('status'); $('stage').append(st);
+  let stT = 0;
+  new MutationObserver(() => {
+    const t = st.textContent, quiet = !t || /^\d+×\d+ · /.test(t);
+    st.classList.toggle('show', !quiet); clearTimeout(stT);
+    if (!quiet && !st.dataset.action && !/^Errore|^Export fallito/.test(t)) stT = setTimeout(() => st.classList.remove('show'), 4000);
+  }).observe(st, { childList: true, characterData: true, subtree: true });
   const reduce = matchMedia('(prefers-reduced-motion: reduce)');
 
   // --- undo / redo: a snapshot after every finished edit (slider release, a tap)
@@ -109,11 +118,12 @@ export function initUI2(api) {
 
   // --- tools
   const rowOf = (id) => $(id)?.closest('.row');
-  const visible = (id) => { const r = rowOf(id); return r && !r.hidden && !r.closest('#labRows[hidden],#neutralRows[hidden],#frontierRows[hidden]'); };
+  const scanName = () => $(SCANS.find((b) => $(b)?.getAttribute('aria-checked') === 'true') || SCANS[0])?.textContent.trim() ?? '';
+  const visible = (id) => { if (id === 'scan') return !!$(SCANS[0]); const r = rowOf(id); return r && !r.hidden && !r.closest('#labRows[hidden],#neutralRows[hidden],#frontierRows[hidden]'); };
   const labelOf = (id) => rowOf(id).querySelector('label').textContent.trim();
   const valueOf = (id) => $(id).nextElementSibling?.textContent ?? '';
-  const modified = (id) => Math.abs(+$(id).value - api.baseOf(id)) > 1e-9;
-  let group = 'base', sel = { base: 'ev', scanner: 'htLo', transform: 'tilt', effects: 'halation' };
+  const modified = (id) => id !== 'scan' && Math.abs(+$(id).value - api.baseOf(id)) > 1e-9;
+  let group = 'base', sel = { base: 'ev', scanner: 'scan', transform: 'tilt', effects: 'texture' };
 
   function toolsOf(g) { return GROUPS.find((x) => x.id === g).tools.filter(visible); }
   function chips(ids, cur) {
@@ -121,6 +131,8 @@ export function initUI2(api) {
       ${svg(icon)}<span>${name}</span><span class="v">${val}</span></button>`).join('')}</div>`;
   }
   function sliderPane(id) {
+    if (id === 'scan') return `<div class="u2tool"><div class="u2top"><span class="u2name">Scanner</span></div>
+      <div class="u2seg">${SCANS.filter($).map((b) => `<button data-scan="${b}" class="${$(b).getAttribute('aria-checked') === 'true' ? 'on' : ''}">${$(b).textContent.trim()}</button>`).join('')}</div></div>`;
     const el = $(id), min = +el.min, max = +el.max, base = api.baseOf(id), z = (base - min) / (max - min) * 100;
     const auto = id === 'ev' && $('auto') ? '<button class="u2auto">Auto</button>' : '';
     return `<div class="u2tool"><div class="u2top"><span class="u2name">${labelOf(id)}</span><span class="u2val">${valueOf(id)}</span>${auto}
@@ -137,10 +149,8 @@ export function initUI2(api) {
     }
     const ids = toolsOf(g);
     if (!ids.includes(sel[g])) sel[g] = ids[0];
-    const seg = g === 'scanner' ? `<div class="u2seg">${['scanNone', 'scanFrontier', 'scanNoritsu'].filter($).map((b) =>
-      `<button data-scan="${b}" class="${$(b).getAttribute('aria-checked') === 'true' ? 'on' : ''}">${$(b).textContent.trim()}</button>`).join('')}</div>` : '';
-    return seg + (sel[g] ? sliderPane(sel[g]) : '<div class="u2tool u2none">Nessun controllo per questo scanner</div>') +
-      chips(ids.map((id) => [id, SHORT[id] || labelOf(id), ICON[id] || 'base', modified(id) ? valueOf(id) : '', modified(id)]), sel[g]);
+    return (sel[g] ? sliderPane(sel[g]) : '<div class="u2tool u2none">Nessun controllo per questo scanner</div>') +
+      chips(ids.map((id) => [id, SHORT[id] || labelOf(id), ICON[id] || 'base', id === 'scan' ? scanName() : modified(id) ? valueOf(id) : '', modified(id)]), sel[g]);
   }
 
   // the transform blocks of the classic pane (ruler, crop formats) move into UI 2 and back on demand: their listeners stay
@@ -153,15 +163,34 @@ export function initUI2(api) {
       const t = b.dataset.t;
       if (t === 'rotL' || t === 'rotR') { $(t).click(); haptic(); setTimeout(commit, 50); return; }
       if (sel[g] === t) return;
-      sel[g] = t; haptic(); draw(true, 0, TOOL_MS);
+      sel[g] = t; haptic(); swapTool(pg, g);
     });
-    pg.querySelectorAll('[data-scan]').forEach((b) => b.onclick = () => { $(b.dataset.scan).click(); haptic(); setTimeout(() => { draw(false); commit(); }, 60); });
     if (g === 'transform') {
       const host = q('.u2tr');
       park.append(tiltBlock, cropBlock);   // both back first, then the selected one in
       host.append(sel.transform === 'crop' ? cropBlock : tiltBlock);
       return;
     }
+    wireTool(g, pg);
+  }
+  // within a group: the slider area alone slides (TOOL_MS, half the move), the strip keeps its place and scroll
+  function swapTool(pg, g) {
+    pg.querySelectorAll('.u2t').forEach((b) => b.classList.toggle('on', b.dataset.t === sel[g]));
+    pg.querySelector(`.u2t[data-t="${sel[g]}"]`)?.scrollIntoView({ behavior: reduce.matches ? 'auto' : 'smooth', block: 'nearest', inline: 'nearest' });
+    const old = pg.querySelector('.u2tool'), tmp = document.createElement('div');
+    tmp.innerHTML = g === 'transform' ? '<div class="u2tool u2tr"></div>' : sliderPane(sel[g]);
+    const nu = tmp.firstElementChild;
+    old.after(nu); old.classList.add('u2out');
+    if (g === 'transform') { park.append(tiltBlock, cropBlock); nu.append(sel.transform === 'crop' ? cropBlock : tiltBlock); }
+    else wireTool(g, pg);
+    const dx = reduce.matches ? 0 : SLIDE_PX / 2, blur = reduce.matches ? 0 : BLUR_PX / 2;
+    const opt = { duration: TOOL_MS, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'forwards' };
+    old.animate([{ opacity: 1, filter: 'none' }, { opacity: 0, filter: `blur(${blur}px)` }], opt).onfinish = () => old.remove();
+    nu.animate([{ transform: `translateX(${dx}px)`, filter: `blur(${blur}px)`, opacity: 0 }, { transform: 'none', filter: 'none', opacity: 1 }], opt);
+  }
+  function wireTool(g, pg) {
+    const q = (s) => pg.querySelector(`.u2tool:not(.u2out) ${s}`) || pg.querySelector(`.u2tool:last-of-type ${s}`);
+    pg.querySelectorAll('.u2tool:not(.u2out) [data-scan]').forEach((b) => b.onclick = () => { $(b.dataset.scan).click(); haptic(); setTimeout(() => { draw(false); commit(); }, 60); });
     const id = sel[g], r = q('.u2range');
     if (!r) return;
     const el = $(id), min = +el.min, max = +el.max, base = api.baseOf(id);
@@ -175,7 +204,7 @@ export function initUI2(api) {
       el.value = v; el.dispatchEvent(new Event('input', { bubbles: true }));
       q('.u2val').textContent = valueOf(id);
       q('.u2reset').disabled = !modified(id);
-      const chip = q(`.u2t[data-t="${id}"]`);
+      const chip = pg.querySelector(`.u2t[data-t="${id}"]`);
       chip.classList.toggle('mod', modified(id)); chip.querySelector('.v').textContent = modified(id) ? valueOf(id) : '';
     };
     r.onchange = () => { el.dispatchEvent(new Event('change', { bubbles: true })); commit(); };
@@ -309,18 +338,19 @@ export function initUI2(api) {
 
 const CSS = `
 body.ui2 #tabs, body.ui2 #controls, body.ui2 #grip, body.ui2 header .ver { display: none !important; }
-body.ui2 header { display: flex; align-items: center; gap: 4px; }
+body.ui2 header { display: flex; align-items: center; gap: 4px; height: 40px; }
 body.ui2 header h1 { flex: 1; font-size: 11px; }
 .u2head { display: flex; align-items: center; gap: 2px; }
-.u2ib { height: 38px; min-width: 40px; border: 0; background: none; color: var(--fg); border-radius: 10px; display: grid; place-items: center; padding: 0 8px; }
+.u2ib { height: 34px; min-width: 38px; border: 0; background: none; color: var(--fg); border-radius: 10px; display: grid; place-items: center; padding: 0 8px; }
 .u2ib svg { width: 22px; height: 22px; }
 .u2ib:disabled { color: #514a43; }
 .u2pri { background: var(--accent); color: #1a1307; display: flex; gap: 6px; font-weight: 600; font-size: 15px; margin-left: 4px; }
 body.ui2 #histo { left: auto; right: 8px; }
 #u2 { flex: none; background: var(--card); border-top: 1px solid var(--line); }
-.u2slot { position: relative; overflow: hidden; height: 208px; }
-.u2page { position: absolute; inset: 0; padding-top: 10px; }
-.u2tool { padding: 2px 16px 6px; min-height: 76px; }
+.u2slot { position: relative; overflow: hidden; height: 196px; }
+.u2page { position: absolute; inset: 0; padding-top: 10px; display: flex; flex-direction: column; }
+.u2tool { padding: 2px 16px 0; height: 102px; position: relative; }
+.u2tool.u2out { position: absolute; left: 0; right: 0; top: 10px; }
 .u2top { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
 .u2name { font-size: 15px; font-weight: 600; }
 .u2val { font: 500 15px ui-monospace, Menlo, monospace; color: var(--accent); }
@@ -341,12 +371,15 @@ body.ui2 #histo { left: auto; right: 8px; }
 .u2t.on { background: #2a2520; color: var(--fg); }
 .u2t.mod::after { content: ""; position: absolute; top: 6px; right: 12px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 .u2t .v { font: 10.5px ui-monospace, Menlo, monospace; color: var(--accent); height: 12px; white-space: nowrap; max-width: 64px; overflow: hidden; text-overflow: ellipsis; }
-.u2seg { display: flex; margin: 0 16px 8px; background: #0f0e0d; border-radius: 11px; padding: 3px; }
+.u2seg { display: flex; margin: 6px 0 0; background: #0f0e0d; border-radius: 11px; padding: 3px; }
 .u2seg button { flex: 1; border: 0; background: none; color: var(--muted); padding: 7px 0; border-radius: 9px; font: 500 14px -apple-system, system-ui, sans-serif; }
 .u2seg button.on { background: #2f2923; color: var(--fg); }
-.u2tr { padding-top: 0; }
+.u2tr { padding-top: 0; overflow: hidden; }
 .u2tr .tilt, .u2tr .crop { margin: 0; }
-.u2nav { display: flex; border-top: 1px solid var(--line); padding: 4px 6px calc(6px + env(safe-area-inset-bottom)); }
+.u2nav { display: flex; border-top: 1px solid var(--line); padding: 2px 6px max(4px, calc(env(safe-area-inset-bottom) - 16px)); }
+body.ui2 #status { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); max-width: calc(100% - 180px); padding: 6px 12px; border-radius: 999px;
+  background: rgba(14,13,12,.78); backdrop-filter: blur(8px); color: var(--fg); min-height: 0; z-index: 3; opacity: 0; pointer-events: none; transition: opacity .2s; }
+body.ui2 #status.show { opacity: 1; pointer-events: auto; }
 .u2nav button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; border: 0; background: none; color: var(--muted); font: 11px -apple-system, system-ui, sans-serif; padding: 5px 0; }
 .u2nav button svg { width: 23px; height: 23px; }
 .u2nav button.on { color: var(--accent); }
