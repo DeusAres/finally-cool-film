@@ -54,9 +54,12 @@ const ICON = { scan: 'look', ev: 'ev', labD: 'dens', nbBright: 'dens', temp: 'te
   halation: 'glow', texture: 'grain', clarity: 'sat', sharp: 'sharp', ca: 'lens', vignette: 'lens', falloff: 'lens', dust: 'fx' };
 const svg = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[k]}</svg>`;
 
-// Motion: tab / tool changes slide SLIDE_PX with a BLUR_PX blur, SLIDE_MS (a tool within a group: TOOL_MS, half the move),
-// eased out; "Riduci movimento" keeps only the fade. Choices (user: "scorrimento con uso del blur", short).
-const SLIDE_PX = 36, BLUR_PX = 8, SLIDE_MS = 200, TOOL_MS = 120;
+// Motion: a group / tool change slides the content the way the selection moved (FLOW +1, user: from a tab on the left to one
+// on the right the content goes left -> right, "si vede che si sposta"; -1 would be the carousel convention), by a share of
+// the panel's width (groups SLIDE_W, a tool's title + slider TOOL_W) with a blur (BLUR_PX, half for a tool), eased out;
+// "Riduci movimento" keeps only the fade. Choices.
+const FLOW = 1, SLIDE_W = 0.35, TOOL_W = 0.25, BLUR_PX = 6, SLIDE_MS = 260, TOOL_MS = 200;
+const EASE = 'cubic-bezier(.2,.8,.2,1)';
 // Export: border 0..BORDER_MAX % of the long side (0 = off), swatches; the app reads #borderPct / #borderColor (app.js).
 const BORDER_MAX = 10, BORDER_STEP = 0.5, SWATCHES = ['#ffffff', '#f3ead8', '#d9d4cc', '#111111'];
 
@@ -171,7 +174,8 @@ export function initUI2(api) {
       const t = b.dataset.t;
       if (t === 'rotL' || t === 'rotR') { $(t).click(); haptic(); setTimeout(commit, 50); return; }
       if (sel[g] === t) return;
-      sel[g] = t; haptic(); swapTool(pg, g);
+      const ids = [...pg.querySelectorAll('.u2t')].map((x) => x.dataset.t), dir = Math.sign(ids.indexOf(t) - ids.indexOf(sel[g]));
+      sel[g] = t; haptic(); swapTool(pg, g, dir);
     });
     if (g === 'transform') {
       const host = q('.u2tr');
@@ -181,8 +185,15 @@ export function initUI2(api) {
     }
     wireTool(g, pg);
   }
-  // within a group: the slider area alone slides (TOOL_MS, half the move), the strip keeps its place and scroll
-  function swapTool(pg, g) {
+  // `old` out and `nu` in, sliding `dir` (+1: the selection moved right) by `w` of the panel's width
+  function slide(old, nu, dir, w, blur, ms) {
+    const dx = reduce.matches ? 0 : FLOW * dir * w * slot.clientWidth, b = reduce.matches ? 0 : blur;
+    const opt = { duration: reduce.matches ? 120 : ms, easing: EASE, fill: 'forwards' };
+    old.animate([{ transform: 'none', filter: 'none', opacity: 1 }, { transform: `translateX(${dx}px)`, filter: `blur(${b}px)`, opacity: 0 }], opt);
+    return nu.animate([{ transform: `translateX(${-dx}px)`, filter: `blur(${b}px)`, opacity: 0 }, { transform: 'none', filter: 'none', opacity: 1 }], opt);
+  }
+  // within a group: the title and slider slide, the strip keeps its place and scroll
+  function swapTool(pg, g, dir) {
     pg.querySelectorAll('.u2t').forEach((b) => b.classList.toggle('on', b.dataset.t === sel[g]));
     pg.querySelector(`.u2t[data-t="${sel[g]}"]`)?.scrollIntoView({ behavior: reduce.matches ? 'auto' : 'smooth', block: 'nearest', inline: 'nearest' });
     const old = pg.querySelector('.u2tool'), tmp = document.createElement('div');
@@ -191,10 +202,7 @@ export function initUI2(api) {
     old.after(nu); old.classList.add('u2out');
     if (g === 'transform') { park.append(tiltBlock, cropBlock); nu.append(sel.transform === 'crop' ? cropBlock : tiltBlock); }
     else wireTool(g, pg);
-    const dx = reduce.matches ? 0 : SLIDE_PX / 2, blur = reduce.matches ? 0 : BLUR_PX / 2;
-    const opt = { duration: TOOL_MS, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'forwards' };
-    old.animate([{ opacity: 1, filter: 'none' }, { opacity: 0, filter: `blur(${blur}px)` }], opt).onfinish = () => old.remove();
-    nu.animate([{ transform: `translateX(${dx}px)`, filter: `blur(${blur}px)`, opacity: 0 }, { transform: 'none', filter: 'none', opacity: 1 }], opt);
+    slide(old, nu, dir, TOOL_W, BLUR_PX / 2, TOOL_MS).onfinish = () => old.remove();
   }
   function wireTool(g, pg) {
     const q = (s) => pg.querySelector(`.u2tool:not(.u2out) ${s}`) || pg.querySelector(`.u2tool:last-of-type ${s}`);
@@ -230,11 +238,8 @@ export function initUI2(api) {
     nu.className = 'u2page'; nu.innerHTML = html;
     slot.append(nu); wire(group, nu); syncNav();
     if (!old) return;
-    const dx = reduce.matches ? 0 : dir ? SLIDE_PX * dir : SLIDE_PX / 2, blur = reduce.matches ? 0 : BLUR_PX;
     old.classList.add('u2out');
-    const opt = { duration: reduce.matches ? 120 : ms, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'forwards' };
-    old.animate([{ transform: 'none', filter: 'none', opacity: 1 }, { transform: `translateX(${-dx}px)`, filter: `blur(${blur}px)`, opacity: 0 }], opt);
-    const an = nu.animate([{ transform: `translateX(${dx}px)`, filter: `blur(${blur}px)`, opacity: 0 }, { transform: 'none', filter: 'none', opacity: 1 }], opt);
+    const an = slide(old, nu, dir, SLIDE_W, BLUR_PX, ms);
     clearTimeout(busy);
     an.onfinish = () => { old.remove(); nu.style.filter = ''; };
     busy = setTimeout(() => old.isConnected && old.remove(), ms + 60);
