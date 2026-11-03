@@ -1517,8 +1517,11 @@ if (V4) {
 if (UI2) {
   ui2 = initUI2({
     baseOf: (id) => (id === 'ev' ? photo?.autoEv ?? 0 : id in V4_FILM ? V4_FILM[id] : 0),
-    snapshot: () => ({ v: Object.fromEntries(UI2_IDS().map((id) => [id, $(id).value])), tilt: $('tilt').value, crop: { ...crop }, cropFormat, cropPortrait, scanner }),
-    restore: (st) => {
+    snapshot: () => ({ v: Object.fromEntries(UI2_IDS().map((id) => [id, $(id).value])), tilt: $('tilt').value, crop: { ...crop }, cropFormat, cropPortrait, scanner, rot: photo?.rot ?? 0 }),
+    restore: async (st) => {
+      // the 90° turn first (it turns the crop with it), then the crop as it was in that turn
+      const q = photo ? (st.rot - photo.rot + 4) & 3 : 0;
+      if (q) await rotate(q === 3 ? -1 : q);
       for (const [id, v] of Object.entries(st.v)) $(id).value = v;
       syncOutputs();
       $('tilt').value = st.tilt; tiltDial.sync();
@@ -1529,6 +1532,7 @@ if (UI2) {
       if (st.scanner !== scanner) setScanner(st.scanner); else if (photo) { drawDustLayer(); render(); }
     },
     openTab: (t) => document.querySelector(`#tabs [data-tab="${t}"]`)?.click(),
+    rotate: (q) => rotate(q),
     exportFull: (ig) => exportFull(ig),
   });
 }

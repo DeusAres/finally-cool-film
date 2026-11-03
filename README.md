@@ -16,7 +16,8 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 - **v4.24**: **luci sature più morbide** (LED, palchi): i colori appena fuori dal gamut vengono riportati dentro gradualmente
   mantenendo la tinta, invece di essere tagliati (i raggi blu del concerto sfumano verso il bianco-azzurro). Soglia alta: le
-  foto normali del check non cambiano. Pulizia: tolto dal motore il vecchio Hyper Tone a densità (non più usato da 4.9).
+  foto normali del check non cambiano. Pulizia: tolto dal motore il vecchio Hyper Tone a densità (non più usato da 4.9). Nuova interfaccia: annulla / ripeti
+  anche per le rotazioni di 90°.
 - **v4.23**: nuova interfaccia: i tempi di render tornano visibili (in alto a sinistra sulla foto; un tocco apre il log).
   Vibrazione: iOS la permette solo dentro un tocco, non durante il trascinamento: lo slider fa un tick al rilascio; nel menu
   cartella c'è una prova (interruttore di iOS e tick dell'app) per capire se il telefono la blocca.

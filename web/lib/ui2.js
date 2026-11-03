@@ -85,8 +85,9 @@ const haptic = (() => {
 })();
 
 /**
- * Start UI 2. `api`: { baseOf(id): the value a tool resets to; snapshot(): the edit state; restore(s); openTab(name): the
- * classic tab whose side effects a group needs ('transform': the crop overlay, else 'film'); exportFull(ig) }.
+ * Start UI 2. `api`: { baseOf(id): the value a tool resets to; snapshot(): the edit state; restore(s) (async: a 90° turn);
+ * openTab(name): the classic tab whose side effects a group needs ('transform': the crop overlay, else 'film'); rotate(q):
+ * a quarter turn (resolves when done); exportFull(ig) }.
  */
 export function initUI2(api) {
   document.body.classList.add('ui2');
@@ -124,7 +125,7 @@ export function initUI2(api) {
     if (JSON.stringify(s) === JSON.stringify(hist[at])) return;
     hist = hist.slice(0, at + 1); hist.push(s); at = hist.length - 1; syncUndo();
   };
-  const go = (d) => { const n = at + d; if (n < 0 || n >= hist.length) return; at = n; api.restore(hist[at]); syncUndo(); draw(false); };
+  const go = async (d) => { const n = at + d; if (n < 0 || n >= hist.length) return; at = n; syncUndo(); await api.restore(hist[at]); draw(false); };
   $('u2undo').onclick = () => go(-1);
   $('u2redo').onclick = () => go(1);
   syncUndo();
@@ -174,7 +175,7 @@ export function initUI2(api) {
     const q = (sel) => pg.querySelector(sel);
     pg.querySelectorAll('.u2t').forEach((b) => b.onclick = () => {
       const t = b.dataset.t;
-      if (t === 'rotL' || t === 'rotR') { $(t).click(); haptic(); setTimeout(commit, 50); return; }
+      if (t === 'rotL' || t === 'rotR') { haptic(); Promise.resolve(api.rotate(t === 'rotL' ? -1 : 1)).then(commit); return; }
       if (sel[g] === t) return;
       const ids = [...pg.querySelectorAll('.u2t')].map((x) => x.dataset.t), dir = Math.sign(ids.indexOf(t) - ids.indexOf(sel[g]));
       sel[g] = t; haptic(); swapTool(pg, g, dir);
