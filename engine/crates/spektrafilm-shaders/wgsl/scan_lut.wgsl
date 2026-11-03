@@ -5,8 +5,6 @@
 // uniformly over [data_min, data_max]. Trilinear lookup, then sRGB decode so
 // the rest of the chain (blur, unsharp, gamut, output encoding) is unchanged.
 // `frontier::trilinear_reference` is the same maths in Rust (parity test).
-// Hyper Tone (`hyper.on` = 1): before the lookup the density moves by `gain * map(frame position)`
-// (spektrafilm-gpu `hyper_map` is the same sampling in Rust, used by the CPU scan).
 
 struct Params {
     width: u32,
@@ -21,34 +19,6 @@ struct Params {
 @group(0) @binding(1) var<storage, read> density_cmy: array<f32>;      // [H*W*3]
 @group(0) @binding(2) var<storage, read> lut: array<f32>;              // [steps^3*3], r-major
 @group(0) @binding(3) var<storage, read_write> output_rgb: array<f32>; // [H*W*3]
-
-struct Hyper {
-    map_w: u32,
-    map_h: u32,
-    on: u32,
-    pad: u32,
-    origin_frame: vec4<f32>,   // xy: this render's top-left in the frame (px), zw: the frame size (px)
-    gain: vec4<f32>,           // x: density per map EV where the map is positive (lights), y: negative (shadows)
-    toe: vec4<f32>,            // xy: the stock's toe as area exposure (EV: deep, end), z: the red layer's shortfall, w: dead_ev
-}
-@group(0) @binding(4) var<uniform> hyper: Hyper;
-@group(0) @binding(5) var<storage, read> hyper_map_data: array<f32>;   // [map_h*map_w]
-
-fn hyper_map(x: u32, y: u32) -> f32 {
-    let mw = f32(hyper.map_w);
-    let mh = f32(hyper.map_h);
-    let fx = clamp((hyper.origin_frame.x + f32(x) + 0.5) / hyper.origin_frame.z * mw - 0.5, 0.0, mw - 1.0);
-    let fy = clamp((hyper.origin_frame.y + f32(y) + 0.5) / hyper.origin_frame.w * mh - 0.5, 0.0, mh - 1.0);
-    let x0 = u32(floor(fx));
-    let y0 = u32(floor(fy));
-    let x1 = min(x0 + 1u, hyper.map_w - 1u);
-    let y1 = min(y0 + 1u, hyper.map_h - 1u);
-    let tx = fx - f32(x0);
-    let ty = fy - f32(y0);
-    let top = hyper_map_data[y0 * hyper.map_w + x0] * (1.0 - tx) + hyper_map_data[y0 * hyper.map_w + x1] * tx;
-    let bot = hyper_map_data[y1 * hyper.map_w + x0] * (1.0 - tx) + hyper_map_data[y1 * hyper.map_w + x1] * tx;
-    return top * (1.0 - ty) + bot * ty;
-}
 
 fn node(i: u32, j: u32, k: u32) -> vec3<f32> {
     let b = ((i * params.steps + j) * params.steps + k) * 3u;
@@ -69,20 +39,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let base = pixel_idx * 3u;
-    var cmy = vec3<f32>(density_cmy[base], density_cmy[base + 1u], density_cmy[base + 2u]);
-    if hyper.on == 1u {
-        // spektrafilm-gpu `hyper_apply`: the lift of an area fades into the toe (voids stay), its red share cooler there
-        let m = hyper_map(pixel_idx % params.width, pixel_idx / params.width);
-        var d = m * select(hyper.gain.y, hyper.gain.x, m > 0.0);   // spektrafilm-gpu hyper_delta
-        var r = d;
-        if d > 0.0 && hyper.toe.y > hyper.toe.x {
-            let t0 = clamp((m - hyper.toe.w - hyper.toe.x) / (hyper.toe.y - hyper.toe.x), 0.0, 1.0);
-            let tt = t0 * t0 * (3.0 - 2.0 * t0);
-            d = d * tt;
-            r = d * (1.0 - hyper.toe.z * (1.0 - tt));
-        }
-        cmy = cmy + vec3<f32>(r, d, d);
-    }
+    let cmy = vec3<f32>(density_cmy[base], density_cmy[base + 1u], density_cmy[base + 2u]);
     let top = f32(params.steps - 1u);
     let p = clamp((cmy - params.data_min.xyz) * params.inv.xyz, vec3<f32>(0.0), vec3<f32>(top));
     let i0 = min(vec3<u32>(floor(p)), vec3<u32>(params.steps - 2u));
