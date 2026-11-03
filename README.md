@@ -14,6 +14,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.22**: **luci LED blu**: un blu fuori gamut (rosso e verde negativi dopo la matrice colore) usciva come un buco nero
+  (concerto IDG_20261028_204614_966, il palco). I negativi oltre il rumore del sensore ora sono tagliati come prima della
+  4.15; quelli del rumore vicino al nero restano (niente velo blu). Le altre foto del check non cambiano.
 - **v4.21**: nuova interfaccia: lo scorrimento segue la direzione, sia tra i gruppi sia tra gli strumenti (verso destra il
   contenuto scorre da sinistra a destra, e viceversa), più ampio e visibile; per gli strumenti si spostano titolo e slider.
 - **v4.20**: nuova interfaccia: in Scanner, Magenta e Giallo in fondo alla fila.
