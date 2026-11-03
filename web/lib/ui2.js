@@ -280,8 +280,10 @@ export function initUI2(api) {
     <button class="u2go" id="u2resetall">${svg('reset')}<span><b>Azzera tutte le modifiche</b><i>torna alla pellicola com'è</i></span></button>
     <button class="u2go" id="u2classic">${svg('base')}<span><b>Interfaccia classica</b><i>la nuova è in prova</i></span></button>
     <div class="u2hap"><label><input type="checkbox" switch> Interruttore di iOS</label><button id="u2hapt">Tick dell'app</button>
-      <i>Prova vibrazione: se l'interruttore vibra e il tick no, iOS blocca la vibrazione da script; se non vibra nemmeno
-      l'interruttore, è spenta in Impostazioni › Suoni e feedback aptico.</i></div>
+      <span class="u2ov">A<input type="checkbox" switch style="opacity:0"></span><span class="u2ov">B<input type="checkbox" switch style="opacity:.02;-webkit-appearance:none;appearance:none"></span>
+      <i>Prova vibrazione: l'interruttore vibra, il tick dell'app no (iOS blocca la vibrazione da script). A e B sono pulsanti
+      con sopra un interruttore vero trasparente (A invisibile, B quasi invisibile e senza il disegno di iOS): se uno dei due vibra, la vibrazione si può
+      dare a icone, schede e pulsanti.</i></div>
     <p class="u2credits">${document.querySelector('.credits')?.innerHTML || ''}</p>`, (s) => {
     s.querySelector('#u2open').onclick = () => { close(); $('pick').click(); };
     s.querySelector('#u2resetall').onclick = () => { $('resetAll').click(); commit(); draw(false); close(); };
@@ -437,6 +439,8 @@ body.ui2 #status:empty { display: none; }
 .u2hap { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 12px; padding: 12px 14px; border: 1px solid #3a342e; border-radius: 14px; font-size: 14px; }
 .u2hap label { display: flex; align-items: center; gap: 8px; } .u2hap input { width: 44px; height: 26px; }
 .u2hap button { margin-left: auto; border: 1px solid #3a342e; background: #24211d; color: var(--fg); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px; }
+.u2ov { position: relative; display: inline-grid; place-items: center; width: 44px; height: 32px; border: 1px solid #3a342e; border-radius: 999px; background: #24211d; font-weight: 600; }
+.u2ov input { position: absolute; inset: 0; width: 100% !important; height: 100% !important; margin: 0; cursor: pointer; }
 .u2hap i { flex-basis: 100%; font-style: normal; font-size: 12px; color: var(--muted); }
 .u2credits { font-size: 11.5px; color: var(--muted); margin: 16px 0 0; }
 .u2credits a { color: var(--muted); }

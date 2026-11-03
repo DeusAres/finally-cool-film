@@ -14,6 +14,8 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.25**: nuova interfaccia: nel menu cartella due pulsanti di prova (A, B) per capire se iOS vibra con un interruttore
+  trasparente sotto il dito (lo switch vero vibra, il tick da script no).
 - **v4.24**: **luci sature più morbide** (LED, palchi): i colori appena fuori dal gamut vengono riportati dentro gradualmente
   mantenendo la tinta, invece di essere tagliati (i raggi blu del concerto sfumano verso il bianco-azzurro). Soglia alta: le
   foto normali del check non cambiano. Pulizia: tolto dal motore il vecchio Hyper Tone a densità (non più usato da 4.9). Nuova interfaccia: annulla / ripeti
