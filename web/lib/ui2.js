@@ -10,7 +10,7 @@ const $ = (id) => document.getElementById(id);
 const GROUPS = [
   // Base: the camera and the film (stage boundaries, CLAUDE.md); the scanner's keys (density, colour) are the Scanner's.
   { id: 'base', name: 'Base', icon: 'base', tools: ['ev', 'temp', 'vibrance', 'grain', 'halation'] },
-  { id: 'scanner', name: 'Scanner', icon: 'look', tools: ['scan', 'labD', 'nbBright', 'mshift', 'yshift', 'labGrad', 'labHi', 'labLo', 'labSat', 'labBright', 'htLo', 'htHi', 'hypersharp'] },
+  { id: 'scanner', name: 'Scanner', icon: 'look', tools: ['scan', 'labD', 'nbBright', 'labGrad', 'labHi', 'labLo', 'labSat', 'labBright', 'htLo', 'htHi', 'hypersharp', 'mshift', 'yshift'] },
   { id: 'transform', name: 'Trasforma', icon: 'crop', tools: [] },
   { id: 'effects', name: 'Effetti', icon: 'fx', tools: ['texture', 'clarity', 'sharp', 'ca', 'vignette', 'falloff', 'dust'] },
 ];

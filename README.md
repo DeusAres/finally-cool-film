@@ -14,6 +14,7 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.20**: nuova interfaccia: in Scanner, Magenta e Giallo in fondo alla fila.
 - **v4.19**: nuova interfaccia: in Ritaglia i formati si vedono di nuovo per intero; dall'app sulla Home la pagina occupa
   tutto lo schermo (iOS la faceva più corta: restava una fascia vuota sotto le schede).
 - **v4.18**: nuova interfaccia (in prova), dopo la prima prova sull'iPhone: Densità / Luminosità e Magenta / Giallo passano in
