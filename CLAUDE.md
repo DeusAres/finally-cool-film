@@ -6,6 +6,8 @@ The user writes Italian; answer in Italian, short, human bullet points.
 ## Branches and publishing
 - `claude/spektrafilm-mobile-web-har40e` is the deploy branch (GitHub Pages). There is no `main`.
 - Work on a side branch; publish (push to the deploy branch, bump `VERSION`) only with the user's explicit OK for that release.
+- When a release is ready to publish, ask for that OK with a push notification too (user, 2026-11-03), and notify again
+  once GitHub Pages serves it (~3-4 min after the push).
 - v4 is the default app since 4.0 (user's decision, without the planned blind test); v3 stays at `index.html?v3`.
   Work on `claude/v4`.
 
