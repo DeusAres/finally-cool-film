@@ -35,6 +35,15 @@ const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
 // (the floor is the read noise, under the shot noise a little above it).
 // Night frame at Ombre 5 (dark crowd, output levels): luminance noise sigma 28.7 -> 9.1, colour 15.5 -> 5.1, its blue cast
 // (R G B 40 51 97 -> 22 26 23) gone; with these and the denoised map (hypertone.js, raw.js rawThumb). Ombre 0: 6.3 -> 4.7.
+// Gamut compression (inGamut in the input pass): the ACES Reference Gamut Compression curve (ACES 1.3, 2021: per channel the
+// distance from the achromatic, compressed beyond a threshold so that a limit lands on the gamut edge; power 1.2, ACES's).
+// Its own thresholds (0.80-0.88) would desaturate real colours: the samples' distances (Rec.2020, preview) are above 0.8 for
+// 29 % of the autumn frame IDG_20261029_161142_237 and 46 % of the tungsten interior IDG_20261024_153100_228, above 0.95 for
+// 0-1.2 % of the daylight / interior frames (autumn 4.7 %). So threshold 0.95; limit 1.35 covers the LED concert frame
+// IDG_20261028_204614_966 (99.9th percentile 1.24); beyond it (the night crowd, the pub: up to 2-5) the clamp remains.
+const GAMUT_THR = [0.95, 0.95, 0.95], GAMUT_LIM = [1.35, 1.35, 1.35], GAMUT_POWER = 1.2;
+/** The RGC scale that maps distance `lim` onto 1 (the gamut edge) for threshold `thr`. */
+const rgcScale = (thr, lim) => (lim - thr) / Math.pow(Math.pow((1 - thr) / (lim - thr), -GAMUT_POWER) - 1, 1 / GAMUT_POWER);
 const CHROMA_R1 = 1.5, CHROMA_R2 = 3.0, CHROMA_K = 8.0, CHROMA_LIFT_UM = 120, NR_Y_MIN = 1e-5, NR_GRID = 4, NR_PITCH = 2;
 const NR_KEEP = [3, 6];
 // Texture = micro-contrast: scale (µm), range k (per stop²), midtone width (stops), strength at ±1.
@@ -166,9 +175,24 @@ fn src(pos: vec2<f32>) -> vec2<f32> {          // Raddrizza + Ritaglia: output f
 }
 // The signed frame (dng.js) below 0: within NOISE_FLOOR_SIGMAS of each channel's noise floor it is noise around black and
 // stays (averaged by the reduction below); further down it is a colour outside the primaries (a blue LED: R and G at -0.05 on
-// the concert frame IDG_20261028_204614_966, its luminance negative, printed as a black hole): clamped there, as the decode
-// did before 4.15. No noise floor (JPEG): clamped at 0.
-fn inGamut(c: vec3<f32>) -> vec3<f32> { return max(c, -${wf(NOISE_FLOOR_SIGMAS)} * p.nr.yzw); }
+// the concert frame IDG_20261028_204614_966, its luminance negative, printed as a black hole). A colour (its largest channel
+// above the noise floor) is first brought inside by a gamut compression (GAMUT_*: per channel, the distance from the achromatic
+// max(R,G,B) beyond a threshold is compressed so the limit lands on the gamut edge; hue kept), then what is still below the
+// floor is clamped (as the decode did before 4.15). No noise floor (JPEG): in gamut already, clamped at 0.
+fn rgcAxis(d: f32, thr: f32, s: f32) -> f32 {
+  if (d < thr) { return d; }
+  let x = (d - thr) / s;
+  return thr + s * x / pow(1.0 + pow(x, ${wf(GAMUT_POWER)}), ${wf(1 / GAMUT_POWER)});
+}
+fn inGamut(c: vec3<f32>) -> vec3<f32> {
+  let a = max(c.r, max(c.g, c.b));
+  var o = c;
+  if (a > ${wf(NOISE_FLOOR_SIGMAS)} * max(p.nr.y, max(p.nr.z, p.nr.w)) && a > 0.0) {
+    let d = (vec3<f32>(a) - c) / a;
+    o = vec3<f32>(a) - a * vec3<f32>(${GAMUT_THR.map((t, i) => `rgcAxis(d.${'rgb'[i]}, ${wf(t)}, ${wf(rgcScale(t, GAMUT_LIM[i]))})`).join(', ')});
+  }
+  return max(o, -${wf(NOISE_FLOOR_SIGMAS)} * p.nr.yzw);
+}
 fn chromaLift(pos: vec2<f32>) -> f32 { return 0.0; }   // EV of light added here (INPUT_WGSL_HT: Hyper Tone's), for the colour-noise rings
 fn at(pos: vec2<f32>) -> vec4<f32> {           // pos in (output) frame pixel coords (pixel centres at integers)
   return textureSampleLevel(tex, smp, (src(pos) + 0.5) / p.xf.zw, 0.0);
