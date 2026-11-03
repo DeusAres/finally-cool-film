@@ -82,6 +82,14 @@ const haptic = (() => {
  */
 export function initUI2(api) {
   document.body.classList.add('ui2');
+  // Home-screen app (standalone, black-translucent status bar): iOS sizes 100dvh short of the screen by the top inset (the
+  // user's iPhone 17 Pro Max: ~62 pt of empty bar under the tabs); the page takes the whole screen there.
+  const fitScreen = () => {
+    if (!(navigator.standalone || matchMedia('(display-mode: standalone)').matches)) return;
+    // the whole screen, whatever 100dvh and innerHeight report there (the panel then sits on the bottom edge)
+    document.documentElement.style.height = document.body.style.height = `${innerWidth < innerHeight ? screen.height : screen.width}px`;
+  };
+  fitScreen(); addEventListener('resize', fitScreen);
   document.head.insertAdjacentHTML('beforeend', `<style>${CSS}</style>`);
   const controls = $('controls');
   // header: open / menu, undo, redo, Esporta
@@ -375,6 +383,8 @@ body.ui2 #histo { left: auto; right: 8px; }
 .u2seg button { flex: 1; border: 0; background: none; color: var(--muted); padding: 7px 0; border-radius: 9px; font: 500 14px -apple-system, system-ui, sans-serif; }
 .u2seg button.on { background: #2f2923; color: var(--fg); }
 .u2tr { padding-top: 0; overflow: hidden; }
+.u2tr .crop { padding: 0; } .u2tr .tilthead { margin: 0; min-height: 34px; } .u2tr .iconbtn { width: 32px; height: 32px; }
+.u2tr #cropFormats { padding: 2px 40px 0; } .u2tr #cropFormats button { height: 58px; gap: 4px; }
 .u2tr .tilt, .u2tr .crop { margin: 0; }
 .u2nav { display: flex; border-top: 1px solid var(--line); padding: 2px 6px max(4px, calc(env(safe-area-inset-bottom) - 16px)); }
 body.ui2 #status { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); max-width: calc(100% - 180px); padding: 6px 12px; border-radius: 999px;
