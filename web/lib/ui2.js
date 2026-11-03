@@ -1,4 +1,4 @@
-// UI 2 (preview: File > "Nuova interfaccia", or ?ui2): one big slider at a time, the tools of a group in a strip, four groups
+// UI 2 (the default since 4.25; the classic UI: its menu, or ?ui1): one big slider at a time, the tools of a group in a strip, four groups
 // (Base, Scanner, Trasforma, Effetti), undo / redo and Esporta in the header, the export options in a sheet.
 // Built over the app's own controls: the classic panes stay in the page (hidden) and remain the one source of truth: UI 2
 // sets their values and dispatches their events, reads their labels and their formatted outputs. Prototype: user, 2026-11-03.
@@ -278,7 +278,7 @@ export function initUI2(api) {
   $('u2menu').onclick = () => sheet(`<h2>Foto<button class="u2x" data-close>✕</button></h2>
     <button class="u2go u2gopri" id="u2open">${svg('photo')}<span><b>Apri foto</b><i>DNG, ORF, JPEG, HEIC</i></span></button>
     <button class="u2go" id="u2resetall">${svg('reset')}<span><b>Azzera tutte le modifiche</b><i>torna alla pellicola com'è</i></span></button>
-    <button class="u2go" id="u2classic">${svg('base')}<span><b>Interfaccia classica</b><i>la nuova è in prova</i></span></button>
+    <button class="u2go" id="u2classic">${svg('base')}<span><b>Interfaccia classica</b><i>quella di prima (si torna da File)</i></span></button>
     <div class="u2hap"><label><input type="checkbox" switch> Interruttore di iOS</label><button id="u2hapt">Tick dell'app</button>
       <span class="u2ov">A<input type="checkbox" switch style="opacity:0"></span><span class="u2ov">B<input type="checkbox" switch style="opacity:.02;-webkit-appearance:none;appearance:none"></span>
       <i>Prova vibrazione: l'interruttore vibra, il tick dell'app no (iOS blocca la vibrazione da script). A e B sono pulsanti
@@ -288,7 +288,7 @@ export function initUI2(api) {
     s.querySelector('#u2open').onclick = () => { close(); $('pick').click(); };
     s.querySelector('#u2resetall').onclick = () => { $('resetAll').click(); commit(); draw(false); close(); };
     s.querySelector('#u2hapt').onclick = () => haptic();
-    s.querySelector('#u2classic').onclick = () => { store.set('fcf_ui2', null); location.replace(location.pathname + location.search.replace(/[?&]ui2\b/, '')); };
+    s.querySelector('#u2classic').onclick = () => { store.set('fcf_ui2', '0'); location.replace(location.pathname + location.search.replace(/[?&]ui2\b/, '')); };
   });
 
   // --- export sheet

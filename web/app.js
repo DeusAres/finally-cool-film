@@ -56,11 +56,11 @@ let engineParams = '';      // JSON last given to `engine.update` (re-sending it
 const QUERY = new URLSearchParams(location.search);
 const V3 = !QUERY.has('v2');
 const V4 = V3 && !QUERY.has('v3');
-// UI 2 (lib/ui2.js, in prova): ?ui2 turns it on and remembers it (a home-screen app keeps its own storage: also File > Nuova
-// interfaccia), ?ui1 or its menu turns it off. v4 only.
-if (QUERY.has('ui2')) store.set('fcf_ui2', '1');
-if (QUERY.has('ui1')) store.set('fcf_ui2', null);
-const UI2 = V4 && store.get('fcf_ui2') === '1';
+// UI 2 (lib/ui2.js): the default since 4.25 (user). ?ui1 or its menu (Interfaccia classica) switches to the classic UI and
+// remembers it (a home-screen app keeps its own storage: also File > Prova la nuova interfaccia, back), ?ui2 back. v4 only.
+if (QUERY.has('ui2')) store.set('fcf_ui2', null);
+if (QUERY.has('ui1')) store.set('fcf_ui2', '0');
+const UI2 = V4 && store.get('fcf_ui2') !== '0';
 let ui2 = null;   // its handle once started (end of this file)
 // v3 highlight dodging (Luci auto, lib/dodge.js) changes the scene light before the film: off in v4 (the film alone).
 const DODGE = V3 && !V4;
@@ -1511,8 +1511,8 @@ $('export').addEventListener('click', () => exportFull());
 // resets to what Azzera impostazioni gives it (the photo's exposure, the film's grain / halation, else 0).
 const UI2_IDS = () => [...Object.keys(FORMAT)];
 if (V4) {
-  $('resetAll').insertAdjacentHTML('afterend', `<button class="btn ghost wide" id="ui2toggle">${UI2 ? 'Interfaccia classica' : 'Prova la nuova interfaccia'}</button>`);
-  $('ui2toggle').addEventListener('click', () => { store.set('fcf_ui2', UI2 ? null : '1'); location.reload(); });
+  $('resetAll').insertAdjacentHTML('afterend', `<button class="btn ghost wide" id="ui2toggle">${UI2 ? 'Interfaccia classica' : 'Nuova interfaccia'}</button>`);
+  $('ui2toggle').addEventListener('click', () => { store.set('fcf_ui2', UI2 ? '0' : null); location.reload(); });
 }
 if (UI2) {
   ui2 = initUI2({
