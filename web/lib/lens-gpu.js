@@ -164,6 +164,11 @@ fn src(pos: vec2<f32>) -> vec2<f32> {          // Raddrizza + Ritaglia: output f
   let c = (p.xf.zw - 1.0) * 0.5; let d = q - c;
   return c + vec2<f32>(p.tilt.x * d.x + p.tilt.y * d.y, p.tilt.x * d.y - p.tilt.y * d.x);
 }
+// The signed frame (dng.js) below 0: within NOISE_FLOOR_SIGMAS of each channel's noise floor it is noise around black and
+// stays (averaged by the reduction below); further down it is a colour outside the primaries (a blue LED: R and G at -0.05 on
+// the concert frame IDG_20261028_204614_966, its luminance negative, printed as a black hole): clamped there, as the decode
+// did before 4.15. No noise floor (JPEG): clamped at 0.
+fn inGamut(c: vec3<f32>) -> vec3<f32> { return max(c, -${wf(NOISE_FLOOR_SIGMAS)} * p.nr.yzw); }
 fn chromaLift(pos: vec2<f32>) -> f32 { return 0.0; }   // EV of light added here (INPUT_WGSL_HT: Hyper Tone's), for the colour-noise rings
 fn at(pos: vec2<f32>) -> vec4<f32> {           // pos in (output) frame pixel coords (pixel centres at integers)
   return textureSampleLevel(tex, smp, (src(pos) + 0.5) / p.xf.zw, 0.0);
@@ -214,6 +219,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   // luminance-edge-aware, and keep this pixel's own luminance: detail and grain are untouched.
   // The frame is signed (raw: dng.js keeps the noise below black); from here on c >= 0.
   {
+    c = inGamut(c);
     let nf = max(${wf(NOISE_FLOOR_SIGMAS)} * p.nr.x, ${wf(NR_Y_MIN)});
     let y0 = dot(c, p.luma.xyz); let lift = chromaLift(pos);
     var sc = c; var sy = y0; var wt = 1.0; var w2 = 1.0; var lr = y0;
@@ -228,7 +234,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
       var ys = y0;
       for (var t = 0; t < ${NR_GRID * NR_GRID}; t++) {
         let g = vec2<f32>(f32(t % ${NR_GRID}), f32(t / ${NR_GRID})) - ${wf((NR_GRID - 1) / 2)};
-        gq[t] = at(pos + g * s + sign(g) * 0.5).rgb; ys += dot(gq[t], p.luma.xyz);
+        gq[t] = inGamut(at(pos + g * s + sign(g) * 0.5).rgb); ys += dot(gq[t], p.luma.xyz);
       }
       lr = ys / ${wf(NR_GRID * NR_GRID + 1)};
     }
@@ -236,7 +242,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     for (var t = 0; t < 16; t++) {
       let ring = t / 8;
       let ang = f32(t) * 0.7853982 + f32(ring) * 0.3926991;
-      let q = at(pos + vec2<f32>(cos(ang), sin(ang)) * select(${wf(CHROMA_R1)} + reach, ${wf(CHROMA_R2)} + 2.0 * reach, ring == 1)).rgb;
+      let q = inGamut(at(pos + vec2<f32>(cos(ang), sin(ang)) * select(${wf(CHROMA_R1)} + reach, ${wf(CHROMA_R2)} + 2.0 * reach, ring == 1)).rgb);
       let yq = dot(q, p.luma.xyz);
       let dl = log2(max(yq + nf, 0.5 * nf)) - l0;
       let w = exp(-dl * dl * ck) * select(1.0, 0.6, ring == 1);
