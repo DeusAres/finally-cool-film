@@ -231,3 +231,12 @@ The same frames on the tool's Noritsu, with the same method; the Frontier's scan
     simulated 3200 K the mid grey keeps b* +35 at -1 EV with it, +26 without; but without it the Noritsu printed the user's dark
     sunset (IDG_20261022_182651_466) with a green-cyan sky (mids a* 14 -> 7). Kept: no real thin tungsten frame to weigh it.
   - Noritsu level: target_offset 0.15 -> 0.10 (rms 4.6 -> 4.2 L*, see app.js V4_NORITSU_AUTO).
+- **-3 EV, film stage ruled out (subagent, 4.24).** Compared at equal film exposure (real frames inverted through our curve fitted
+  on their 20 Kodak steps): the -3 EV Frontier frame prints the same negative with 1.5-2x the density contrast of the -1..+1
+  frames (gamma 1.03 / 0.73 / 0.64 at logE -1.25 / -1.45 / -1.65 vs 0.50-0.57); toe and fog match across frames and ours (0.49 /
+  0.28 / 0.18 / 0.03 vs 0.41 / 0.31 / 0.21 / 0.03). Our excess chroma follows the output level, not the film exposure (also at
+  +3 EV, labs 0.81 F / 0.77 N of 0 EV, ours 0.92 / 0.88). Stock vs E-7022 (Status-M-like read): within 0.02-0.03 D; DIR, setup
+  toe / neutral, base + fog, the G band: none selective at -3 EV. So it is the lab's per-frame handling of thin / dense
+  negatives (scanner stage: a thin-negative tone boost keyed on AutoSetup's lift, chroma ~0.75-0.8 at the extremes). Left: one
+  frame per exposure is not enough to fit it.
+
