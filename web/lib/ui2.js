@@ -69,10 +69,13 @@ const BORDER_MAX = 10, BORDER_STEP = 0.5, SWATCHES = ['#ffffff', '#f3ead8', '#d9
  * invisible native switch under the finger (tapTicks): the tap itself toggles it and iOS ticks. A slider drag cannot tick. */
 const haptic = () => navigator.vibrate?.(5);
 const TICK = '<input type="checkbox" switch class="u2hx" tabindex="-1" aria-hidden="true">';
+/** Horizontal strips: a native switch takes a sideways drag as its own (it slides the switch), so the strip would not
+ * scroll (the user's iPhone, 4.26). Their buttons get no switch and no tick. */
+const SCROLLERS = '.u2tools, #cropFormats';
 /** Give every button under `root` its invisible switch (the tap lands on it, bubbles to the button's handler). */
 function tapTicks(root) {
-  for (const b of root.querySelectorAll ? root.querySelectorAll('button') : []) if (!b.querySelector(':scope > .u2hx')) b.insertAdjacentHTML('beforeend', TICK);
-  if (root.tagName === 'BUTTON' && !root.querySelector(':scope > .u2hx')) root.insertAdjacentHTML('beforeend', TICK);
+  const btns = [...(root.querySelectorAll ? root.querySelectorAll('button') : []), ...(root.tagName === 'BUTTON' ? [root] : [])];
+  for (const b of btns) if (!b.closest(SCROLLERS) && !b.querySelector(':scope > .u2hx')) b.insertAdjacentHTML('beforeend', TICK);
 }
 
 /**

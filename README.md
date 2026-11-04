@@ -14,6 +14,8 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.27**: **la fila degli strumenti e i formati di ritaglio tornano a scorrere col dito** (l'interruttore della
+  vibrazione si prendeva lo scorrimento): lì niente tick, resta su schede, scanner e pulsanti.
 - **v4.26**: **vibrazione su iPhone**: ogni tocco su icone, schede, scanner, Azzera, formati di ritaglio, colori e pulsanti
   fa il tick di iOS (sotto il dito c'è un interruttore vero, invisibile: è l'unico modo che iOS permette). Durante il
   trascinamento degli slider iOS non lo consente. Tolto il riquadro di prova.
