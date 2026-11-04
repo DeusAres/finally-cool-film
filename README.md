@@ -14,6 +14,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.26**: **vibrazione su iPhone**: ogni tocco su icone, schede, scanner, Azzera, formati di ritaglio, colori e pulsanti
+  fa il tick di iOS (sotto il dito c'è un interruttore vero, invisibile: è l'unico modo che iOS permette). Durante il
+  trascinamento degli slider iOS non lo consente. Tolto il riquadro di prova.
 - **v4.25**: **la nuova interfaccia è quella predefinita** (la classica resta: menu cartella → Interfaccia classica, o `?ui1`).
   Nel menu cartella due pulsanti di prova (A, B) per capire se iOS vibra con un interruttore
   trasparente sotto il dito (lo switch vero vibra, il tick da script no).

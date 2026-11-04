@@ -63,26 +63,17 @@ const EASE = 'cubic-bezier(.2,.8,.2,1)';
 // Export: border 0..BORDER_MAX % of the long side (0 = off), swatches; the app reads #borderPct / #borderColor (app.js).
 const BORDER_MAX = 10, BORDER_STEP = 0.5, SWATCHES = ['#ffffff', '#f3ead8', '#d9d4cc', '#111111'];
 
-/** Haptic tick. Android: navigator.vibrate. iOS Safari has no vibrate API; toggling a `switch` checkbox (Safari 17.4+) plays
- * the system tick (WebKit performSwitchHapticFeedback), so a hidden one is clicked through its label. WebKit plays it only
- * within a user gesture (bug 285120, Jan 2025: tap / click / touchend handlers, not an `input` event during a drag), and
- * second-hand reports say iOS 26.5 stopped it for script toggles altogether (unverified; the menu's test switch tells). On
- * the user's iPhone the drag ticks did nothing (4.17-4.22): a slider ticks once on release instead (HAPTIC_ON_DRAG: only
- * where navigator.vibrate exists). Research: subagent, 2026-11-03. */
-const HAPTIC_ON_DRAG = !!navigator.vibrate;
-const haptic = (() => {
-  let label = null;
-  return () => {
-    if (navigator.vibrate) { navigator.vibrate(5); return; }
-    if (!label) {
-      label = document.createElement('label');
-      label.style.cssText = 'position:fixed;left:-99px;top:0;width:1px;height:1px;overflow:hidden;opacity:0';
-      label.innerHTML = '<input type="checkbox" switch tabindex="-1">';
-      document.body.append(label);
-    }
-    label.click();
-  };
-})();
+/** Haptic tick. Android: navigator.vibrate (also during a slider drag). iOS has no vibrate API, and a `switch` checkbox toggled
+ * by script no longer ticks (WebKit plays its haptic only on a real tap, bug 285120; the user's iPhone, 4.25 test: a real
+ * switch ticks, a scripted one does not, a real but invisible one does). So on iOS every tappable control carries an
+ * invisible native switch under the finger (tapTicks): the tap itself toggles it and iOS ticks. A slider drag cannot tick. */
+const haptic = () => navigator.vibrate?.(5);
+const TICK = '<input type="checkbox" switch class="u2hx" tabindex="-1" aria-hidden="true">';
+/** Give every button under `root` its invisible switch (the tap lands on it, bubbles to the button's handler). */
+function tapTicks(root) {
+  for (const b of root.querySelectorAll ? root.querySelectorAll('button') : []) if (!b.querySelector(':scope > .u2hx')) b.insertAdjacentHTML('beforeend', TICK);
+  if (root.tagName === 'BUTTON' && !root.querySelector(':scope > .u2hx')) root.insertAdjacentHTML('beforeend', TICK);
+}
 
 /**
  * Start UI 2. `api`: { baseOf(id): the value a tool resets to; snapshot(): the edit state; restore(s) (async: a 90° turn);
@@ -214,12 +205,12 @@ export function initUI2(api) {
     if (!r) return;
     const el = $(id), min = +el.min, max = +el.max, base = api.baseOf(id);
     const step = +el.step || (max - min) / 100, stepped = (max - min) / step <= 12;   // a stepped slider ticks at each step
-    let last = +el.value, crossed = false;
+    let last = +el.value;
     r.oninput = () => {
       const v = +r.value;
-      // ticks: crossing the base value, each step of a stepped slider, the ends (iOS: one tick on release, see haptic)
+      // ticks (Android only, see haptic): crossing the base value, each step of a stepped slider, the ends
       if ((last - base) * (v - base) < 0 || (v === base && last !== base) || (stepped && v !== last) || ((v === min || v === max) && v !== last)) {
-        if (HAPTIC_ON_DRAG) haptic(); else crossed = true;
+        haptic();
       }
       last = v;
       el.value = v; el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -229,7 +220,6 @@ export function initUI2(api) {
       chip.classList.toggle('mod', modified(id)); chip.querySelector('.v').textContent = modified(id) ? valueOf(id) : '';
     };
     r.onchange = () => { el.dispatchEvent(new Event('change', { bubbles: true })); commit(); };
-    r.addEventListener('touchend', () => { if (crossed) haptic(); crossed = false; });   // a gesture event: WebKit plays it here
     q('.u2reset').onclick = () => { r.value = base; r.oninput(); commit(); haptic(); };
     const a = q('.u2auto');
     if (a) a.onclick = async () => { $('auto').click(); haptic(); setTimeout(() => { draw(false); commit(); }, 400); };
@@ -279,15 +269,9 @@ export function initUI2(api) {
     <button class="u2go u2gopri" id="u2open">${svg('photo')}<span><b>Apri foto</b><i>DNG, ORF, JPEG, HEIC</i></span></button>
     <button class="u2go" id="u2resetall">${svg('reset')}<span><b>Azzera tutte le modifiche</b><i>torna alla pellicola com'è</i></span></button>
     <button class="u2go" id="u2classic">${svg('base')}<span><b>Interfaccia classica</b><i>quella di prima (si torna da File)</i></span></button>
-    <div class="u2hap"><label><input type="checkbox" switch> Interruttore di iOS</label><button id="u2hapt">Tick dell'app</button>
-      <span class="u2ov">A<input type="checkbox" switch style="opacity:0"></span><span class="u2ov">B<input type="checkbox" switch style="opacity:.02;-webkit-appearance:none;appearance:none"></span>
-      <i>Prova vibrazione: l'interruttore vibra, il tick dell'app no (iOS blocca la vibrazione da script). A e B sono pulsanti
-      con sopra un interruttore vero trasparente (A invisibile, B quasi invisibile e senza il disegno di iOS): se uno dei due vibra, la vibrazione si può
-      dare a icone, schede e pulsanti.</i></div>
     <p class="u2credits">${document.querySelector('.credits')?.innerHTML || ''}</p>`, (s) => {
     s.querySelector('#u2open').onclick = () => { close(); $('pick').click(); };
     s.querySelector('#u2resetall').onclick = () => { $('resetAll').click(); commit(); draw(false); close(); };
-    s.querySelector('#u2hapt').onclick = () => haptic();
     s.querySelector('#u2classic').onclick = () => { store.set('fcf_ui2', '0'); location.replace(location.pathname + location.search.replace(/[?&]ui2\b/, '')); };
   });
 
@@ -356,6 +340,15 @@ export function initUI2(api) {
     requestAnimationFrame(() => el.classList.add('in'));
   }
 
+  // the tick switches: on every button UI 2 shows, now and whenever it adds some (pages, sheets)
+  tapTicks(document.querySelector('.u2head')); tapTicks($('u2'));
+  new MutationObserver((ms) => {
+    for (const m of ms) {
+      if (m.target.tagName === 'BUTTON') tapTicks(m.target);   // a button whose content was rewritten (the crop formats)
+      for (const n of m.addedNodes) if (n.nodeType === 1 && !n.classList?.contains('u2hx')) tapTicks(n);
+    }
+  })
+    .observe(document.body, { childList: true, subtree: true });
   draw(false);
   // a new photo: the history starts again from its state
   return { photoLoaded() { hist = [api.snapshot()]; at = 0; syncUndo(); draw(false); } };
@@ -436,12 +429,8 @@ body.ui2 #status:empty { display: none; }
 .u2go:disabled { opacity: .45; }
 .u2prog { margin-top: 14px; } .u2st { font-size: 13px; color: var(--muted); margin-bottom: 8px; min-height: 17px; }
 .u2bar { height: 8px; border-radius: 4px; background: #2f2a25; overflow: hidden; } .u2bar i { display: block; height: 100%; width: 3%; background: var(--accent); transition: width .3s; }
-.u2hap { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 12px; padding: 12px 14px; border: 1px solid #3a342e; border-radius: 14px; font-size: 14px; }
-.u2hap label { display: flex; align-items: center; gap: 8px; } .u2hap input { width: 44px; height: 26px; }
-.u2hap button { margin-left: auto; border: 1px solid #3a342e; background: #24211d; color: var(--fg); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px; }
-.u2ov { position: relative; display: inline-grid; place-items: center; width: 44px; height: 32px; border: 1px solid #3a342e; border-radius: 999px; background: #24211d; font-weight: 600; }
-.u2ov input { position: absolute; inset: 0; width: 100% !important; height: 100% !important; margin: 0; cursor: pointer; }
-.u2hap i { flex-basis: 100%; font-style: normal; font-size: 12px; color: var(--muted); }
+.u2hx { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+body.ui2 button:has(> .u2hx) { position: relative; }
 .u2credits { font-size: 11.5px; color: var(--muted); margin: 16px 0 0; }
 .u2credits a { color: var(--muted); }
 `;
