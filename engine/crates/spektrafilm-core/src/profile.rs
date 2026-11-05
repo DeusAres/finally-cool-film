@@ -127,6 +127,10 @@ pub struct ProfileData {
     /// first axis indexes development time instead of channels.
     #[serde(default)]
     pub density_curves_model: Option<DensityCurvesModel>,
+    /// The grain's saturation density (normalised curves' max per layer) when the curves were changed after loading
+    /// (`with_shoulder`): the grain keeps the profile's own, its strength was measured with it. None = the curves' max.
+    #[serde(skip)]
+    pub grain_density_max: Option<[f64; 3]>,
     /// Development-time family axis (minutes), one entry per density-curves
     /// column on B&W profiles. Empty for colour profiles.
     #[serde(default, deserialize_with = "deser_zero_vec")]
@@ -273,6 +277,14 @@ impl Profile {
     }
 
     /// Get density curves as [N][3] f64 array for calibration precision.
+    /// Max of the normalised density curves per layer for the grain model (ProfileData `grain_density_max`).
+    pub fn grain_density_max(&self) -> [f64; 3] {
+        self.data.grain_density_max.unwrap_or_else(|| {
+            let norm = spektrafilm_model::density_curves::normalize_density_curves_f64(&self.density_curves_f64());
+            spektrafilm_model::density_curves::max_density_f64(&norm)
+        })
+    }
+
     pub fn density_curves_f64(&self) -> Vec<[f64; 3]> {
         self.data
             .density_curves
@@ -441,11 +453,13 @@ pub fn with_layer_speed(mut profile: Profile, speed_ev: [f64; 3]) -> Profile {
 /// line's gamma, the three layers' mean slope over the 0.5 logE below `from` (least squares), decaying as
 /// exp(-(logE - from) / tau): the curve keeps rising towards that value + gamma * tau instead of the profile's shoulder.
 /// One gamma for the three layers: no colour drift is added where the profile has no data to say which. `tau` <= 0 returns
-/// the profile untouched (FilmRenderingParams `shoulder_log_e` / `shoulder_tau`).
+/// the profile untouched (FilmRenderingParams `shoulder_log_e` / `shoulder_tau`). The grain keeps the old curves' max
+/// density (`grain_density_max`): with the new one its strength went x1.7-2 (check.py 4.28).
 pub fn with_shoulder(mut profile: Profile, from: f64, tau: f64) -> Profile {
     if tau <= 0.0 {
         return profile;
     }
+    profile.data.grain_density_max = Some(profile.grain_density_max());
     let x = profile.data.log_exposure.clone();
     let d = profile.density_curves_f64();
     let k = x.partition_point(|&v| v < from).min(x.len() - 1);

@@ -1259,13 +1259,10 @@ impl Pipeline {
                 let particle_area = g.agx_particle_area_um2 * g.agx_particle_scale[c];
                 npp[c] = ((pixel_area as f64 / particle_area) / n_sub as f64) as f32;
             }
-            let film_curves_f32 = self.film.density_curves_f32();
-            let norm_curves_f32 =
-                spektrafilm_model::density_curves::normalize_density_curves(&film_curves_f32);
-            let dmax_curves = spektrafilm_model::density_curves::max_density(&norm_curves_f32);
+            let dmax_curves = self.film.grain_density_max();
             let mut density_max = [0.0f32; 3];
             for c in 0..3 {
-                density_max[c] = dmax_curves[c] + g.density_min[c] as f32;
+                density_max[c] = (dmax_curves[c] + g.density_min[c]) as f32;
             }
             Some(spektrafilm_gpu::GrainGpuParams {
                 density_min: [

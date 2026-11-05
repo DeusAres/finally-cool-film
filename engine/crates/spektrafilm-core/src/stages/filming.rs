@@ -496,7 +496,7 @@ pub fn develop(
         // f32 storage in `GrainParams` would otherwise truncate to ~7
         // decimals and shift every Poisson lambda by ~5e-8, producing a
         // visibly different grain pattern.
-        let density_max = spektrafilm_model::density_curves::max_density_f64(&norm_curves_f64);
+        let density_max = film.grain_density_max();
         density_cmy = spektrafilm_model::grain::apply_grain_to_density(
             &density_cmy,
             pix_um,
@@ -534,8 +534,7 @@ pub fn hash_grain_setup(
     };
     let pix_um = pixel_size_um(params.camera.film_format_mm, fw, fh) as f64;
     let n_sub = g.n_sub_layers.max(1);
-    let norm = spektrafilm_model::density_curves::normalize_density_curves_f64(&film.density_curves_f64());
-    let dmax_curves = spektrafilm_model::density_curves::max_density_f64(&norm);
+    let dmax_curves = film.grain_density_max();
     let mut hg = spektrafilm_model::grain_hash::HashGrain {
         seed: g.seed,
         origin: [g.origin_px[0].max(0.0).round() as u32, g.origin_px[1].max(0.0).round() as u32],
