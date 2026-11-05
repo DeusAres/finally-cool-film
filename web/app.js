@@ -1469,7 +1469,7 @@ const GRAIN_BLUR = 0.45;
 // Left: the two references disagree (Frontier lights / Noritsu mid-lights), one set cannot fit both; shadows a bit weak.
 const V4_GRAIN = {
   blur: 0.2, blur_fast: 0.35, fast_count_frac: 0.02, scan_sharpen_um: HS_UM, scan_sharpen: 0.85,
-  scan_noise: 0.011, scan_noise_slope: 0.6, scan_noise_chroma: 0.5,
+  scan_noise: 0.0098, scan_noise_slope: 0.6, scan_noise_chroma: 0.5,   // scan_noise per 10 um pixel (0.011 at the fit's 8.95 um)
 };
 /** The v4 grain for the chosen scanner: Scanner 'Nessuno' (a neutral read, no lab machine) has no lab scanner noise. Measured
  * on flat patches exported by the app (12 MP): with it its lights came out x2 the lab scans (std 21-24 vs 7-11; its inversion

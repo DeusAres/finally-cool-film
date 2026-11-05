@@ -502,7 +502,8 @@ pub struct GrainParams {
     /// Share of the crystals that are fast (two-population emulsions): how much of the grain is theirs.
     #[serde(default = "default_fast_count_frac")]
     pub fast_count_frac: f32,
-    /// The lab scanner's sensor noise, density sigma at density 1, growing as 10^(d - 1) (grain_hash `scan_noise_at`):
+    /// The lab scanner's sensor noise, density sigma at density 1 per 10 um pixel (filming.rs SCAN_NOISE_REF_UM; area-
+    /// averaged at other pitches), growing as 10^(slope (d - 1)) (grain_hash `scan_noise_rgb`):
     /// a scan of a dense negative area (the positive's lights) is noisier. Added to the grain's deviation (it is read in
     /// density), so it gets the scanner sharpening too. 0 = none.
     #[serde(default)]

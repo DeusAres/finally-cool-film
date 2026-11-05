@@ -524,6 +524,10 @@ pub fn develop(
     density_cmy
 }
 
+/// Pixel pitch (um on the film) at which GrainParams `scan_noise` is the per-pixel sigma; at other pitches it is averaged
+/// over the pixel's area (sigma x REF / pitch), so the preview and the export show the same noise at the same size.
+pub const SCAN_NOISE_REF_UM: f64 = 10.0;
+
 /// Inputs of the counter-based grain for an `image_w x image_h` region, plus
 /// its blurs (`GrainBlur`). The pixel pitch comes from
 /// `frame_px` (the whole frame) when given, so tiles/previews/exports share it.
@@ -555,7 +559,8 @@ pub fn hash_grain_setup(
         micro_sigma: g.micro_structure[0].max(0.0),
         amount: g.amount as f32,
         fast_count_frac: g.fast_count_frac,
-        scan_noise: g.scan_noise,
+        // per pixel: the sigma over SCAN_NOISE_REF_UM pixels, averaged over this pixel's area (1 / pitch)
+        scan_noise: (g.scan_noise as f64 * SCAN_NOISE_REF_UM / pix_um) as f32,
         scan_noise_slope: g.scan_noise_slope,
         scan_noise_chroma: g.scan_noise_chroma,
     };
