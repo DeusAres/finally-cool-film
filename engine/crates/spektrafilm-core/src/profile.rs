@@ -437,6 +437,38 @@ pub fn with_layer_speed(mut profile: Profile, speed_ev: [f64; 3]) -> Profile {
     profile
 }
 
+/// The profile with its density curves above `from` (log exposure) continued from their value there by the straight
+/// line's gamma, the three layers' mean slope over the 0.5 logE below `from` (least squares), decaying as
+/// exp(-(logE - from) / tau): the curve keeps rising towards that value + gamma * tau instead of the profile's shoulder.
+/// One gamma for the three layers: no colour drift is added where the profile has no data to say which. `tau` <= 0 returns
+/// the profile untouched (FilmRenderingParams `shoulder_log_e` / `shoulder_tau`).
+pub fn with_shoulder(mut profile: Profile, from: f64, tau: f64) -> Profile {
+    if tau <= 0.0 {
+        return profile;
+    }
+    let x = profile.data.log_exposure.clone();
+    let d = profile.density_curves_f64();
+    let k = x.partition_point(|&v| v < from).min(x.len() - 1);
+    let fit: Vec<usize> = (0..=k).filter(|&i| x[i] >= x[k] - 0.5).collect();
+    let (mx, n) = (fit.iter().map(|&i| x[i]).sum::<f64>() / fit.len() as f64, fit.len() as f64);
+    let sxx: f64 = fit.iter().map(|&i| (x[i] - mx).powi(2)).sum();
+    if n < 3.0 || sxx <= 0.0 {
+        return profile;
+    }
+    let slope = |c: usize| {
+        let my = fit.iter().map(|&i| d[i][c]).sum::<f64>() / n;
+        fit.iter().map(|&i| (x[i] - mx) * (d[i][c] - my)).sum::<f64>() / sxx
+    };
+    let gamma = (slope(0) + slope(1) + slope(2)) / 3.0;
+    for (i, row) in profile.data.density_curves.iter_mut().enumerate().skip(k) {
+        let rise = gamma * tau * (1.0 - (-(x[i] - x[k]) / tau).exp());
+        for (c, cell) in row.iter_mut().enumerate().take(3) {
+            *cell = d[k][c] + rise;
+        }
+    }
+    profile
+}
+
 pub fn resolve_for_render(mut profile: Profile, development_time: Option<f64>) -> Profile {
     if !profile.is_bw() {
         return profile;

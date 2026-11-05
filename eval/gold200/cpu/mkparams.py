@@ -9,7 +9,7 @@ def params(settings=None, scanner=None, **film):
          "scanner": {"model": "narrowband", "narrowband": app_const('NARROWBAND'), "unsharp_mask": [0, 0]},
          "film_render": {"grain": {"active": False}, "dir_couplers": app_const('V4_DIR'),
                         "halation": {"active": True, "halation_amount": app_const('V4_FILM')['halation'], "scatter_spatial_scale": app_const('SCATTER_SCALE')},
-                        "layer_speed_ev": app_const('V4_STOCK')['film_render']['layer_speed_ev']}}
+                        **app_const('V4_STOCK')['film_render']}}
     for k, v in film.items(): p["film_render"][k] = v
     p["settings"].update(settings or {})
     p["scanner"].update(scanner or {})

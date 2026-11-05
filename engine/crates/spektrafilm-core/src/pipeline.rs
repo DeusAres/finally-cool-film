@@ -397,6 +397,7 @@ impl Pipeline {
         // an unresolved family would read development-time columns as
         // R/G/B channels.
         let film = crate::profile::resolve_for_render(film, params.film_render.development_time);
+        let film = crate::profile::with_shoulder(film, params.film_render.shoulder_log_e, params.film_render.shoulder_tau);
         let film = crate::profile::with_layer_speed(film, params.film_render.layer_speed_ev);
         let print = crate::profile::resolve_for_render(print, params.print_render.development_time);
         let print_illuminant = enlarger::enlarger_filtered_illuminant_f64(
@@ -438,6 +439,7 @@ impl Pipeline {
         // time and broadcast the single channel onto the 3-channel engine
         // layout. Must happen before anything reads the profile data.
         let film = crate::profile::resolve_for_render(film, params.film_render.development_time);
+        let film = crate::profile::with_shoulder(film, params.film_render.shoulder_log_e, params.film_render.shoulder_tau);
         let film = crate::profile::with_layer_speed(film, params.film_render.layer_speed_ev);
         let print = crate::profile::resolve_for_render(print, params.print_render.development_time);
 

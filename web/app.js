@@ -1329,7 +1329,13 @@ const NARROWBAND = { setup: true };
 // tone band, and re-measured on the gold200 scenes: no systematic cast left, eval/V4.md 4.16). It still sets where the red layer
 // sits on its curve, so its grain: without it the sea frame's edges / texture go 0.86 / 0.76 -> 0.95 / 0.80 (check.py). Kept for
 // that: the v4 grain strength (V4_FILM) was measured with it. To revisit with the grain.
-const V4_STOCK = { film_render: { layer_speed_ev: [0.75, 0, 0] } };
+// 4.28 shoulder (engine film_render.shoulder_log_e / _tau, profile.rs with_shoulder): above logE 1.0 (~+3.3 EV over mid grey) the
+// profile's curves flattened to D ~1.6 by +2 logE, so an overexposed frame washed out (ours vs a real Gold 200 Frontier SP-3000
+// tripod bracket, eval/out/work/refs/labscans/ikigai_gold200_bracket, at +5 EV: L* +12 / contrast -33 vs the real +2 / -14). The
+// straight line continued with its gamma decaying by tau (logE): 0.6 (~the profile) / 1.0 / 1.6 / 2.5 / 4.0 give contrast at
+// +5 EV -36 / -25 / -17 / -11 / -8 (real -14) and mean L* +15 / +11 / +7 / +3 / +0 (real +2): 2.5 (Dmax ~2.2). The datasheet's
+// curves could not be read (E-7022 host blocked): a measured fit on one scene. Normal frames: only their brightest highlights reach it.
+const V4_STOCK = { film_render: { layer_speed_ev: [0.75, 0, 0], shoulder_log_e: 1.0, shoulder_tau: 2.5 } };
 // v4 Frontier AutoSetup reads the colour from near-neutral pixels (engine FrontierAutoParams.neutral_sigma, density): a frame
 // filled by one colour no longer pulls it towards grey (the Frontier's "subject failure"). Measured (sf-eval, v4 Frontier):
 // green park ORF Y key -0.065 -> -0.018 (its grey path no longer pink), tungsten cat C +0.035 -> +0.024 (a real cast still read),
@@ -1360,7 +1366,10 @@ const V4_NEUTRAL_SIGMA = 0.06;
 // 4.16: the refitted tone (V4_FRONTIER gradation_a 11.15) printed the frames darker (same harness, 4.15 -> refit: rms 3.24 ->
 // 3.69, mean -1.3 -> -2.0; this run reads 3.24 where 4.14's read 2.61, the frame set / slider build differ): -0.10 -> -0.07,
 // rms 3.25, mean -0.85 (-0.04: 3.20 but Daylight +6 L*).
-const V4_AUTO = { strength: 1.0, k_col: 0.68, highlight_weight: 0.6, target_offset: -0.07, highlight_max_channel: true };
+// 4.28: dense frames: the real Frontier compensates the bracket in full up to +5 EV (mean L* within 3 of 0 EV); the inherited clamp
+// (0.45 density, ~3 EV, no source) stopped ours at ~3 EV. clamp_density_dense 1.0 (~7 EV) leaves the darkening to the key; the
+// lift of a thin frame keeps 0.45 (the real -3 EV frame is printed darker than ours already, a wider lift would add to that).
+const V4_AUTO = { strength: 1.0, k_col: 0.68, highlight_weight: 0.6, target_offset: -0.07, highlight_max_channel: true, clamp_density_dense: 1.0 };
 // v4 Frontier tone and colour, fitted to a real Frontier (eval/frontier_cp, eval/V4.md): the Color Precision film comparison tool's
 // Gold 200 chart frames (ColorChecker SG + Kodak grey scale, -1..+2 EV; the same negatives also on a Noritsu), our v4 Frontier
 // rendering the same patches on CPU with the operator's density / C M Y keys as free nuisances. Tone: grey L* rms 2.6 -> 1.2;
@@ -1435,7 +1444,8 @@ const V4_NORITSU = { gradation_a: 9.26, black_point: 0.025, white_point: 1.0, sh
 // rms 4.6 -> 4.2 L* (each frame rendered over a range of keys, verified in the engine). Percentile 90 / margin -0.16 reaches
 // 3.45 but moves Charts / Studio by 2-2.5 L* on 5 scenes: not taken. What is left is per scene (Daylight +6 that no frame
 // statistic explains, Charts -5): structural.
-const V4_NORITSU_AUTO = { strength: 1.0, target_offset: 0.10, highlight_margin: -0.08, k_col: 1.15, clamp_colour: 0.3 };
+// 4.28: the Frontier's dense limit (V4_AUTO clamp_density_dense) assumed for the Noritsu too: no Noritsu bracket beyond +2 EV.
+const V4_NORITSU_AUTO = { strength: 1.0, target_offset: 0.10, highlight_margin: -0.08, k_col: 1.15, clamp_colour: 0.3, clamp_density_dense: 1.0 };
 const SCATTER_SCALE = 0.5;   // film scatter size multiplier (engine default 1), see renderParams
 // v3.32: dye-cloud blur 0.65 -> 0.45 (reference px, ~12 -> ~8 um): measured on 10 full-frame Gold 200 scans the grain has ~12 % of
 // its power below 40 um wavelength and r50 ~13.5 um; ours had 3 % / 18.6 um (soft). At 0.45

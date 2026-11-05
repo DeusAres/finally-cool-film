@@ -17,6 +17,6 @@ BASE = {
                                        "sensor_peak_nm": [650, 540, 450], "sensor_fwhm_nm": [40, 50, 40], "black_point": 0.012, "gradation_a": 6.2,
                                        "setup_toe_slope": app_const('V4_TOE_SLOPE'), "setup_neutral_ev": 1.5, "auto": {"k_col": 0.8, "neutral_sigma": 0.06}}}},
     "film_render": {"grain": {"active": False}, "halation": {"active": True, "halation_amount": 1, "scatter_spatial_scale": 0.5},
-                    "dir_couplers": app_const('V4_DIR'), "layer_speed_ev": app_const('V4_STOCK')['film_render']['layer_speed_ev']},
+                    "dir_couplers": app_const('V4_DIR'), **app_const('V4_STOCK')['film_render']},
 }
 def params(overrides=None): return merge(copy.deepcopy(BASE), overrides or {})

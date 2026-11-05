@@ -1297,7 +1297,8 @@ pub fn auto_setup(base: &FrontierBase, cmy: &[f32], width: usize, height: usize)
         let cap = knee + p.highlight_margin - hi;
         d_den = d_den.min(p.strength * cap);
     }
-    let d_den = d_den.clamp(-p.clamp_density, p.clamp_density);
+    let dense = if p.clamp_density_dense > 0.0 { p.clamp_density_dense } else { p.clamp_density };
+    let d_den = d_den.clamp(-dense, p.clamp_density);
     let k_col = thin_k_col(p, d_den / base.d_per_ev, k_col0);
     let mut out = [(d_den / base.d_per_ev) as f32, 0.0, 0.0, 0.0];
     for c in 0..3 {

@@ -401,7 +401,11 @@ impl Default for FrontierModelParams {
 pub struct FrontierAutoParams {
     pub k_den: f64,
     pub k_col: f64,
+    /// Largest density key, in density: `clamp_density` lifting a thin frame, `clamp_density_dense` (when > 0) darkening a
+    /// dense one (0 = the same as `clamp_density`).
     pub clamp_density: f64,
+    #[serde(default)]
+    pub clamp_density_dense: f64,
     pub clamp_colour: f64,
     pub border_mask_frac: f64,
     pub trim_lo_pct: f64,
@@ -444,6 +448,7 @@ impl Default for FrontierAutoParams {
             k_den: 1.0,
             k_col: 0.2,
             clamp_density: 0.45,
+            clamp_density_dense: 0.0,
             clamp_colour: 0.15,
             border_mask_frac: 0.08,
             trim_lo_pct: 10.0,
@@ -775,6 +780,13 @@ pub struct FilmRenderingParams {
     /// `development_time`; `with_params` keeps the built curves). 0 = the datasheet.
     #[serde(default)]
     pub layer_speed_ev: [f64; 3],
+    /// The density curves above `shoulder_log_e` (log exposure, mid grey ~0) replaced by the straight line's gamma (all
+    /// layers' mean over the 0.5 logE below) decaying as exp(-(logE - shoulder_log_e) / shoulder_tau): a longer shoulder
+    /// than the profile's. Calibration input, applied with `layer_speed_ev` (before it). 0 = the profile's curves.
+    #[serde(default)]
+    pub shoulder_log_e: f64,
+    #[serde(default)]
+    pub shoulder_tau: f64,
     /// Development time (minutes) for B&W development-time families —
     /// forward-port of upstream dev's `chemistry.development_time`. Selects
     /// the nearest entry of the profile's family; `None` picks the
@@ -796,6 +808,8 @@ impl Default for FilmRenderingParams {
         Self {
             density_curve_gamma: 1.0,
             layer_speed_ev: [0.0; 3],
+            shoulder_log_e: 0.0,
+            shoulder_tau: 0.0,
             development_time: None,
             grain: GrainParams::default(),
             halation: HalationParams::default(),
