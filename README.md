@@ -23,8 +23,8 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   - il rumore del sensore dello scanner, più forte dove il negativo è denso (le luci), indipendente per canale.
   Frontier / Noritsu: grumi entro ~1 µm da entrambi i riferimenti, forza per tono dentro la variabilità vera (da un
   fotogramma all'altro x3-5), colore della grana nelle luci come il vero. Anteprima ed export uguali, GPU = CPU.
-  Scanner Nessuno: grana nuova senza il rumore da laboratorio; le sue luci restano più granulose del vero (anche di una
-  scansione con fotocamera): è la sua inversione, da rivedere a parte.
+  Scanner Nessuno: grana nuova senza il rumore da laboratorio; verificata sulle scansioni raw vere a banda stretta del
+  dataset gold200 (stesse scene, stessa inversione): forza per tono 1,0-1,4 volte la vera, grumi ~2 µm più larghi.
 - **v4.28**: **la sovraesposizione come la Gold vera**: una foto schiarita di +3/+5 EV non si slava più. Su un bracket vero
   (Gold 200 su Frontier SP-3000, stessa scena da -3 a +5 EV) il laboratorio stampa tutto quasi uguale; noi a +5 eravamo
   +12 L* e con un terzo del contrasto. Ora: la curva della pellicola continua oltre la vecchia spalla (si appiattiva verso

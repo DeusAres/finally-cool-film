@@ -1471,9 +1471,11 @@ const V4_GRAIN = {
   blur: 0.2, blur_fast: 0.35, fast_count_frac: 0.02, scan_sharpen_um: HS_UM, scan_sharpen: 0.85,
   scan_noise: 0.0098, scan_noise_slope: 0.6, scan_noise_chroma: 0.5,   // scan_noise per 10 um pixel (0.011 at the fit's 8.95 um)
 };
-/** The v4 grain for the chosen scanner: Scanner 'Nessuno' (a neutral read, no lab machine) has no lab scanner noise. Measured
- * on flat patches exported by the app (12 MP): with it its lights came out x2 the lab scans (std 21-24 vs 7-11; its inversion
- * keeps the lights' contrast that a lab scanner's curve squeezes), without it 14-17. */
+/** The v4 grain for the chosen scanner: Scanner 'Nessuno' (a neutral read, no lab machine) has no lab scanner noise. Checked on
+ * the gold200 dataset (eval/gold200: the real negatives' narrowband raw scans at full resolution, 11.6 um/px, inverted as
+ * invert.js does, vs the app's export of the same scenes' digital frames, flat patches by tone): grain std 2.3 / 7.9 / 7.7 /
+ * 5.6 / 8.0 / 7.8 vs the real 1.9 / 5.5 / 5.8 / 5.1 / 6.4 / 7.8 (shadows to whites), clumps r50 8.3-11.7 vs 6.5-9.0 um.
+ * (A synthetic export of six flat patches showed its lights x2: the inversion's anchors stretch such a narrow frame.) */
 const v4Grain = () => (neutralScan() ? { ...V4_GRAIN, scan_noise: 0 } : V4_GRAIN);
 const V4_GRAIN_SCALE = 1.95;   // Grana's slider unit for this grain: the fitted amount (3.95) at the default Grana (V4_FILM)
 const GRAIN_UNIT = 0.65;   // slider 1× -> engine amount (= old slider 0.25 / old default 0.4)
