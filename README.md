@@ -14,12 +14,15 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
-- **v4.29**: **grana da scansione vera, non sabbia**: misurata come sulle 20 scansioni Gold 200 vere (`samples/kg200`), la
-  grana vera è fatta di grumi piccoli con i bordi netti (larghezza ~7-8 µm): lo scanner del laboratorio la rende nitida.
-  La nostra era una macchia morbida di ~15 µm. Ora la nitidezza dello scanner agisce sulla sola grana (raggio di un pixel
-  Frontier, 12 µm; l'immagine non diventa più nitida, quella resta a Hyper Sharpness) sopra una nuvola di colorante più
-  fine: 7,6 µm a ogni tono, forza nei mezzitoni sulla mediana delle scansioni vere (+20 % rispetto a prima). Anteprima ed
-  export. Ancora diverso dal vero: ombre con grana più debole ma più grossa, luci più forti (cristalli veloci / lenti).
+- **v4.29**: **grana da scansione vera, non sabbia**: misurata come sulle 20 scansioni Gold 200 vere (`samples/kg200`, per
+  tono: forza e larghezza dei grumi). La nostra era una macchia morbida di ~15 µm a ogni tono. Due correzioni nel motore:
+  - lo scanner del laboratorio rende nitida la grana: ora la sua nitidezza agisce sulla sola grana (raggio di un pixel
+    Frontier, 12 µm; l'immagine non diventa più nitida, quella resta a Hyper Sharpness), su nuvole di colorante più fini;
+  - i cristalli veloci (pochi, grossi: la grana delle ombre) e lenti (tanti, fini: quella delle luci) hanno ora ognuno la
+    sua nuvola; prima i veloci dominavano a ogni tono (quota 0,2 % senza fonte, ora 2 %).
+  Ombre / medi / luci (forza, grumi): vera ~4 / 11 µm, ~11 / 7,5 µm, ~8 / 8 µm; prima 6,7 / 15, 12,5 / 15, 3,8 / 15; ora
+  4,0 / 12,6, 10,7 / 9,6, 4,7 / 8,4. Anteprima ed export (CPU e GPU, stesso modello). Resta: le luci più chiare più deboli
+  del vero.
 - **v4.28**: **la sovraesposizione come la Gold vera**: una foto schiarita di +3/+5 EV non si slava più. Su un bracket vero
   (Gold 200 su Frontier SP-3000, stessa scena da -3 a +5 EV) il laboratorio stampa tutto quasi uguale; noi a +5 eravamo
   +12 L* e con un terzo del contrasto. Ora: la curva della pellicola continua oltre la vecchia spalla (si appiattiva verso
