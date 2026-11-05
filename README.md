@@ -14,6 +14,12 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.29**: **grana da scansione vera, non sabbia**: misurata come sulle 20 scansioni Gold 200 vere (`samples/kg200`), la
+  grana vera è fatta di grumi piccoli con i bordi netti (larghezza ~7-8 µm): lo scanner del laboratorio la rende nitida.
+  La nostra era una macchia morbida di ~15 µm. Ora la nitidezza dello scanner agisce sulla sola grana (raggio di un pixel
+  Frontier, 12 µm; l'immagine non diventa più nitida, quella resta a Hyper Sharpness) sopra una nuvola di colorante più
+  fine: 7,6 µm a ogni tono, forza nei mezzitoni sulla mediana delle scansioni vere (+20 % rispetto a prima). Anteprima ed
+  export. Ancora diverso dal vero: ombre con grana più debole ma più grossa, luci più forti (cristalli veloci / lenti).
 - **v4.28**: **la sovraesposizione come la Gold vera**: una foto schiarita di +3/+5 EV non si slava più. Su un bracket vero
   (Gold 200 su Frontier SP-3000, stessa scena da -3 a +5 EV) il laboratorio stampa tutto quasi uguale; noi a +5 eravamo
   +12 L* e con un terzo del contrasto. Ora: la curva della pellicola continua oltre la vecchia spalla (si appiattiva verso
