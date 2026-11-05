@@ -502,6 +502,18 @@ pub struct GrainParams {
     /// Share of the crystals that are fast (two-population emulsions): how much of the grain is theirs.
     #[serde(default = "default_fast_count_frac")]
     pub fast_count_frac: f32,
+    /// The lab scanner's sensor noise, density sigma at density 1, growing as 10^(d - 1) (grain_hash `scan_noise_at`):
+    /// a scan of a dense negative area (the positive's lights) is noisier. Added to the grain's deviation (it is read in
+    /// density), so it gets the scanner sharpening too. 0 = none.
+    #[serde(default)]
+    pub scan_noise: f32,
+    /// Its growth with density: sigma = scan_noise * 10^(slope (d - 1)); 1 = a constant noise on the measured light.
+    #[serde(default = "default_one")]
+    pub scan_noise_slope: f32,
+    /// Its colour share: 1 = the scanner's three channels independent, 0 = luma only (the scanner software's colour
+    /// noise reduction).
+    #[serde(default = "default_one")]
+    pub scan_noise_chroma: f32,
     #[serde(default)]
     pub scan_sharpen_um: f32,
     #[serde(default)]
@@ -584,6 +596,9 @@ impl Default for GrainParams {
             blur_dye_clouds_um: 1.0,
             blur_fast: 0.0,
             fast_count_frac: spektrafilm_model::grain_hash::FAST_COUNT_FRAC,
+            scan_noise: 0.0,
+            scan_noise_slope: 1.0,
+            scan_noise_chroma: 1.0,
             scan_sharpen_um: 0.0,
             scan_sharpen: 0.0,
             micro_structure: [0.2, 30.0],

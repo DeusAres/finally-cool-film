@@ -1252,6 +1252,7 @@ impl Pipeline {
                         sharpen: gb.sharpen,
                         fast_blur: gb.fast_px,
                         fast_count_frac: hg.fast_count_frac,
+                        scan_noise: [hg.scan_noise, hg.scan_noise_slope, hg.scan_noise_chroma],
                     }),
                 })
             } else {

@@ -358,6 +358,8 @@ pub struct GrainHashGpu {
     pub fast_blur: f32,
     /// Share of the crystals that are fast (`spektrafilm_model::grain_hash::HashGrain::fast_count_frac`).
     pub fast_count_frac: f32,
+    /// The scanner's noise `[sigma at density 1, slope, chroma]` (`spektrafilm_model::grain_hash::scan_noise_rgb`).
+    pub scan_noise: [f32; 3],
 }
 
 /// Output gamut compression parameters for the GPU-resident per-pixel pass.

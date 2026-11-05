@@ -28,9 +28,9 @@ struct Params {
     dev_only: f32,                // 1: write grainy - clean to grain_dev, keep density_cmy
     split: f32,                   // 1 (with dev_only): the fast crystals' deviation to grain_dev_fast, the rest to grain_dev
     fast_count_frac: f32,         // share of the crystals that are fast (two-population emulsions)
-    pad1: f32,
-    pad2: f32,
-    pad3: f32,
+    scan_noise: f32,              // the scanner's noise (scan_noise_rgb in grain_hash.rs): sigma at density 1,
+    scan_noise_slope: f32,        // its growth 10^(slope (d - 1)),
+    scan_noise_chroma: f32,       // its colour share (1: channels independent, 0: one draw)
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -143,6 +143,7 @@ const COUPLING_S1: f32 = 0.22;
 fn grain_density(d: vec3<f32>, gx: u32, gy: u32) -> vec3<f32> {
     var out = d;
     var devs = vec3<f32>(0.0);
+    var d_ins = vec3<f32>(0.0);
     var p_sum = 0.0;
     var p_lo = 1.0;
     var p_hi = 0.0;
@@ -191,6 +192,7 @@ fn grain_density(d: vec3<f32>, gx: u32, gy: u32) -> vec3<f32> {
         }
         let grain = sum - dmin;
         var dev = grain - d[ch];
+        d_ins[ch] = d_in;
         if params.micro_sigma > 0.0 {
             var st = pixel_state(stream_key(1000u + layer), gx, gy);
             let z = std_normal(&st);
@@ -202,8 +204,23 @@ fn grain_density(d: vec3<f32>, gx: u32, gy: u32) -> vec3<f32> {
     let tt = clamp((p_sum * (1.0 / 3.0) - COUPLING_P0) / (COUPLING_P1 - COUPLING_P0), 0.0, 1.0);
     let uu = clamp((p_hi - p_lo - COUPLING_S0) / (COUPLING_S1 - COUPLING_S0), 0.0, 1.0);
     let cpl = LAYER_COUPLING + (LAYER_COUPLING_HI - LAYER_COUPLING) * max(tt * tt * (3.0 - 2.0 * tt), uu * uu * (3.0 - 2.0 * uu));
+    var noise = vec3<f32>(0.0);
+    if params.scan_noise > 0.0 { noise = scan_noise_rgb(d_ins, gx, gy); }
     for (var ch = 0u; ch < 3u; ch++) {
-        out[ch] = d[ch] + params.amount * (devs[ch] + cpl * (mean - devs[ch]));
+        out[ch] = d[ch] + params.amount * (devs[ch] + cpl * (mean - devs[ch]) + noise[ch]);
+    }
+    return out;
+}
+
+// scan_noise_rgb (grain_hash.rs): the scanner's noise at the three densities d_in, after the layer coupling.
+fn scan_noise_rgb(d_in: vec3<f32>, gx: u32, gy: u32) -> vec3<f32> {
+    var st = pixel_state(stream_key(2003u), gx, gy);
+    let z_all = std_normal(&st) * sqrt(max(1.0 - params.scan_noise_chroma * params.scan_noise_chroma, 0.0));
+    var out = vec3<f32>(0.0);
+    for (var ch = 0u; ch < 3u; ch++) {
+        var s2 = pixel_state(stream_key(2000u + ch), gx, gy);
+        let z = params.scan_noise_chroma * std_normal(&s2) + z_all;
+        out[ch] = params.scan_noise * pow(10.0, params.scan_noise_slope * (d_in[ch] - 1.0)) * z;
     }
     return out;
 }
@@ -212,6 +229,7 @@ fn grain_density(d: vec3<f32>, gx: u32, gy: u32) -> vec3<f32> {
 // Two-population emulsions (n_sub_layers >= 2) only.
 fn grain_devs(d: vec3<f32>, gx: u32, gy: u32) -> array<vec3<f32>, 2> {
     var devs = array<vec3<f32>, 2>(vec3<f32>(0.0), vec3<f32>(0.0));
+    var d_ins = vec3<f32>(0.0);
     var p_sum = 0.0;
     var p_lo = 1.0;
     var p_hi = 0.0;
@@ -245,6 +263,7 @@ fn grain_devs(d: vec3<f32>, gx: u32, gy: u32) -> array<vec3<f32>, 2> {
             contrib[sl] = developed * (dmax * w / npp_s) * sat_s;
         }
         let dev = contrib.x + contrib.y - dmin - d[ch];
+        d_ins[ch] = d_in;
         let fast = contrib.x - p_fast * dmax * FAST_OD_SHARE;
         var m = 1.0;
         if params.micro_sigma > 0.0 {
@@ -258,12 +277,15 @@ fn grain_devs(d: vec3<f32>, gx: u32, gy: u32) -> array<vec3<f32>, 2> {
     let tt = clamp((p_sum * (1.0 / 3.0) - COUPLING_P0) / (COUPLING_P1 - COUPLING_P0), 0.0, 1.0);
     let uu = clamp((p_hi - p_lo - COUPLING_S0) / (COUPLING_S1 - COUPLING_S0), 0.0, 1.0);
     let cpl = LAYER_COUPLING + (LAYER_COUPLING_HI - LAYER_COUPLING) * max(tt * tt * (3.0 - 2.0 * tt), uu * uu * (3.0 - 2.0 * uu));
+    var noise = vec3<f32>(0.0);
+    if params.scan_noise > 0.0 { noise = scan_noise_rgb(d_ins, gx, gy); }
     var out = array<vec3<f32>, 2>(vec3<f32>(0.0), vec3<f32>(0.0));
     for (var k = 0u; k < 2u; k++) {
         let v = devs[k];
         let mean = (v.x + v.y + v.z) * (1.0 / 3.0);
         out[k] = params.amount * (v + cpl * (vec3<f32>(mean) - v));
     }
+    out[1] += params.amount * noise;
     return out;
 }
 

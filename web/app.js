@@ -193,7 +193,7 @@ function renderParams(u, { noGrain = false, region = null } = {}) {
       // Grain is the engine's (rng 'hash': a pure function of seed + frame position, see eval/GRAIN.md).
       // Grana 1× = the old 0.25× (user-preferred); amount 1 = the calibrated Gold 200 grain (GRAIN_UNIT scales between them).
       grain: {
-        active: !noGrain && u.grain > 0, rng: 'hash', ...(V4 ? V4_GRAIN : { blur: GRAIN_BLUR }),
+        active: !noGrain && u.grain > 0, rng: 'hash', ...(V4 ? v4Grain() : { blur: GRAIN_BLUR }),
         amount: u.grain * GRAIN_UNIT * grainFactor() * (V4 ? V4_GRAIN_SCALE : 1), seed: photo.grainSeed,
         ...(region ? { origin_px: [region.x0, region.y0], frame_px: [region.fw, region.fh] } : wholeFrame(null)),
       },
@@ -1452,21 +1452,30 @@ const SCATTER_SCALE = 0.5;   // film scatter size multiplier (engine default 1),
 // its power below 40 um wavelength and r50 ~13.5 um; ours had 3 % / 18.6 um (soft). At 0.45
 // (with the engine's variance-matched kernel, filming.rs): 12 % / 14.8 um, and the preview matches the export seen at its size.
 const GRAIN_BLUR = 0.45;
-// 4.29 v4 grain as a lab scan shows it (user: "sabbiosa invece che granulosa"). Measured like the 20 real Gold 200 scans
-// (samples/kg200, flat 48 px patches at their 10-15 um pitch: luma high-pass std, autocorrelation half-width r50; median of the
-// 10-11.5 um scans by L*: shadows std ~4 / r50 ~11 um, mids ~11 / ~7.5, lights ~8 / ~8; one scan ranges 4-21). Ours was a soft
-// mottle, r50 ~15 um at every tone. Two causes, both in the engine's hash grain:
-// - the lab's scanner sharpens the grain (crisp-edged clumps): GrainParams scan_sharpen, an unsharp mask of radius HS_UM (one
-//   Frontier scanner pixel) and amount 1.5 on the grain only, over a finer dye cloud (blur 0.45 -> 0.25 reference px);
-// - the emulsion's two crystal populations: the few big fast ones develop first and carry the shadows' grain (coarse, weak),
-//   the fine slow ones the lights'. They shared one blur and the fast share (FAST_COUNT_FRAC 0.002, no source) made them
-//   dominate every tone; now blur_fast 0.6 (their own, bigger clouds) and fast_count_frac 0.02. Sweep (std / r50 by tone,
-//   shadows / mids / lights): 0.02 + 0.6 3.7/12.5 9.9/9.6 4.3/8.4; 0.02 + 0.45 5.1/11.2 11.5/9.6 4.6/8.5; 0.012 + 0.6 4.5/13.6
-//   11.0/10.6 4.5/8.8.
-// Strength V4_GRAIN_SCALE: the mids at the scans' median (std ~11). Left: the brightest lights stay weaker than the scans (4-5 vs
-// ~8: our scanner's shoulder squeezes them).
-const V4_GRAIN = { blur: 0.25, blur_fast: 0.6, fast_count_frac: 0.02, scan_sharpen_um: HS_UM, scan_sharpen: 1.5 };
-const V4_GRAIN_SCALE = 2.0;
+// 4.29 v4 grain as a lab scan shows it (user: "sabbiosa invece che granulosa", "emulazione 99%"). Fitted (coordinate search,
+// scratch opt2.py) on two references measured the same way, by tone (flat 48 px patches: luma high-pass std, autocorrelation
+// half-width r50, chroma / luma, share of power above 25 c/mm), our renders in the patches' own colours:
+// - 6 Frontier lab scans of samples/kg200 (10-11.5 um/px, IJG q70 4:2:0: ours through the same JPEG before measuring);
+// - 2 high-quality 35 mm Noritsu HS-1800 scans (refs/labscans/optikoldschool_gold200_35_vs_120, 5.3 um/px, ~q98) box-resampled
+//   to our 12 MP pitch.
+// Ours was a soft mottle, r50 ~15 um at every tone. Now (Frontier set / Noritsu set): r50 within ~1 um of both (Noritsu, at our
+// pitch: 6.4-7.0 vs 5.3-6.2 um, fine share 65-71 vs 68-77 %), strength by tone inside the real scans' spread (the Frontier scans
+// alone range x3-5 between frames). The model, engine hash grain (GrainParams):
+// - the lab scanner sharpens the grain: scan_sharpen, unsharp mask of radius HS_UM (one Frontier scanner pixel), grain only;
+// - two crystal populations: the few big fast ones (the shadows' grain, coarse) get their own dye cloud blur_fast and share
+//   fast_count_frac (the inherited 0.002, no source, made them dominate every tone);
+// - the scanner's own noise: scan_noise, sigma in density at density 1 growing as 10^(slope (d - 1)) (dense negative = the
+//   positive's lights: little light reaches the sensor), colour share scan_noise_chroma (the scanner software's colour NR).
+// Left: the two references disagree (Frontier lights / Noritsu mid-lights), one set cannot fit both; shadows a bit weak.
+const V4_GRAIN = {
+  blur: 0.2, blur_fast: 0.35, fast_count_frac: 0.02, scan_sharpen_um: HS_UM, scan_sharpen: 0.85,
+  scan_noise: 0.011, scan_noise_slope: 0.6, scan_noise_chroma: 0.5,
+};
+/** The v4 grain for the chosen scanner: Scanner 'Nessuno' (a neutral read, no lab machine) has no lab scanner noise. Measured
+ * on flat patches exported by the app (12 MP): with it its lights came out x2 the lab scans (std 21-24 vs 7-11; its inversion
+ * keeps the lights' contrast that a lab scanner's curve squeezes), without it 14-17. */
+const v4Grain = () => (neutralScan() ? { ...V4_GRAIN, scan_noise: 0 } : V4_GRAIN);
+const V4_GRAIN_SCALE = 1.95;   // Grana's slider unit for this grain: the fitted amount (3.95) at the default Grana (V4_FILM)
 const GRAIN_UNIT = 0.65;   // slider 1× -> engine amount (= old slider 0.25 / old default 0.4)
 const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }

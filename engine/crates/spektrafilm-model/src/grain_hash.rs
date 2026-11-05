@@ -55,6 +55,23 @@ pub const COUPLING_P1: f32 = 0.6;
 pub const COUPLING_S0: f32 = 0.12;
 pub const COUPLING_S1: f32 = 0.22;
 
+/// The scanner's sensor noise, read as density: a constant noise on the light it measures (`10^-d`) is `10^(d - 1)` in
+/// density (normalised at density 1; `scan_noise_slope` 1, lower: less steep), so the dense parts of the negative (the
+/// positive's lights) come out noisier. For the three channels at their densities `d_in`: that sigma on a mix of the
+/// channel's own draw (stream 2000 + channel) and a common one (stream 2003), weights `chroma` and `sqrt(1 - chroma^2)`.
+#[inline]
+pub fn scan_noise_rgb(g: &HashGrain, d_in: [f32; 3], gx: u32, gy: u32) -> [f32; 3] {
+    let mut st = pixel_state(stream_key(g.seed, 2003), gx, gy);
+    let common = std_normal(&mut st) * (1.0 - g.scan_noise_chroma * g.scan_noise_chroma).max(0.0).sqrt();
+    let mut out = [0.0f32; 3];
+    for ch in 0..3 {
+        let mut st = pixel_state(stream_key(g.seed, 2000 + ch as u32), gx, gy);
+        let z = g.scan_noise_chroma * std_normal(&mut st) + common;
+        out[ch] = g.scan_noise * 10f32.powf(g.scan_noise_slope * (d_in[ch] - 1.0)) * z;
+    }
+    out
+}
+
 /// Layer coupling for a pixel whose three layers have the mean developed fraction `pbar` and spread (max - min) `spread`.
 #[inline]
 pub fn layer_coupling(pbar: f32, spread: f32) -> f32 {
@@ -81,6 +98,13 @@ pub struct HashGrain {
     pub uniformity: [f32; 3],
     /// Share of the crystals that are fast (two-population emulsions; `FAST_COUNT_FRAC` by default).
     pub fast_count_frac: f32,
+    /// The lab scanner's noise, in density at density 1 (`scan_noise_at`): 0 = none.
+    pub scan_noise: f32,
+    /// How it grows with density (`scan_noise_at`): 10^(slope (d - 1)).
+    pub scan_noise_slope: f32,
+    /// Its colour share (`scan_noise_rgb`): 1 = the three channels independent, 0 = one draw for all (the scanner's
+    /// software takes most of the colour noise out).
+    pub scan_noise_chroma: f32,
     pub micro_sigma: f32,
     pub amount: f32,
 }
@@ -198,6 +222,8 @@ pub fn binomial(n: f32, p: f32, q: f32, st: &mut u32) -> f32 {
 pub fn grain_density_pixel(g: &HashGrain, d: [f32; 3], gx: u32, gy: u32) -> [f32; 3] {
     let mut out = d;
     let mut devs = [0.0f32; 3];
+    // the scanner's noise (scan_noise_rgb): after the layer coupling, it is not the film's
+    let mut d_ins = [0.0f32; 3];
     let mut p_sum = 0.0f32;
     let (mut p_lo, mut p_hi) = (1.0f32, 0.0f32);
     for ch in 0..3usize {
@@ -245,6 +271,7 @@ pub fn grain_density_pixel(g: &HashGrain, d: [f32; 3], gx: u32, gy: u32) -> [f32
         }
         let grain = if g.n_sub_layers >= 2 { sum } else { sum / g.n_sub_layers as f32 } - dmin;
         let mut dev = grain - d[ch];
+        d_ins[ch] = d_in;
         if g.micro_sigma > 0.0 {
             let mut st = pixel_state(stream_key(g.seed, 1000 + layer), gx, gy);
             let z = std_normal(&mut st);
@@ -254,8 +281,9 @@ pub fn grain_density_pixel(g: &HashGrain, d: [f32; 3], gx: u32, gy: u32) -> [f32
     }
     let mean = (devs[0] + devs[1] + devs[2]) * (1.0 / 3.0);
     let cpl = layer_coupling(p_sum * (1.0 / 3.0), p_hi - p_lo);
+    let noise = if g.scan_noise > 0.0 { scan_noise_rgb(g, d_ins, gx, gy) } else { [0.0; 3] };
     for ch in 0..3usize {
-        out[ch] = d[ch] + g.amount * (devs[ch] + cpl * (mean - devs[ch]));
+        out[ch] = d[ch] + g.amount * (devs[ch] + cpl * (mean - devs[ch]) + noise[ch]);
     }
     out
 }
@@ -270,6 +298,7 @@ pub fn grain_dev_split(g: &HashGrain, d: [f32; 3], gx: u32, gy: u32) -> [[f32; 3
         return [[0.0; 3], [o[0] - d[0], o[1] - d[1], o[2] - d[2]]];
     }
     let mut devs = [[0.0f32; 3]; 2];
+    let mut d_ins = [0.0f32; 3];
     let mut p_sum = 0.0f32;
     let (mut p_lo, mut p_hi) = (1.0f32, 0.0f32);
     for ch in 0..3usize {
@@ -303,6 +332,7 @@ pub fn grain_dev_split(g: &HashGrain, d: [f32; 3], gx: u32, gy: u32) -> [[f32; 3
             contrib[sl] = developed * (dmax * w / npp_s) * sat_s;
         }
         let dev = contrib[0] + contrib[1] - dmin - d[ch];
+        d_ins[ch] = d_in;
         let fast = contrib[0] - p_fast * dmax * FAST_OD_SHARE;
         let m = if g.micro_sigma > 0.0 {
             let mut st = pixel_state(stream_key(g.seed, 1000 + layer), gx, gy);
@@ -315,11 +345,12 @@ pub fn grain_dev_split(g: &HashGrain, d: [f32; 3], gx: u32, gy: u32) -> [[f32; 3
         devs[1][ch] = (dev - fast) * m;
     }
     let cpl = layer_coupling(p_sum * (1.0 / 3.0), p_hi - p_lo);
+    let noise = if g.scan_noise > 0.0 { scan_noise_rgb(g, d_ins, gx, gy) } else { [0.0; 3] };
     let mut out = [[0.0f32; 3]; 2];
     for k in 0..2 {
         let mean = (devs[k][0] + devs[k][1] + devs[k][2]) * (1.0 / 3.0);
         for ch in 0..3 {
-            out[k][ch] = g.amount * (devs[k][ch] + cpl * (mean - devs[k][ch]));
+            out[k][ch] = g.amount * (devs[k][ch] + cpl * (mean - devs[k][ch]) + if k == 1 { noise[ch] } else { 0.0 });
         }
     }
     out
@@ -575,6 +606,9 @@ mod tests {
             micro_sigma: 0.2,
             amount: 1.0,
             fast_count_frac: 0.02,
+            scan_noise: 0.0,
+            scan_noise_slope: 1.0,
+            scan_noise_chroma: 1.0,
         }
     }
 

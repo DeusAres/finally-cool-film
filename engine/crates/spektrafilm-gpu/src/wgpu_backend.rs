@@ -5886,7 +5886,7 @@ fn build_grain_state(
             dev_only: f32,
             split: f32,
             fast_count_frac: f32,
-            _pad: [f32; 3],
+            scan_noise: [f32; 3],
         }
         let v4 = |a: [f32; 3]| [a[0], a[1], a[2], 0.0];
         let params = HashParams {
@@ -5907,7 +5907,7 @@ fn build_grain_state(
             dev_only: if dev_only { 1.0 } else { 0.0 },
             split: if split { 1.0 } else { 0.0 },
             fast_count_frac: h.fast_count_frac,
-            _pad: [0.0; 3],
+            scan_noise: h.scan_noise,
         };
         let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some("grain_hash_params"),

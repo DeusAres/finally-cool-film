@@ -555,6 +555,9 @@ pub fn hash_grain_setup(
         micro_sigma: g.micro_structure[0].max(0.0),
         amount: g.amount as f32,
         fast_count_frac: g.fast_count_frac,
+        scan_noise: g.scan_noise,
+        scan_noise_slope: g.scan_noise_slope,
+        scan_noise_chroma: g.scan_noise_chroma,
     };
     for c in 0..3 {
         let area = g.agx_particle_area_um2 * g.agx_particle_scale[c];
