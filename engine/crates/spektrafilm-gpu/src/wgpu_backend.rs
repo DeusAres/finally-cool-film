@@ -2933,6 +2933,8 @@ struct HalationState {
 #[cfg(feature = "wgpu-backend")]
 struct BlurJob {
     _kernel_buf: wgpu::Buffer,
+    /// A V kernel of its own (the grain's scaled one); None: the V pass reads `_kernel_buf`.
+    _kernel_v_buf: Option<wgpu::Buffer>,
     _params_buf: wgpu::Buffer,
     bg_h: wgpu::BindGroup,
     bg_v: wgpu::BindGroup,
@@ -3074,6 +3076,7 @@ fn build_halation_state(
             });
             BlurJob {
                 _kernel_buf: kernel_buf,
+                _kernel_v_buf: None,
                 _params_buf: params_buf,
                 bg_h,
                 bg_v,
@@ -3759,6 +3762,7 @@ fn build_diffusion_state(
         });
         blur_jobs.push(BlurJob {
             _kernel_buf: kernel_buf,
+            _kernel_v_buf: None,
             _params_buf: bp,
             bg_h,
             bg_v,
@@ -4108,6 +4112,7 @@ fn build_simple_blur_state(
         _dst: dst,
         blur: BlurJob {
             _kernel_buf: kernel_buf,
+            _kernel_v_buf: None,
             _params_buf: params_buf,
             bg_h,
             bg_v,
@@ -4746,6 +4751,7 @@ fn build_dir_state(
             });
             BlurJob {
                 _kernel_buf: kernel_buf,
+                _kernel_v_buf: None,
                 _params_buf: params_buf,
                 bg_h,
                 bg_v,
@@ -5198,6 +5204,7 @@ fn build_unsharp_state(
     });
     let blur = BlurJob {
         _kernel_buf: kernel_buf,
+        _kernel_v_buf: None,
         _params_buf: params_buf,
         bg_h,
         bg_v,
@@ -5502,6 +5509,7 @@ fn build_glare_state(
         });
         Some(BlurJob {
             _kernel_buf: kernel_buf,
+            _kernel_v_buf: None,
             _params_buf: params_buf,
             bg_h,
             bg_v,
@@ -5748,9 +5756,69 @@ impl GamutState {
 struct GrainState {
     grain_dispatch: DispatchJob,
     _grain_dev: wgpu::Buffer,
-    blur: Option<BlurJob>,
+    blur: Vec<BlurJob>,
     blur_pipe_h: CachedPipelineRef,
     blur_pipe_v: CachedPipelineRef,
+}
+
+/// One separable gaussian blur of the grain: H pass `src` -> `mid`, V pass adds `scale` x the blurred value into `dst`
+/// (hash grain; the legacy path's V pass writes instead, scale 1). The scale is folded into the V kernel.
+#[cfg(feature = "wgpu-backend")]
+#[allow(clippy::too_many_arguments)]
+fn grain_blur_job(
+    device: &wgpu::Device,
+    pipe_h: &CachedPipelineRef,
+    pipe_v: &CachedPipelineRef,
+    sigma: f32,
+    scale: f32,
+    src: &wgpu::Buffer,
+    mid: &wgpu::Buffer,
+    dst: &wgpu::Buffer,
+    width: u32,
+    height: u32,
+) -> BlurJob {
+    let sigma = sigma.max(0.01);
+    let radius = fir_blur_radius(sigma);
+    let two_sigma_sq = 2.0 * (sigma as f64) * (sigma as f64);
+    let kernel: Vec<f64> = (0..2 * radius + 1).map(|k| { let x = k as f64 - radius as f64; (-x * x / two_sigma_sq).exp() }).collect();
+    let sum: f64 = kernel.iter().sum();
+    let k_h: Vec<f32> = kernel.iter().map(|v| (v / sum) as f32).collect();
+    let k_v: Vec<f32> = kernel.iter().map(|v| (v / sum * scale as f64) as f32).collect();
+    let storage = |label, data: &[f32]| device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
+        label: Some(label),
+        contents: bytemuck::cast_slice(data),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+    let kernel_buf = storage("grain_blur_kernel_h", &k_h);
+    let kernel_v_buf = storage("grain_blur_kernel_v", &k_v);
+    #[repr(C)]
+    #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+    struct BlurParams {
+        width: u32,
+        height: u32,
+        radius: u32,
+        _pad: u32,
+    }
+    let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
+        label: Some("grain_blur_params"),
+        contents: bytemuck::bytes_of(&BlurParams { width, height, radius, _pad: 0 }),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    let bg = |label, layout: &wgpu::BindGroupLayout, input: &wgpu::Buffer, k: &wgpu::Buffer, out: &wgpu::Buffer| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: params_buf.used_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: input.used_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: k.used_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: out.used_binding() },
+            ],
+        })
+    };
+    let bg_h = bg("grain_blur_h_bg", &pipe_h.layout, src, &kernel_buf, mid);
+    let bg_v = bg("grain_blur_v_bg", &pipe_v.layout, mid, &kernel_v_buf, dst);
+    BlurJob { _kernel_buf: kernel_buf, _kernel_v_buf: Some(kernel_v_buf), _params_buf: params_buf, bg_h, bg_v }
 }
 
 #[cfg(feature = "wgpu-backend")]
@@ -5768,7 +5836,7 @@ fn build_grain_state(
     // shader writes the deviation (grainy - clean) to `grain_dev`, the H pass
     // blurs it into buf_b and the V pass adds it onto the clean density in
     // buf_a (CPU: filming.rs). Blurring the whole density softened the image.
-    let dev_only = gp.hash.is_some() && gp.grain_blur > 0.1;
+    let dev_only = gp.hash.map_or(false, |h| gp.grain_blur > 0.1 || h.sharpen[1] > 0.0);
     // With `dev_only` the grain pass writes every pixel before the blur reads
     // it; otherwise nothing reads it (a 16-byte stand-in for the binding).
     // COPY_DST: poolable (`TrackedCreate`).
@@ -5928,98 +5996,18 @@ fn build_grain_state(
         },
         blur_layout,
     );
-    let blur = if gp.grain_blur > 0.1 {
-        let sigma = gp.grain_blur.max(0.01);
-        let radius = fir_blur_radius(sigma);
-        let kernel_size = (2 * radius + 1) as usize;
-        let sigma_f64 = sigma as f64;
-        let two_sigma_sq = 2.0 * sigma_f64 * sigma_f64;
-        let r_i32 = radius as i32;
-        let mut kernel = Vec::with_capacity(kernel_size);
-        for k in 0..kernel_size {
-            let x = (k as i32 - r_i32) as f64;
-            kernel.push((-x * x / two_sigma_sq).exp());
+    // Hash grain: (1 + a) G(grain_blur) - a G(sharpen sigma) of the deviation, two H+V jobs adding into buf_a (the
+    // scale rides on the V kernel); a = 0: the one dye-cloud blur. Legacy grain: the plain blur of the grainy density.
+    let sharp = gp.hash.map(|h| h.sharpen).unwrap_or([0.0, 0.0]);
+    let mut blur: Vec<BlurJob> = Vec::new();
+    if dev_only || gp.grain_blur > 0.1 {
+        let src = if dev_only { &grain_dev } else { buf_a };
+        let a = if dev_only { sharp[1] } else { 0.0 };
+        blur.push(grain_blur_job(device, &blur_pipe_h, &blur_pipe_v, gp.grain_blur, 1.0 + a, src, buf_b, buf_a, width, height));
+        if a > 0.0 {
+            blur.push(grain_blur_job(device, &blur_pipe_h, &blur_pipe_v, sharp[0], -a, src, buf_b, buf_a, width, height));
         }
-        let sum: f64 = kernel.iter().sum();
-        let kernel_f32: Vec<f32> = kernel.into_iter().map(|v| (v / sum) as f32).collect();
-
-        let kernel_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
-            label: Some("grain_blur_kernel"),
-            contents: bytemuck::cast_slice(&kernel_f32),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-        #[repr(C)]
-        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-        struct BlurParams {
-            width: u32,
-            height: u32,
-            radius: u32,
-            _pad: u32,
-        }
-        let params = BlurParams {
-            width,
-            height,
-            radius,
-            _pad: 0,
-        };
-        let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
-            label: Some("grain_blur_params"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let bg_h = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("grain_blur_h_bg"),
-            layout: &blur_pipe_h.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: params_buf.used_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: if dev_only { grain_dev.used_binding() } else { buf_a.used_binding() },
-                }, // src: the grain deviation (hash), or the grainy density
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: kernel_buf.used_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: buf_b.used_binding(),
-                }, // mid
-            ],
-        });
-        let bg_v = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("grain_blur_v_bg"),
-            layout: &blur_pipe_v.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: params_buf.used_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: buf_b.used_binding(),
-                }, // mid
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: kernel_buf.used_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: buf_a.used_binding(),
-                }, // dst (in place)
-            ],
-        });
-        Some(BlurJob {
-            _kernel_buf: kernel_buf,
-            _params_buf: params_buf,
-            bg_h,
-            bg_v,
-        })
-    } else {
-        None
-    };
+    }
 
     GrainState {
         grain_dispatch,
@@ -6049,8 +6037,8 @@ impl GrainState {
             pass.set_bind_group(0, &self.grain_dispatch.bg, &[]);
             pass.dispatch_workgroups((n_pixels + workgroup_size - 1) / workgroup_size, 1, 1);
         }
-        // Optional post-blur.
-        if let Some(b) = &self.blur {
+        // Post-blurs (dye clouds, scanner sharpening).
+        for b in &self.blur {
             {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("grain_blur_h"),

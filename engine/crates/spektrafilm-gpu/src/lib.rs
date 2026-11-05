@@ -350,6 +350,9 @@ pub struct GrainHashGpu {
     pub origin: [u32; 2],
     pub micro_sigma: f32,
     pub amount: f32,
+    /// Scanner sharpening of the grain: `[sigma_px, amount]`, the deviation becomes `(1 + a) G(grain_blur) - a G(sigma)`
+    /// (core GrainParams `scan_sharpen`; amount 0 = the plain dye-cloud blur).
+    pub sharpen: [f32; 2],
 }
 
 /// Output gamut compression parameters for the GPU-resident per-pixel pass.

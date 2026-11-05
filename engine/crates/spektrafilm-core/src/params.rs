@@ -492,6 +492,13 @@ pub struct GrainParams {
     pub blur: f32,
     #[serde(default = "default_one")]
     pub blur_dye_clouds_um: f32,
+    /// The lab scanner's sharpening on the grain (hash grain only): an unsharp mask of radius `scan_sharpen_um` (um on the
+    /// film) and amount `scan_sharpen` on the blurred grain, `(1 + a) G(blur) - a G(sqrt(blur^2 + r^2))`: the crisp-edged
+    /// clumps of a real lab scan instead of a soft mottle. 0 = off. The image itself is not sharpened (Hyper Sharpness is).
+    #[serde(default)]
+    pub scan_sharpen_um: f32,
+    #[serde(default)]
+    pub scan_sharpen: f32,
     #[serde(default = "default_micro_structure")]
     pub micro_structure: [f32; 2],
     #[serde(default = "default_1i")]
@@ -565,6 +572,8 @@ impl Default for GrainParams {
             uniformity: [0.97, 0.99, 0.97],
             blur: 0.65,
             blur_dye_clouds_um: 1.0,
+            scan_sharpen_um: 0.0,
+            scan_sharpen: 0.0,
             micro_structure: [0.2, 30.0],
             n_sub_layers: 2,
             monochrome: false,
