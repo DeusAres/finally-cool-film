@@ -495,6 +495,13 @@ pub struct GrainParams {
     /// The lab scanner's sharpening on the grain (hash grain only): an unsharp mask of radius `scan_sharpen_um` (um on the
     /// film) and amount `scan_sharpen` on the blurred grain, `(1 + a) G(blur) - a G(sqrt(blur^2 + r^2))`: the crisp-edged
     /// clumps of a real lab scan instead of a soft mottle. 0 = off. The image itself is not sharpened (Hyper Sharpness is).
+    /// Dye-cloud blur of the FAST crystals' grain (hash grain, `n_sub_layers >= 2`), in the units of `blur` (reference
+    /// px): the few big crystals that develop first (the positive's shadows) make bigger clouds. 0 = one blur for both.
+    #[serde(default)]
+    pub blur_fast: f32,
+    /// Share of the crystals that are fast (two-population emulsions): how much of the grain is theirs.
+    #[serde(default = "default_fast_count_frac")]
+    pub fast_count_frac: f32,
     #[serde(default)]
     pub scan_sharpen_um: f32,
     #[serde(default)]
@@ -550,6 +557,9 @@ fn default_02_f64() -> f64 {
 fn default_particle_scale_f64() -> [f64; 3] {
     [0.12, 0.12, 0.12]
 }
+fn default_fast_count_frac() -> f32 {
+    spektrafilm_model::grain_hash::FAST_COUNT_FRAC
+}
 fn default_particle_scale_layers_f64() -> [f64; 3] {
     [2.0, 1.0, 0.5]
 }
@@ -572,6 +582,8 @@ impl Default for GrainParams {
             uniformity: [0.97, 0.99, 0.97],
             blur: 0.65,
             blur_dye_clouds_um: 1.0,
+            blur_fast: 0.0,
+            fast_count_frac: spektrafilm_model::grain_hash::FAST_COUNT_FRAC,
             scan_sharpen_um: 0.0,
             scan_sharpen: 0.0,
             micro_structure: [0.2, 30.0],

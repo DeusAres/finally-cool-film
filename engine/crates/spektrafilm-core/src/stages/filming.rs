@@ -470,30 +470,32 @@ pub fn develop(
     let grain = &params.film_render.grain;
     if grain.applies() && grain.is_hash() {
         let t = Instant::now();
-        let (hg, blur_px, [sharp_px, sharp]) = hash_grain_setup(params, film, density_cmy.width, density_cmy.height);
-        let grainy = spektrafilm_model::grain_hash::apply_grain_hash(&density_cmy, &hg);
+        let (hg, gb) = hash_grain_setup(params, film, density_cmy.width, density_cmy.height);
         // The dye-cloud blur shapes the grain only: blurring the whole density
         // softened the image itself as soon as Grana was on (the film's image
         // sharpness is the scatter stage's, before the curves). The scanner's
-        // sharpening, when on, too: (1 + a) G(blur) - a G(sharp_px).
-        density_cmy = if blur_px > 0.1 || sharp > 0.0 {
-            let mut dev = grainy;
+        // sharpening (GrainBlur) too; the fast crystals' grain gets its own blur.
+        density_cmy = if gb.fast_px > 0.0 {
+            let [fast, slow] = spektrafilm_model::grain_hash::apply_grain_hash_split(&density_cmy, &hg);
+            let (fast, slow) = (gb.apply(backend, &fast, gb.fast_px), gb.apply(backend, &slow, gb.soft_px));
+            let mut out = density_cmy;
+            for ((o, &f), &s) in out.data.iter_mut().zip(fast.data.iter()).zip(slow.data.iter()) {
+                *o += f + s;
+            }
+            out
+        } else if gb.soft_px > 0.1 || gb.sharpen[1] > 0.0 {
+            let mut dev = spektrafilm_model::grain_hash::apply_grain_hash(&density_cmy, &hg);
             for (g, &d) in dev.data.iter_mut().zip(density_cmy.data.iter()) {
                 *g -= d;
             }
-            let soft = backend.gaussian_blur(&dev, blur_px);
-            let wide = if sharp > 0.0 { Some(backend.gaussian_blur(&dev, sharp_px)) } else { None };
-            let (k_soft, k_wide) = (spektrafilm_math::precision::from_f32(1.0 + sharp), spektrafilm_math::precision::from_f32(sharp));
+            let dev = gb.apply(backend, &dev, gb.soft_px);
             let mut out = density_cmy;
-            for (i, (o, &g)) in out.data.iter_mut().zip(soft.data.iter()).enumerate() {
-                *o += match &wide {
-                    Some(w) => k_soft * g - k_wide * w.data[i],
-                    None => g,
-                };
+            for (o, &g) in out.data.iter_mut().zip(dev.data.iter()) {
+                *o += g;
             }
             out
         } else {
-            grainy
+            spektrafilm_model::grain_hash::apply_grain_hash(&density_cmy, &hg)
         };
         print_stage_timing(stage_timings, "filming_develop.grain_hash", t);
     } else if grain.active && !grain.is_hash() {
@@ -523,8 +525,7 @@ pub fn develop(
 }
 
 /// Inputs of the counter-based grain for an `image_w x image_h` region, plus
-/// the dye-cloud blur sigma in px of that region and the scanner sharpening
-/// `[sigma_px, amount]` (GrainParams `scan_sharpen`; amount 0 = off). The pixel pitch comes from
+/// its blurs (`GrainBlur`). The pixel pitch comes from
 /// `frame_px` (the whole frame) when given, so tiles/previews/exports share it.
 /// Shared by the CPU stage and the GPU-resident chain.
 pub fn hash_grain_setup(
@@ -532,7 +533,7 @@ pub fn hash_grain_setup(
     film: &Profile,
     image_w: u32,
     image_h: u32,
-) -> (spektrafilm_model::grain_hash::HashGrain, f32, [f32; 2]) {
+) -> (spektrafilm_model::grain_hash::HashGrain, GrainBlur) {
     let g = &params.film_render.grain;
     let (fw, fh) = if g.frame_px[0] >= 1.0 && g.frame_px[1] >= 1.0 {
         (g.frame_px[0] as u32, g.frame_px[1] as u32)
@@ -553,6 +554,7 @@ pub fn hash_grain_setup(
         uniformity: [0.0; 3],
         micro_sigma: g.micro_structure[0].max(0.0),
         amount: g.amount as f32,
+        fast_count_frac: g.fast_count_frac,
     };
     for c in 0..3 {
         let area = g.agx_particle_area_um2 * g.agx_particle_scale[c];
@@ -577,13 +579,42 @@ pub fn hash_grain_setup(
     // pixel-integrated one. Converges to blur_px above ~1.5 px (export sizes).
     // (Replaces the earlier s^0.47 fit for pixels coarser than 18 um, same effect.)
     let blur_px = if g.blur > 0.0 { discrete_matched_sigma(blur_px) } else { blur_px };
-    let r_px = g.scan_sharpen_um as f64 / pix_um;
-    let sharpen = if g.scan_sharpen > 0.0 && r_px > 0.0 {
-        [(blur_px * blur_px + r_px * r_px).sqrt() as f32, g.scan_sharpen]
+    let fast_px = if g.blur_fast > 0.0 && n_sub >= 2 {
+        let um = (g.blur_fast as f64 * GRAIN_REF_PIXEL_UM).hypot(g.blur_dye_clouds_um as f64);
+        discrete_matched_sigma(um / pix_um) as f32
     } else {
-        [0.0, 0.0]
+        0.0
     };
-    (hg, blur_px as f32, sharpen)
+    let r_px = (g.scan_sharpen_um as f64 / pix_um) as f32;
+    let sharpen = if g.scan_sharpen > 0.0 && r_px > 0.0 { [r_px, g.scan_sharpen] } else { [0.0, 0.0] };
+    (hg, GrainBlur { soft_px: blur_px as f32, fast_px, sharpen })
+}
+
+/// The hash grain's blurs in px of the region: the dye clouds (`soft_px`; `fast_px` > 0: the fast crystals' own, their
+/// deviation blurred apart) and the scanner sharpening `[radius_px, amount]` on each (amount 0 = off).
+#[derive(Debug, Clone, Copy)]
+pub struct GrainBlur {
+    pub soft_px: f32,
+    pub fast_px: f32,
+    pub sharpen: [f32; 2],
+}
+
+impl GrainBlur {
+    /// `(1 + a) G(s) - a G(sqrt(s^2 + r^2))` of `dev` (just G(s) when the sharpening is off).
+    pub fn apply(&self, backend: &dyn spektrafilm_gpu::ComputeBackend, dev: &ImageBuf, s: f32) -> ImageBuf {
+        let soft = backend.gaussian_blur(dev, s);
+        let [r, a] = self.sharpen;
+        if a <= 0.0 {
+            return soft;
+        }
+        let wide = backend.gaussian_blur(dev, s.hypot(r));
+        let (k1, k2) = (from_f32(1.0 + a), from_f32(a));
+        let mut out = soft;
+        for (o, &w) in out.data.iter_mut().zip(wide.data.iter()) {
+            *o = k1 * *o - k2 * w;
+        }
+        out
+    }
 }
 
 /// Variance gain (per axis) of a pixel-box-integrated white noise blurred by a

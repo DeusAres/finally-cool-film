@@ -26,12 +26,17 @@ struct Params {
     micro_sigma: f32,
     amount: f32,
     dev_only: f32,                // 1: write grainy - clean to grain_dev, keep density_cmy
+    split: f32,                   // 1 (with dev_only): the fast crystals' deviation to grain_dev_fast, the rest to grain_dev
+    fast_count_frac: f32,         // share of the crystals that are fast (two-population emulsions)
     pad1: f32,
+    pad2: f32,
+    pad3: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read_write> density_cmy: array<f32>;
 @group(0) @binding(2) var<storage, read_write> grain_dev: array<f32>;
+@group(0) @binding(3) var<storage, read_write> grain_dev_fast: array<f32>;
 
 const EXACT_MAX_MEAN: f32 = 30.0;
 const MAX_STEPS: u32 = 120u;
@@ -125,7 +130,6 @@ fn binomial(n: f32, p: f32, q: f32, st: ptr<function, u32>) -> f32 {
 
 const FAST_OD_SHARE: f32 = 0.3;
 const FAST_K: f32 = 3.3;
-const FAST_COUNT_FRAC: f32 = 0.002;
 const LAYER_COUPLING: f32 = 0.97;
 // coupling rises to LAYER_COUPLING_HI between mean developed fraction COUPLING_P0 and COUPLING_P1
 // (lights: less coloured grain where the shoulder squeezes luma only); see grain_hash.rs
@@ -167,8 +171,8 @@ fn grain_density(d: vec3<f32>, gx: u32, gy: u32) -> vec3<f32> {
             let p_slow = clamp((p - FAST_OD_SHARE * p_fast) / w_slow, 1e-6, 1.0 - 1e-6);
             let q_slow = clamp((q - FAST_OD_SHARE * qk) / w_slow, 1e-6, 1.0 - 1e-6);
             for (var sl = 0u; sl < 2u; sl++) {
-                var ps = p_fast; var qs = q_fast; var w = FAST_OD_SHARE; var cf = FAST_COUNT_FRAC;
-                if sl == 1u { ps = p_slow; qs = q_slow; w = w_slow; cf = 1.0 - FAST_COUNT_FRAC; }
+                var ps = p_fast; var qs = q_fast; var w = FAST_OD_SHARE; var cf = params.fast_count_frac;
+                if sl == 1u { ps = p_slow; qs = q_slow; w = w_slow; cf = 1.0 - params.fast_count_frac; }
                 let npp_s = npp_tot * cf;
                 let sat_s = 1.0 - ps * params.uniformity[ch] * (1.0 - 1e-6);
                 var st = pixel_state(stream_key(layer + sl * 10u), gx, gy);
@@ -204,12 +208,81 @@ fn grain_density(d: vec3<f32>, gx: u32, gy: u32) -> vec3<f32> {
     return out;
 }
 
+// grain_dev_split (grain_hash.rs): the deviation split by population, [fast, slow], amount and coupling applied.
+// Two-population emulsions (n_sub_layers >= 2) only.
+fn grain_devs(d: vec3<f32>, gx: u32, gy: u32) -> array<vec3<f32>, 2> {
+    var devs = array<vec3<f32>, 2>(vec3<f32>(0.0), vec3<f32>(0.0));
+    var p_sum = 0.0;
+    var p_lo = 1.0;
+    var p_hi = 0.0;
+    for (var ch = 0u; ch < 3u; ch++) {
+        var layer = ch;
+        if params.monochrome != 0u { layer = 0u; }
+        let dmin = params.density_min[ch];
+        let dmax = params.density_max[ch];
+        let d_in = d[ch] + dmin;
+        let p = clamp(d_in / dmax, 1e-6, 1.0 - 1e-6);
+        p_sum += p;
+        p_lo = min(p_lo, p);
+        p_hi = max(p_hi, p);
+        let q = clamp((dmax - d_in) / dmax, 1e-6, 1.0 - 1e-6);
+        let npp_tot = params.n_particles[ch] * f32(params.n_sub_layers);
+        let qk = pow(q, FAST_K);
+        let p_fast = clamp(1.0 - qk, 1e-6, 1.0 - 1e-6);
+        let q_fast = clamp(qk, 1e-6, 1.0 - 1e-6);
+        let w_slow = 1.0 - FAST_OD_SHARE;
+        let p_slow = clamp((p - FAST_OD_SHARE * p_fast) / w_slow, 1e-6, 1.0 - 1e-6);
+        let q_slow = clamp((q - FAST_OD_SHARE * qk) / w_slow, 1e-6, 1.0 - 1e-6);
+        var contrib = vec2<f32>(0.0);
+        for (var sl = 0u; sl < 2u; sl++) {
+            var ps = p_fast; var qs = q_fast; var w = FAST_OD_SHARE; var cf = params.fast_count_frac;
+            if sl == 1u { ps = p_slow; qs = q_slow; w = w_slow; cf = 1.0 - params.fast_count_frac; }
+            let npp_s = npp_tot * cf;
+            let sat_s = 1.0 - ps * params.uniformity[ch] * (1.0 - 1e-6);
+            var st = pixel_state(stream_key(layer + sl * 10u), gx, gy);
+            let seeds = poisson(npp_s / sat_s, &st);
+            let developed = binomial(seeds, ps, qs, &st);
+            contrib[sl] = developed * (dmax * w / npp_s) * sat_s;
+        }
+        let dev = contrib.x + contrib.y - dmin - d[ch];
+        let fast = contrib.x - p_fast * dmax * FAST_OD_SHARE;
+        var m = 1.0;
+        if params.micro_sigma > 0.0 {
+            var st = pixel_state(stream_key(1000u + layer), gx, gy);
+            let z = std_normal(&st);
+            m = exp(params.micro_sigma * z - 0.5 * params.micro_sigma * params.micro_sigma);
+        }
+        devs[0][ch] = fast * m;
+        devs[1][ch] = (dev - fast) * m;
+    }
+    let tt = clamp((p_sum * (1.0 / 3.0) - COUPLING_P0) / (COUPLING_P1 - COUPLING_P0), 0.0, 1.0);
+    let uu = clamp((p_hi - p_lo - COUPLING_S0) / (COUPLING_S1 - COUPLING_S0), 0.0, 1.0);
+    let cpl = LAYER_COUPLING + (LAYER_COUPLING_HI - LAYER_COUPLING) * max(tt * tt * (3.0 - 2.0 * tt), uu * uu * (3.0 - 2.0 * uu));
+    var out = array<vec3<f32>, 2>(vec3<f32>(0.0), vec3<f32>(0.0));
+    for (var k = 0u; k < 2u; k++) {
+        let v = devs[k];
+        let mean = (v.x + v.y + v.z) * (1.0 / 3.0);
+        out[k] = params.amount * (v + cpl * (vec3<f32>(mean) - v));
+    }
+    return out;
+}
+
 @compute @workgroup_size(1024)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
     if idx >= params.width * params.height { return; }
     let base = idx * 3u;
     let d = vec3<f32>(density_cmy[base], density_cmy[base + 1u], density_cmy[base + 2u]);
+    if params.split > 0.5 {
+        let dv = grain_devs(d, params.origin_x + idx % params.width, params.origin_y + idx / params.width);
+        grain_dev_fast[base] = dv[0].x;
+        grain_dev_fast[base + 1u] = dv[0].y;
+        grain_dev_fast[base + 2u] = dv[0].z;
+        grain_dev[base] = dv[1].x;
+        grain_dev[base + 1u] = dv[1].y;
+        grain_dev[base + 2u] = dv[1].z;
+        return;
+    }
     let o = grain_density(d, params.origin_x + idx % params.width, params.origin_y + idx / params.width);
     if params.dev_only > 0.5 {
         grain_dev[base] = o.x - d.x;

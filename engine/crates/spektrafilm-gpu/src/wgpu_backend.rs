@@ -5756,6 +5756,7 @@ impl GamutState {
 struct GrainState {
     grain_dispatch: DispatchJob,
     _grain_dev: wgpu::Buffer,
+    _grain_dev_fast: wgpu::Buffer,
     blur: Vec<BlurJob>,
     blur_pipe_h: CachedPipelineRef,
     blur_pipe_v: CachedPipelineRef,
@@ -5836,7 +5837,8 @@ fn build_grain_state(
     // shader writes the deviation (grainy - clean) to `grain_dev`, the H pass
     // blurs it into buf_b and the V pass adds it onto the clean density in
     // buf_a (CPU: filming.rs). Blurring the whole density softened the image.
-    let dev_only = gp.hash.map_or(false, |h| gp.grain_blur > 0.1 || h.sharpen[1] > 0.0);
+    let split = gp.hash.map_or(false, |h| h.fast_blur > 0.0 && gp.n_sub_layers >= 2);
+    let dev_only = gp.hash.map_or(false, |h| gp.grain_blur > 0.1 || h.sharpen[1] > 0.0 || split);
     // With `dev_only` the grain pass writes every pixel before the blur reads
     // it; otherwise nothing reads it (a 16-byte stand-in for the binding).
     // COPY_DST: poolable (`TrackedCreate`).
@@ -5847,11 +5849,19 @@ fn build_grain_state(
         mapped_at_creation: false,
     });
 
+    // The fast crystals' deviation when it is blurred apart (`split`); a 16-byte stand-in otherwise.
+    let grain_dev_fast = device.create_buffer_overwritten_t(&wgpu::BufferDescriptor {
+        label: Some("grain_dev_fast"),
+        size: if split { (n_pixels * 3 * std::mem::size_of::<f32>()) as u64 } else { 16 },
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
     let grain_dispatch = if let Some(h) = gp.hash.as_ref() {
         let grain_pipe = backend.cached_pipeline(
             include_str!("../../spektrafilm-shaders/wgsl/grain_hash.wgsl"),
             &[
                 wgpu::BufferBindingType::Uniform,
+                wgpu::BufferBindingType::Storage { read_only: false },
                 wgpu::BufferBindingType::Storage { read_only: false },
                 wgpu::BufferBindingType::Storage { read_only: false },
             ],
@@ -5874,7 +5884,9 @@ fn build_grain_state(
             micro_sigma: f32,
             amount: f32,
             dev_only: f32,
-            _pad: f32,
+            split: f32,
+            fast_count_frac: f32,
+            _pad: [f32; 3],
         }
         let v4 = |a: [f32; 3]| [a[0], a[1], a[2], 0.0];
         let params = HashParams {
@@ -5893,7 +5905,9 @@ fn build_grain_state(
             micro_sigma: h.micro_sigma,
             amount: h.amount,
             dev_only: if dev_only { 1.0 } else { 0.0 },
-            _pad: 0.0,
+            split: if split { 1.0 } else { 0.0 },
+            fast_count_frac: h.fast_count_frac,
+            _pad: [0.0; 3],
         };
         let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some("grain_hash_params"),
@@ -5907,6 +5921,7 @@ fn build_grain_state(
                 wgpu::BindGroupEntry { binding: 0, resource: params_buf.used_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: buf_a.used_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: grain_dev.used_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: grain_dev_fast.used_binding() },
             ],
         });
         DispatchJob { _params_buf: params_buf, pipeline: grain_pipe, bg }
@@ -6003,15 +6018,21 @@ fn build_grain_state(
     if dev_only || gp.grain_blur > 0.1 {
         let src = if dev_only { &grain_dev } else { buf_a };
         let a = if dev_only { sharp[1] } else { 0.0 };
-        blur.push(grain_blur_job(device, &blur_pipe_h, &blur_pipe_v, gp.grain_blur, 1.0 + a, src, buf_b, buf_a, width, height));
-        if a > 0.0 {
-            blur.push(grain_blur_job(device, &blur_pipe_h, &blur_pipe_v, sharp[0], -a, src, buf_b, buf_a, width, height));
+        // (the rest from grain_dev at grain_blur; with `split` the fast crystals' from grain_dev_fast at their own blur)
+        let fast = gp.hash.map_or(0.0, |h| h.fast_blur);
+        let sources: &[(&wgpu::Buffer, f32)] = if split { &[(src, gp.grain_blur), (&grain_dev_fast, fast)] } else { &[(src, gp.grain_blur)] };
+        for &(src, s) in sources {
+            blur.push(grain_blur_job(device, &blur_pipe_h, &blur_pipe_v, s, 1.0 + a, src, buf_b, buf_a, width, height));
+            if a > 0.0 {
+                blur.push(grain_blur_job(device, &blur_pipe_h, &blur_pipe_v, s.hypot(sharp[0]), -a, src, buf_b, buf_a, width, height));
+            }
         }
     }
 
     GrainState {
         grain_dispatch,
         _grain_dev: grain_dev,
+        _grain_dev_fast: grain_dev_fast,
         blur,
         blur_pipe_h,
         blur_pipe_v,

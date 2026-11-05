@@ -1234,7 +1234,7 @@ impl Pipeline {
             } else {
                 None
             };
-            if let Some((hg, blur_px, sharpen)) = hash_setup {
+            if let Some((hg, gb)) = hash_setup {
                 Some(spektrafilm_gpu::GrainGpuParams {
                     density_min: hg.density_min,
                     density_max: hg.density_max,
@@ -1242,14 +1242,16 @@ impl Pipeline {
                     grain_uniformity: hg.uniformity,
                     n_sub_layers: hg.n_sub_layers,
                     base_seed: 0,
-                    grain_blur: blur_px,
+                    grain_blur: gb.soft_px,
                     monochrome: hg.monochrome,
                     hash: Some(spektrafilm_gpu::GrainHashGpu {
                         seed: hg.seed,
                         origin: hg.origin,
                         micro_sigma: hg.micro_sigma,
                         amount: hg.amount,
-                        sharpen,
+                        sharpen: gb.sharpen,
+                        fast_blur: gb.fast_px,
+                        fast_count_frac: hg.fast_count_frac,
                     }),
                 })
             } else {

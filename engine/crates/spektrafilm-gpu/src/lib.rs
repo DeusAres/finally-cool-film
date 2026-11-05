@@ -350,9 +350,14 @@ pub struct GrainHashGpu {
     pub origin: [u32; 2],
     pub micro_sigma: f32,
     pub amount: f32,
-    /// Scanner sharpening of the grain: `[sigma_px, amount]`, the deviation becomes `(1 + a) G(grain_blur) - a G(sigma)`
-    /// (core GrainParams `scan_sharpen`; amount 0 = the plain dye-cloud blur).
+    /// Scanner sharpening of the grain: `[radius_px, amount]`, each blurred deviation becomes
+    /// `(1 + a) G(s) - a G(sqrt(s^2 + r^2))` (core GrainParams `scan_sharpen`; amount 0 = the plain dye-cloud blur).
     pub sharpen: [f32; 2],
+    /// Dye-cloud sigma (px) of the fast crystals' grain, blurred apart from the rest (`grain_hash.wgsl` split); 0 = one
+    /// deviation, one blur (`grain_blur`).
+    pub fast_blur: f32,
+    /// Share of the crystals that are fast (`spektrafilm_model::grain_hash::HashGrain::fast_count_frac`).
+    pub fast_count_frac: f32,
 }
 
 /// Output gamut compression parameters for the GPU-resident per-pixel pass.

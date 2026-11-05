@@ -1453,15 +1453,20 @@ const SCATTER_SCALE = 0.5;   // film scatter size multiplier (engine default 1),
 // (with the engine's variance-matched kernel, filming.rs): 12 % / 14.8 um, and the preview matches the export seen at its size.
 const GRAIN_BLUR = 0.45;
 // 4.29 v4 grain as a lab scan shows it (user: "sabbiosa invece che granulosa"). Measured like the 20 real Gold 200 scans
-// (samples/kg200, flat 48 px patches at their 10-15 um pitch: luma high-pass std, autocorrelation half-width r50): the real
-// grain is crisp-edged clumps, r50 7-8 um on the 10-11.5 um scans; ours a soft mottle, r50 ~15 um at every tone. The lab's
-// scanner sharpens it: engine GrainParams scan_sharpen, an unsharp mask of radius HS_UM (one Frontier scanner pixel) and
-// amount 1.5 on the grain only, over a finer dye cloud (blur 0.45 -> 0.25 reference px, ~8 -> ~4.6 um): r50 7.6 um at every
-// tone. Strength V4_GRAIN_SCALE: the mids (L* 45 at the scans' pitch, encoded 114) at std 10.9, the real scans' median (11;
-// the 6 scans at 10-11.5 um range 4-21). Left: real shadows are weaker (std ~4 vs 7) and coarser (r50 ~11-13 um), lights
-// stronger (~8-11 vs 4-8): the emulsion's fast / slow crystals (engine n_sub_layers), not done.
-const V4_GRAIN = { blur: 0.25, scan_sharpen_um: HS_UM, scan_sharpen: 1.5 };
-const V4_GRAIN_SCALE = 0.45;
+// (samples/kg200, flat 48 px patches at their 10-15 um pitch: luma high-pass std, autocorrelation half-width r50; median of the
+// 10-11.5 um scans by L*: shadows std ~4 / r50 ~11 um, mids ~11 / ~7.5, lights ~8 / ~8; one scan ranges 4-21). Ours was a soft
+// mottle, r50 ~15 um at every tone. Two causes, both in the engine's hash grain:
+// - the lab's scanner sharpens the grain (crisp-edged clumps): GrainParams scan_sharpen, an unsharp mask of radius HS_UM (one
+//   Frontier scanner pixel) and amount 1.5 on the grain only, over a finer dye cloud (blur 0.45 -> 0.25 reference px);
+// - the emulsion's two crystal populations: the few big fast ones develop first and carry the shadows' grain (coarse, weak),
+//   the fine slow ones the lights'. They shared one blur and the fast share (FAST_COUNT_FRAC 0.002, no source) made them
+//   dominate every tone; now blur_fast 0.6 (their own, bigger clouds) and fast_count_frac 0.02. Sweep (std / r50 by tone,
+//   shadows / mids / lights): 0.02 + 0.6 3.7/12.5 9.9/9.6 4.3/8.4; 0.02 + 0.45 5.1/11.2 11.5/9.6 4.6/8.5; 0.012 + 0.6 4.5/13.6
+//   11.0/10.6 4.5/8.8.
+// Strength V4_GRAIN_SCALE: the mids at the scans' median (std ~11). Left: the brightest lights stay weaker than the scans (4-5 vs
+// ~8: our scanner's shoulder squeezes them).
+const V4_GRAIN = { blur: 0.25, blur_fast: 0.6, fast_count_frac: 0.02, scan_sharpen_um: HS_UM, scan_sharpen: 1.5 };
+const V4_GRAIN_SCALE = 2.0;
 const GRAIN_UNIT = 0.65;   // slider 1× -> engine amount (= old slider 0.25 / old default 0.4)
 const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }
