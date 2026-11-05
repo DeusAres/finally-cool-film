@@ -14,6 +14,11 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.28**: **la sovraesposizione come la Gold vera**: una foto schiarita di +3/+5 EV non si slava più. Su un bracket vero
+  (Gold 200 su Frontier SP-3000, stessa scena da -3 a +5 EV) il laboratorio stampa tutto quasi uguale; noi a +5 eravamo
+  +12 L* e con un terzo del contrasto. Ora: la curva della pellicola continua oltre la vecchia spalla (si appiattiva verso
+  +3 EV) e l'AutoSetup può scurire fino a ~7 EV (era ~3, numero senza fonte). A +5 EV: luminosità +3 (vera +2), contrasto
+  -11 (vero -14). Le foto esposte normalmente non cambiano (solo le luci più forti), la grana resta quella misurata.
 - **v4.27**: **la fila degli strumenti e i formati di ritaglio tornano a scorrere col dito** (l'interruttore della
   vibrazione si prendeva lo scorrimento): lì niente tick, resta su schede, scanner e pulsanti.
 - **v4.26**: **vibrazione su iPhone**: ogni tocco su icone, schede, scanner, Azzera, formati di ritaglio, colori e pulsanti
