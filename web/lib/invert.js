@@ -11,8 +11,11 @@
 //     white from the frame, so the orange mask and any overall cast go. On a frame with a strong cast this stretches the channel
 //     with the least range: a sunset (IDG_20261022_182651_466) came out with a cyan sky the DNG does not have (v4 until 3.48);
 //   - mid grey: the frame's median density lands on display mid grey (0.18 linear);
-//   - between the anchors, density maps linearly to log display light (density is log exposure): the film's toe and
-//     shoulder shape the shadows and highlights, nothing else does.
+//   - between the anchors, density maps to log display light (density is log exposure) with two slopes, black -> mid grey
+//     and mid grey -> white, joined smoothly (CORNER_W): the film's toe and shoulder shape the shadows and highlights,
+//     nothing else does. 4.30: they were two straight lines with a corner on mid grey (above it the slope ~halves: 7.6 vs
+//     3.4 in ln light per density range at a median halfway): the upper mid tones piled up just above mid grey, a spike or
+//     a step at ~118 / 255 in every Nessuno histogram (user: "mezzitoni bassi").
 // Magenta ↔ Verde / Giallo ↔ Blu shift the G / B channel's position between its black and white; Luminosità moves where the
 // mid grey lands (EV over MID): the black and white anchors stay, so nothing clips.
 //
@@ -32,6 +35,11 @@ const KEY = 0.003;
 // the join. SOFT_W: width of the white roll-off in ln units (0.12: the white anchor lands at 0.957 linear, 250/255);
 // FLOOR = BLACK / 8 with the same width at the bottom (the deepest film shadows never reach 0).
 const SOFT_W = 0.12, FLOOR = Math.log(BLACK / 8);
+// The two slopes' join: the slope (ln light per normalised density) goes from the lower one to the upper one along a
+// smoothstep CORNER_W wide on each side of mid grey (less where mid grey is near an end), and the two slopes are solved so
+// that the curve still passes exactly through black, mid grey and white (cornerCurve). 0.15: the histogram step becomes a
+// ramp ~a fifth of the tonal range wide; mid grey's own slope is the two slopes' mean. A choice (the corner had no reason).
+const CORNER_W = 0.15;
 const T_MIN = 1e-6;
 // Degenerate frames: a channel whose black and white are closer than MIN_RANGE density (a flat or
 // near-flat frame) gets that range, so it is shown as a mid tone instead of being stretched; the mid-grey anchor is kept in
@@ -93,10 +101,26 @@ export function invertUniform({ lo, hi, xm }, { mshift = 0, yshift = 0, ev = 0 }
   return [...lo, ...hi.map((h, c) => 1 / (h - lo[c])), xm, mshift * KEY, yshift * KEY, ev * Math.LN2];
 }
 
-/** Display light (linear) of normalised density x: log-linear through (0, BLACK), (xm, MID e^dm), (1, 1), soft at both ends. */
+/** The joined curve's constants for a frame: window half-width w and the lower / upper slopes a0 / a1 such that
+ * l(x) = ln BLACK + a0 x + (a1 - a0) G(x) passes through (xm, lm) and (1, 0), G = the integral of the smoothstep over
+ * [xm - w, xm + w] (left half 3w / 16, whole w). */
+function cornerCurve(xm, lm) {
+  // w also stays under half of what keeps each solved slope positive (a1 > 0 iff w < 16 xm B / 3(A + B), a0 likewise with
+  // A (1 - xm)): both stay above about half the straight lines' (a bright Luminosità on a dark frame: B small)
+  const lb = Math.log(BLACK), A = lm - lb, B = -lm;
+  const w = Math.max(1e-4, Math.min(CORNER_W, 0.5 * xm, 0.5 * (1 - xm), 8 * xm * B / (3 * (A + B)), 8 * (1 - xm) * A / (3 * (A + B))));
+  const iL = 3 * w / 16, iR = 13 * w / 16 + (1 - xm - w);   // the smoothstep's integral below / above mid grey
+  const det = (xm - iL) * iR - iL * (1 - xm - iR);
+  return { w, a0: (A * iR - iL * B) / det, a1: ((xm - iL) * B - (1 - xm - iR) * A) / det };
+}
+
+/** Display light (linear) of normalised density x: log-linear from (0, BLACK) through (xm, MID e^dm) to (1, 1), the two
+ * slopes joined smoothly (cornerCurve), soft at both ends. */
 function displayLin(x, xm, dm) {
-  const lm = Math.log(MID) + dm;
-  let l = x < xm ? Math.log(BLACK) + (lm - Math.log(BLACK)) * (x / xm) : lm * (1 - (x - xm) / (1 - xm));
+  const lm = Math.log(MID) + dm, { w, a0, a1 } = cornerCurve(xm, lm);
+  const p = Math.min(1, Math.max(0, (x - xm + w) / (2 * w)));
+  const G = x <= xm - w ? 0 : x >= xm + w ? w + (x - xm - w) : 2 * w * (p ** 3 - p ** 4 / 2);
+  let l = Math.log(BLACK) + a0 * x + (a1 - a0) * G;
   if (l > -SOFT_W) l = -SOFT_W * Math.exp(-(l + SOFT_W) / SOFT_W);
   else if (l < FLOOR + SOFT_W) l = FLOOR + SOFT_W * Math.exp((l - FLOOR - SOFT_W) / SOFT_W);
   return Math.exp(l);
@@ -116,9 +140,17 @@ export function invertCPU(px, u) {
 export const INVERT_WGSL = /* wgsl */`
 fn invDisplay(x: vec3<f32>, xm: f32, dm: f32) -> vec3<f32> {
   let lb = log(${BLACK.toFixed(6)}); let lm = log(${MID.toFixed(6)}) + dm;
-  let lo = vec3<f32>(lb) + (lm - lb) * (x / xm);
-  let hi = vec3<f32>(lm) * (vec3<f32>(1.0) - (x - vec3<f32>(xm)) / (1.0 - xm));
-  var l = select(hi, lo, x < vec3<f32>(xm));
+  // cornerCurve (invert.js): the two slopes joined along a smoothstep, through black, mid grey and white
+  let wa = min(${CORNER_W.toFixed(4)}, min(0.5 * xm, 0.5 * (1.0 - xm)));
+  let cw = max(1e-4, min(wa, min(8.0 * xm * (-lm) / (3.0 * (-lb)), 8.0 * (1.0 - xm) * (lm - lb) / (3.0 * (-lb)))));
+  let iL = 3.0 * cw / 16.0; let iR = 13.0 * cw / 16.0 + (1.0 - xm - cw);
+  let det = (xm - iL) * iR - iL * (1.0 - xm - iR);
+  let a0 = ((lm - lb) * iR - iL * (-lm)) / det;
+  let a1 = ((xm - iL) * (-lm) - (1.0 - xm - iR) * (lm - lb)) / det;
+  let p = clamp((x - vec3<f32>(xm - cw)) / (2.0 * cw), vec3<f32>(0.0), vec3<f32>(1.0));
+  let win = 2.0 * cw * (p * p * p - p * p * p * p * 0.5);
+  let G = select(select(win, vec3<f32>(cw) + (x - vec3<f32>(xm + cw)), x >= vec3<f32>(xm + cw)), vec3<f32>(0.0), x <= vec3<f32>(xm - cw));
+  var l = vec3<f32>(lb) + a0 * x + (a1 - a0) * G;
   let w = ${SOFT_W.toFixed(4)}; let f = ${FLOOR.toFixed(6)};
   l = select(l, -w * exp(-(l + w) / w), l > vec3<f32>(-w));
   l = select(l, f + w * exp((l - f - w) / w), l < vec3<f32>(f + w));

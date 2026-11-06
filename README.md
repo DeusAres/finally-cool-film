@@ -14,6 +14,11 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.30**: **Nessuno: mezzitoni non più schiacciati**. La curva di inversione era fatta di due rette (nero → grigio medio,
+  grigio medio → bianco) con un angolo sul grigio medio: sopra, la pendenza si dimezzava e i mezzitoni chiari si
+  ammucchiavano subito sopra il grigio (un picco o uno scalino a ~118/255 in ogni istogramma). Ora le due pendenze si
+  raccordano dolcemente (in un quinto circa della gamma tonale); nero, grigio medio e bianco restano esattamente dove
+  erano (la luminosità media non cambia, niente si brucia), la curva sale sempre. Frontier e Noritsu invariati.
 - **v4.29**: **grana come nelle scansioni vere, non sabbia**. Tarata su due riferimenti misurati allo stesso modo, tono per
   tono e nei loro colori (forza, larghezza dei grumi, colore, dettaglio fine): 6 scansioni Frontier di `samples/kg200` (JPEG
   q70: la nostra passata nello stesso JPEG) e 4 scansioni Noritsu HS-1800 35 mm ad alta qualità (5,3 µm/pixel, portate a 12 MP).
