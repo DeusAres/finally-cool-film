@@ -6,12 +6,18 @@
 //   - burnt whites: share of pixels with all three channels >= 250 (real: 0 on 15 frames, 0.1-0.5 on 3) -> over WHITE_CLIP_PCT;
 //   - blocked blacks: share with the brightest channel <= 6 (real: up to 1.7 but the night frame) -> over BLACK_CLIP_PCT;
 //   - too dark / too light: the frame's median L* (real 40..81, 10th-90th percentile 44..71) -> under DARK_L / over LIGHT_L;
-//   - a cast: mean a* / b* of the near-neutral pixels (chroma < 10, L* 20..90: pale skies count, real up to 6.2) -> beyond
-//     CAST, when at least NEUTRAL_MIN of the frame is near neutral (a frame of saturated colours says nothing about the light).
+//   - a cast, two ways (user 2026-11-07: an extreme Temperatura passed as "ok"; Nessuno's inversion takes the cast off the
+//     greys, so the whole palette turns instead): the least saturated fifth's median a* / b* beyond any real scan's (real
+//     |cast| up to 12.7) -> over CAST_ABS; or the frame's mean a* / b* (grey world, L* 15..95) moved from this photo's own first
+//     render (its default look) by more than CAST_SHIFT (Temperatura -2000 / +2000: 13 / 28 on a cat, 13 / 29 on a rock;
+//     +-800: 6-9, a look, left alone);
+//   - the colours' strength: median chroma x CHROMA_UP or / CHROMA_DOWN against the first render, or out of the real scans'
+//     4.2..26.7 (CHROMA_MIN / CHROMA_MAX). Saturazione +-9 (the lab's own range): x1.48 / x0.54.
 // One advice at a time, in that order (what is lost first: clipped tones cannot come back). A dismissed advice stays quiet
 // for this photo. No DOM outside the mascot's own elements; the host (ui2.js) gives the photo's pixels and opens tools.
 
-const WHITE_CLIP_PCT = 3, BLACK_CLIP_PCT = 3, DARK_L = 40, LIGHT_L = 78, CAST = 7, NEUTRAL_MIN = 0.05;
+const WHITE_CLIP_PCT = 3, BLACK_CLIP_PCT = 3, DARK_L = 40, LIGHT_L = 78;
+const CAST_ABS = 14, CAST_SHIFT = 10, CHROMA_UP = 1.7, CHROMA_DOWN = 2, CHROMA_MIN = 3, CHROMA_MAX = 30;
 const STEP = 4;   // every 4th pixel each way: a 1500 px preview gives ~140 k samples, ~5 ms
 
 // linear RGB -> XYZ (D65): Display P3 (the canvas, outSpace 'p3') and sRGB
@@ -23,11 +29,15 @@ const dec = (v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);   
 const LUT = Float32Array.from({ length: 256 }, (_, i) => dec(i / 255));
 const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
 
-/** Frame statistics of an ImageData: { medianL, whitePct, blackPct, castA, castB, neutralShare }. */
+const median = (arr) => { const s = Float32Array.from(arr).sort(); return s.length ? s[s.length >> 1] : 0; };
+const quantile = (sorted, q) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1))))];
+
+/** Frame statistics of an ImageData: { medianL, lo (p5 L*), hi (p95 L*), whitePct, blackPct, castA, castB (the cast:
+ * median a* / b* of the least saturated fifth of the pixels at L* 15..95), chroma (median C*), gwA, gwB (mean a* / b*) }. */
 export function analyse(img) {
   const m = M[img.colorSpace] || M.srgb, { data, width, height } = img;
-  const L = [];
-  let white = 0, black = 0, n = 0, na = 0, sa = 0, sb = 0;
+  const L = [], A = [], B = [], C = [];
+  let white = 0, black = 0, n = 0, ga = 0, gb = 0, gn = 0;
   for (let y = 0; y < height; y += STEP) {
     for (let x = 0; x < width; x += STEP) {
       const i = (y * width + x) * 4, r8 = data[i], g8 = data[i + 1], b8 = data[i + 2];
@@ -38,20 +48,30 @@ export function analyse(img) {
       const X = (m[0][0] * r + m[0][1] * g + m[0][2] * b) / 0.95047, Y = m[1][0] * r + m[1][1] * g + m[1][2] * b;
       const Z = (m[2][0] * r + m[2][1] * g + m[2][2] * b) / 1.08883;
       const fy = f(Y), l = 116 * fy - 16, a = 500 * (f(X) - fy), bb = 200 * (fy - f(Z));
-      L.push(l);
-      if (l > 20 && l < 90 && Math.hypot(a, bb) < 10) { na++; sa += a; sb += bb; }
+      L.push(l); A.push(a); B.push(bb); C.push(Math.hypot(a, bb));
+      if (l > 15 && l < 95) { ga += a; gb += bb; gn++; }
     }
   }
-  L.sort((p, q) => p - q);
+  const Ls = Float32Array.from(L).sort();
+  // the cast: whatever the frame's colours, its least saturated fifth carries the light's (a strong cast leaves no pixel
+  // "neutral" by a fixed chroma, which is how a fixed cut missed an extreme Temperatura: user 2026-11-07)
+  const mid = []; for (let i = 0; i < L.length; i++) if (L[i] > 15 && L[i] < 95) mid.push(i);
+  const cq = quantile(Float32Array.from(mid, (i) => C[i]).sort(), 0.2);
+  const low = mid.filter((i) => C[i] <= cq);
   return {
-    medianL: L[L.length >> 1] ?? 50, whitePct: 100 * white / n, blackPct: 100 * black / n,
-    castA: na ? sa / na : 0, castB: na ? sb / na : 0, neutralShare: na / n,
+    medianL: quantile(Ls, 0.5) ?? 50, lo: quantile(Ls, 0.05) ?? 0, hi: quantile(Ls, 0.95) ?? 100,
+    whitePct: 100 * white / n, blackPct: 100 * black / n,
+    castA: median(low.map((i) => A[i])), castB: median(low.map((i) => B[i])), chroma: median(C),
+    gwA: gn ? ga / gn : 0, gwB: gn ? gb / gn : 0,
   };
 }
 
-/** The first advice for statistics `s`, or null. `scanner`: 'none' | 'frontier' | 'noritsu'; `has(id)`: the tool is shown.
+const SHORT_OF = { labSat: 'Saturazione', vibrance: 'Vividezza', temp: 'Temperatura luce' };
+
+/** The first advice for statistics `s`, or null. `scanner`: 'none' | 'frontier' | 'noritsu'; `has(id)`: the tool is shown;
+ * `base`: the statistics of this photo's first render (its default look) or null; `modified(id)`: moved from its default.
  * Advice: { key, text, tool }. */
-export function advise(s, scanner, has) {
+export function advise(s, scanner, has, base = null, modified = () => false) {
   const lab = scanner !== 'none', pct = (v) => `${v < 10 ? v.toFixed(1) : Math.round(v)}%`;
   const pick = (...ids) => ids.find((id) => has(id)) || null;
   const bright = lab ? pick('labD', 'ev') : pick('nbBright', 'ev'), brightName = bright === 'labD' ? 'Densità' : bright === 'nbBright' ? 'Luminosità' : 'Esposizione';
@@ -68,13 +88,27 @@ export function advise(s, scanner, has) {
   const lvl = `luce media ${Math.round(s.medianL)}; le scansioni Gold vere di solito 44-71`;
   if (s.medianL < DARK_L) return { key: 'dark', text: `Un po' scura per una Gold (${lvl}). Prova ad alzare ${brightName}.`, tool: bright };
   if (s.medianL > LIGHT_L) return { key: 'light', text: `Molto chiara (${lvl}). Prova ad abbassare ${brightName}.`, tool: bright };
-  if (s.neutralShare >= NEUTRAL_MIN && Math.max(Math.abs(s.castA), Math.abs(s.castB)) > CAST) {
-    const byA = Math.abs(s.castA) >= Math.abs(s.castB);
-    const t = pick(byA ? 'mshift' : 'yshift');
-    // the opposite end of the slider (Magenta ↔ Verde / Giallo ↔ Blu)
-    const [what, fix] = byA ? (s.castA > 0 ? ['magenta', 'Magenta ↔ Verde verso il Verde'] : ['verde', 'Magenta ↔ Verde verso il Magenta'])
-      : (s.castB > 0 ? ['gialla', 'Giallo ↔ Blu verso il Blu'] : ['blu', 'Giallo ↔ Blu verso il Giallo']);
-    if (t) return { key: 'cast', text: `I grigi hanno una dominante ${what}. Sposta ${fix}.`, tool: t };
+  // colour: against the photo's own first render when there is one (`base`), else against the real scans
+  const mod = (id) => has(id) && modified(id);
+  const dA = base ? s.gwA - base.gwA : 0, dB = base ? s.gwB - base.gwB : 0;
+  const shifted = Math.hypot(dA, dB) > CAST_SHIFT, absCast = Math.hypot(s.castA, s.castB) > CAST_ABS;
+  if (shifted || absCast) {
+    const [ca, cb] = shifted ? [dA, dB] : [s.castA, s.castB];
+    const byA = Math.abs(ca) > Math.abs(cb);
+    const what = byA ? (ca > 0 ? 'il magenta' : 'il verde') : (cb > 0 ? 'il giallo-arancio' : 'il blu');
+    const t = !byA && mod('temp') ? 'temp' : pick(...(byA ? ['mshift', 'temp'] : ['yshift', 'temp']));
+    const how = t === 'temp' ? 'riporta Temperatura luce verso 0' : t === 'mshift' ? 'sposta Magenta ↔ Verde dall\'altra parte' : 'sposta Giallo ↔ Blu dall\'altra parte';
+    const vs = shifted ? 'rispetto alla foto di partenza' : 'più di qualunque scansione Gold vera';
+    if (t) return { key: 'cast', text: `I colori virano verso ${what} (${vs}). Se non è voluto, ${how}.`, tool: t };
+  }
+  const ratio = base && base.chroma > 1 ? s.chroma / base.chroma : 1;
+  if (ratio > CHROMA_UP || s.chroma > CHROMA_MAX) {
+    const t = mod('labSat') ? 'labSat' : mod('vibrance') ? 'vibrance' : mod('temp') ? 'temp' : pick('labSat', 'vibrance');
+    return { key: 'sat', text: `Colori molto più carichi del normale (${ratio > CHROMA_UP ? `x${ratio.toFixed(1)} rispetto alla partenza` : 'oltre ogni scansione Gold vera'}). La Gold è calda ma non fluo: abbassa ${SHORT_OF[t] || 'la saturazione'}.`, tool: t };
+  }
+  if (ratio < 1 / CHROMA_DOWN || s.chroma < CHROMA_MIN) {
+    const t = mod('labSat') ? 'labSat' : mod('vibrance') ? 'vibrance' : pick('labSat', 'vibrance');
+    return { key: 'sat', text: `Colori molto spenti (${ratio < 1 / CHROMA_DOWN ? `metà della partenza` : 'meno di qualunque scansione Gold vera'}). Alza ${SHORT_OF[t] || 'la saturazione'}.`, tool: t };
   }
   return null;
 }
@@ -147,7 +181,7 @@ export function initMascot(stage, host) {
     paint(cx, frame);
   }, 700);
 
-  let advice = null, dismissed = new Set(), timer = 0, quietOk = 0;
+  let advice = null, dismissed = new Set(), timer = 0, quietOk = 0, baseline = null;
   const show = (a) => {
     if (!a) { bubble.hidden = true; return; }
     bubble.innerHTML = '';
@@ -165,19 +199,25 @@ export function initMascot(stage, host) {
   // a tap on the mascot: the current advice again, or a short "all fine" when there is none
   cv.onclick = () => {
     if (advice) { dismissed.delete(advice.key); show(advice); return; }
-    show({ key: 'ok', text: 'Tutto ok: luci, ombre e colore nella media delle Gold vere.' });
+    show({ key: 'ok', text: 'Tutto ok: luci, ombre, dominante e saturazione dentro quello che fanno le scansioni Gold vere.' });
     clearTimeout(quietOk); quietOk = setTimeout(() => { if (!advice) bubble.hidden = true; }, 2500);
   };
-  return {
+  let last = null;
+  const api = {
     update(img) {
+      last = img;
       clearTimeout(timer);
       // after the edits settle: a slider drag renders many frames, the advice follows the last one
       timer = setTimeout(() => {
         box.hidden = false;
-        advice = advise(analyse(img), host.scanner(), host.has);
+        const st = analyse(img);
+        if (!baseline) baseline = st;   // the first frame after a new photo: its default look
+        advice = advise(st, host.scanner(), host.has, baseline, host.modified || (() => false));
         if (advice && !dismissed.has(advice.key)) show(advice); else bubble.hidden = true;
       }, 600);
     },
-    reset() { dismissed = new Set(); advice = null; bubble.hidden = true; },
+    // a new photo: its first render (already on screen when the load ends) is its default look, the baseline
+    reset() { dismissed = new Set(); advice = null; baseline = null; bubble.hidden = true; if (last) api.update(last); },
   };
+  return api;
 }
