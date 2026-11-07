@@ -1,4 +1,4 @@
-// The photo's mascot (UI 2, user 2026-11-07): a small 8-bit film canister in the photo's corner that looks at the rendered
+// The photo's mascot (UI 2, user 2026-11-07): a small 16-bit film canister (4.32; 8-bit 16 x 16 in 4.31) in the photo's corner that looks at the rendered
 // frame and speaks only when something is clearly off, with the tool that fixes it (a tap on its bubble opens that tool).
 // The checks are measured against real Gold 200 lab scans: the 20 frames of samples/kg200 (whole frame, CIE L* a* b*). "Only
 // when it matters" (user): each threshold sits past what a real lab scan does, so it speaks on 3 of those 20 (a window
@@ -15,6 +15,8 @@
 //     4.2..26.7 (CHROMA_MIN / CHROMA_MAX). Saturazione +-9 (the lab's own range): x1.48 / x0.54.
 // One advice at a time, in that order (what is lost first: clipped tones cannot come back). A dismissed advice stays quiet
 // for this photo. No DOM outside the mascot's own elements; the host (ui2.js) gives the photo's pixels and opens tools.
+
+import { W, H, PAL, IDLE, FRAMES } from './rullino.js';
 
 const WHITE_CLIP_PCT = 3, BLACK_CLIP_PCT = 3, DARK_L = 40, LIGHT_L = 78;
 const CAST_ABS = 14, CAST_SHIFT = 10, CHROMA_UP = 1.7, CHROMA_DOWN = 2, CHROMA_MIN = 3, CHROMA_MAX = 30;
@@ -113,39 +115,27 @@ export function advise(s, scanner, has, base = null, modified = () => false) {
   return null;
 }
 
-// --- the sprite: 16 x 16, original design (a generic film canister: metal caps, a label, eyes, the film leader on its side)
-const PAL = { k: '#1d1b1a', g: '#8d939a', l: '#c9ced3', o: '#e08a3c', c: '#f2e3c4', w: '#ffffff', b: '#1d1b1a', f: '#5a3a26', r: '#f2a0a0' };
-const BODY = [
-  '.....kkkkk......',
-  '....kllllk......',
-  '..kkkkkkkkkk....',
-  '..kggggggggk....',
-  '..kkkkkkkkkk....',
-  '..kccccccccfff..',
-  '..kcwwccwwcfff..',
-  '..kcwbccwbckff..',
-  '..kccccccccfff..',
-  '..korccccrokfk..',
-  '..koocbbcoock...',
-  '..koooooooook...',
-  '..kkkkkkkkkk....',
-  '..kggggggggk....',
-  '..kkkkkkkkkk....',
-  '................',
-];
-const BLINK = { 6: '..kckkcckkcfff..', 7: '..kccccccccfkf..' };   // eyes shut (rows 6 / 7)
-const WIGGLE = { 5: '..kccccccccfffk.', 8: '..kccccccccffk..' };   // the film leader's tip moves
+// --- the sprite: Rullino, 48 x 48, 16-bit style (original design: a generic film canister, metal caps, a label with a face, the
+// film leader on its side). The pixels are generated data (lib/rullino.js, from scripts/mascot/sprite48.py).
+const rows = (name) => (name === 'idle' ? IDLE : IDLE.map((r, y) => FRAMES[name][y] ?? r));
+const SPRITE = Object.fromEntries(['idle', ...Object.keys(FRAMES)].map((n) => [n, rows(n)]));
 
-function paint(cx, frame) {
-  cx.clearRect(0, 0, 16, 16);
-  for (let y = 0; y < 16; y++) {
-    const row = (frame.blink && BLINK[y]) || (frame.wiggle && WIGGLE[y]) || BODY[y];
-    for (let x = 0; x < 16; x++) {
+function paint(cx, name) {
+  cx.clearRect(0, 0, W, H);
+  SPRITE[name].forEach((row, y) => {
+    for (let x = 0; x < W; x++) {
       const p = PAL[row[x]];
       if (p) { cx.fillStyle = p; cx.fillRect(x, y, 1, 1); }
     }
-  }
+  });
 }
+
+// idle: one frame per beat, slowly (breathing every other beat, the leader flicks now and then, a blink every ~6 s: never in step,
+// it looks alive, not looped); talking: the mouth follows the text as it types, shut on spaces
+const BEAT_MS = 700, TYPE_MS = 28;
+const BLINK = ['blink_half', 'blink', 'blink_half'];
+const TALK = ['talk_half', 'talk_open', 'talk_half', 'talk_closed'];
+const idleFrame = (t) => (t % 9 < 3 ? BLINK[t % 9] : t % 5 === 0 ? 'wiggle' : t % 2 ? 'breathe' : 'idle');
 
 const CSS = `
 #u2mascot { position: absolute; left: 8px; bottom: 34px; z-index: 6; display: flex; align-items: flex-end; gap: 6px; pointer-events: none; }
@@ -158,6 +148,7 @@ const CSS = `
 #u2bubble::after { content: ''; position: absolute; left: -8px; bottom: 6px; border: 4px solid transparent; border-right-color: #2a2522;
   border-bottom-color: #2a2522; }
 #u2bubble[hidden] { display: none; }
+#u2bubble .rest { color: transparent; }
 #u2bubble button { margin-top: 6px; display: block; font: inherit; font-weight: 600; color: #2a2522; background: #e0b04a; border: 0;
   border-radius: 3px; padding: 3px 8px; box-shadow: 0 2px 0 #8a6a2a; }
 @media (prefers-reduced-motion: reduce) { #u2mascot.hop canvas { animation: none; } }
@@ -168,39 +159,50 @@ const CSS = `
  * Returns { update(img): analyse a newly rendered frame (debounced), reset(): a new photo }. */
 export function initMascot(stage, host) {
   document.head.insertAdjacentHTML('beforeend', `<style>${CSS}</style>`);
-  stage.insertAdjacentHTML('beforeend', '<div id="u2mascot" hidden><canvas width="16" height="16" aria-label="Consigli sulla foto" role="button"></canvas><div id="u2bubble" hidden></div></div>');
+  stage.insertAdjacentHTML('beforeend', `<div id="u2mascot" hidden><canvas width="${W}" height="${H}" aria-label="Consigli sulla foto" role="button"></canvas><div id="u2bubble" hidden></div></div>`);
   const box = stage.querySelector('#u2mascot'), cv = box.querySelector('canvas'), cx = cv.getContext('2d'), bubble = box.querySelector('#u2bubble');
   const reduce = matchMedia('(prefers-reduced-motion: reduce)');
-  // a few frames, slowly: the leader wiggles every ~0.7 s, a blink every few seconds (never in step: it looks alive, not looped)
-  let frame = { blink: false, wiggle: false }, tick = 0;
-  paint(cx, frame);
+  let beat = 0, talking = 0;
+  paint(cx, 'idle');
   setInterval(() => {
-    if (box.hidden || document.hidden || reduce.matches) return;
-    tick++;
-    frame = { wiggle: tick % 2 === 1, blink: tick % 7 === 0 };
-    paint(cx, frame);
-  }, 700);
+    if (box.hidden || document.hidden || reduce.matches || talking) return;
+    paint(cx, idleFrame(++beat));
+  }, BEAT_MS);
 
   let advice = null, dismissed = new Set(), timer = 0, quietOk = 0, baseline = null;
+  // the text types out with the mouth moving, then the tool's button (reduced motion: all at once, mouth still)
   const show = (a) => {
-    if (!a) { bubble.hidden = true; return; }
+    clearInterval(talking); talking = 0;
+    if (!a) { bubble.hidden = true; paint(cx, 'idle'); return; }
     bubble.innerHTML = '';
-    bubble.append(a.text);
-    if (a.tool) {
-      const b = document.createElement('button');
-      b.textContent = `Apri ${host.name?.(a.tool) || ''}`.trim();
-      b.onclick = (e) => { e.stopPropagation(); dismissed.add(a.key); bubble.hidden = true; host.openTool(a.tool); };
-      bubble.append(b);
+    // the untyped rest is there but transparent: the bubble has its final size from the first letter (no reflow while it types)
+    const text = document.createTextNode(''), rest = document.createElement('span'), button = a.tool && document.createElement('button');
+    rest.className = 'rest';
+    bubble.append(text, rest);
+    if (button) {
+      button.textContent = `Apri ${host.name?.(a.tool) || ''}`.trim();
+      button.onclick = (e) => { e.stopPropagation(); dismissed.add(a.key); show(null); host.openTool(a.tool); };
+      button.style.visibility = 'hidden';   // in place from the start, shown once the text is typed
+      bubble.append(button);
     }
+    const done = () => { clearInterval(talking); talking = 0; text.data = a.text; rest.textContent = ''; if (button) button.style.visibility = ''; paint(cx, 'idle'); };
     bubble.hidden = false;
     box.classList.remove('hop'); void box.offsetWidth; box.classList.add('hop');
+    if (reduce.matches) { done(); return; }
+    let n = 0;
+    talking = setInterval(() => {
+      if (++n >= a.text.length) { done(); return; }
+      text.data = a.text.slice(0, n); rest.textContent = a.text.slice(n);
+      paint(cx, a.text[n - 1] === ' ' ? 'talk_closed' : TALK[(n >> 1) % TALK.length]);
+    }, TYPE_MS);
   };
-  bubble.onclick = () => { if (advice) dismissed.add(advice.key); bubble.hidden = true; };
+  bubble.onclick = () => { if (advice) dismissed.add(advice.key); show(null); };
   // a tap on the mascot: the current advice again, or a short "all fine" when there is none
   cv.onclick = () => {
     if (advice) { dismissed.delete(advice.key); show(advice); return; }
-    show({ key: 'ok', text: 'Tutto ok: luci, ombre, dominante e saturazione dentro quello che fanno le scansioni Gold vere.' });
-    clearTimeout(quietOk); quietOk = setTimeout(() => { if (!advice) bubble.hidden = true; }, 2500);
+    const ok = { key: 'ok', text: 'Tutto ok: luci, ombre, dominante e saturazione dentro quello che fanno le scansioni Gold vere.' };
+    show(ok);
+    clearTimeout(quietOk); quietOk = setTimeout(() => { if (!advice) show(null); }, 2500 + TYPE_MS * ok.text.length);   // 2.5 s to read it once typed
   };
   let last = null;
   const api = {
@@ -213,11 +215,11 @@ export function initMascot(stage, host) {
         const st = analyse(img);
         if (!baseline) baseline = st;   // the first frame after a new photo: its default look
         advice = advise(st, host.scanner(), host.has, baseline, host.modified || (() => false));
-        if (advice && !dismissed.has(advice.key)) show(advice); else bubble.hidden = true;
+        if (advice && !dismissed.has(advice.key)) show(advice); else show(null);
       }, 600);
     },
     // a new photo: its first render (already on screen when the load ends) is its default look, the baseline
-    reset() { dismissed = new Set(); advice = null; baseline = null; bubble.hidden = true; if (last) api.update(last); },
+    reset() { dismissed = new Set(); advice = null; baseline = null; show(null); if (last) api.update(last); },
   };
   return api;
 }
