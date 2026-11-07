@@ -12,7 +12,8 @@ import { INPUT_WGSL, INPUT_WGSL_V3, INPUT_WGSL_HT, inputUniform } from './lib/le
 import { dodgeBase, dodgeParams, dodgeArray, dodgeCPU } from './lib/dodge.js';
 import { LUMA, XYZ_TO_RGB } from './lib/color.js';
 import { downscale, sharpenForScreen, fitInside } from './lib/igout.js';
-import { dustField, drawDust, compositeDust } from './lib/dust.js';
+import { dustField, borderFields, drawDustFramed, compositeDust } from './lib/dust.js';
+import { FRAME_STYLES, FRAME_NAMES, frameMargins, drawFrame } from './lib/filmframe.js';
 import { OUTPUT_WGSL, packParams, toSpaceCPU } from './lib/output.js';
 import { frameMap, frameImage, cropPx, turnCrop, isFull, FULL } from './lib/tilt.js';
 import { tiltRuler } from './lib/ruler.js';
@@ -506,43 +507,77 @@ function drawHistogram(img) {
   histo.style.display = 'block';
 }
 
-// ---------- dust & scratches (separate layer, dust.js) ----------
+// ---------- dust & scratches (separate layer, dust.js) and the film frame (Cornice, filmframe.js) ----------
 // Drawn over the preview by the compositor and into the export strips; never
 // touches the engine render, so moving the slider or reseeding is instant.
+// The frame is the output stage's, like the dust: the film around the picture (its rebate, the carrier) added around the
+// rendered image, the mat (Bordo) outside it; the dust lies on the film, so it covers the frame too (dust.js drawDustFramed).
 
 const dustLayer = $('dustLayer'), dctx = dustLayer.getContext('2d');
+const frameLayer = $('frameLayer'), fctx = frameLayer.getContext('2d');
 const dustAmount = () => +$('dust').value;
+const frameStyle = () => FRAME_STYLES[+$('frame').value] || 'none';
+let frameM = { mx: 0, my: 0 };   // the preview's frame margins (fitToScreen fits the image with its frame)
 function dustMarks() {
   const { w, h } = outFrame(photo.preview.w, photo.preview.h), key = `${photo.dustSeed}|${w}x${h}`;
-  if (photo.dustKey !== key) { photo.dust = dustField(photo.dustSeed, Math.max(w, h) / Math.min(w, h)); photo.dustKey = key; }
+  if (photo.dustKey !== key) {
+    const aspect = Math.max(w, h) / Math.min(w, h);
+    photo.dust = { marks: dustField(photo.dustSeed, aspect), around: borderFields(photo.dustSeed, aspect) };
+    photo.dustKey = key;
+  }
   return photo.dust;
 }
-function drawDustLayer() {
+/** A layer canvas centred on the view (an abs-pos flex child, same transform) at W×H. */
+function sizeLayer(c, W, H) {
+  if (c.width !== W || c.height !== H) { c.width = W; c.height = H; c.style.width = W + 'px'; c.style.height = H + 'px'; }
+}
+/** The preview's overlays: the film frame (the photo's own seed: the same frame on every load and export) and the dust. */
+function drawOverlays() {
   if (!photo) return;
-  const { w, h } = outFrame(photo.preview.w, photo.preview.h);
-  if (dustLayer.width !== w || dustLayer.height !== h) {
-    dustLayer.width = w; dustLayer.height = h;
-    dustLayer.style.width = w + 'px'; dustLayer.style.height = h + 'px';
+  const { w, h } = outFrame(photo.preview.w, photo.preview.h), style = frameStyle();
+  const { mx, my } = frameM = frameMargins(style, w, h), W = w + 2 * mx, H = h + 2 * my;
+  const showFrame = style !== 'none' && !showingBefore;
+  frameLayer.style.display = showFrame ? 'block' : 'none';
+  const fkey = `${style}|${photo.grainSeed}|${w}x${h}`;
+  if (showFrame && frameLayer.dataset.key !== fkey) {
+    sizeLayer(frameLayer, W, H);
+    const img = fctx.createImageData(W, H);
+    drawFrame(img.data, style, photo.grainSeed, w, h, 0, 0, W, H);
+    fctx.putImageData(img, 0, 0);
+    frameLayer.dataset.key = fkey;
   }
-  dctx.clearRect(0, 0, w, h);
+  sizeLayer(dustLayer, W, H);
+  dctx.clearRect(0, 0, W, H);
   const a = dustAmount();
   dustLayer.style.display = a > 0 && !showingBefore ? 'block' : 'none';
-  if (a > 0) drawDust(dctx, dustMarks(), a, w, h);
+  if (a > 0) { const d = dustMarks(); drawDustFramed(dctx, d.marks, d.around, a, w, h, mx, my); }
 }
 const newDustSeed = () => (Math.random() * 2 ** 32) >>> 0;
 // Grain is the film's own: the same photo gets the same grain on every load
 // and every export (FNV-1a of name, size, date).
 const fileSeed = (f) => { let h = 2166136261; for (const ch of `${f.name}|${f.size}|${f.lastModified}`) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return h >>> 0; };
 
-/** Composite dust marks at amount `a` into an RGB strip (rows y0.. of a w×h export). */
-function dustIntoStrip(strip, w, h, y0, rows, a, marks) {
+/** Composite dust marks at amount `a` into an RGB strip: rows y0.. of the export's canvas (the w×h image with its mx / my frame). */
+function dustIntoStrip(strip, w, h, mx, my, y0, rows, a, dust) {
   if (!a) return;
-  const c = dustStripCanvas || (dustStripCanvas = document.createElement('canvas'));
-  if (c.width !== w || c.height !== rows) { c.width = w; c.height = rows; }   // resizing clears
+  const W = w + 2 * mx, c = dustStripCanvas || (dustStripCanvas = document.createElement('canvas'));
+  if (c.width !== W || c.height !== rows) { c.width = W; c.height = rows; }   // resizing clears
   const x = c.getContext('2d', { willReadFrequently: true });
-  x.clearRect(0, 0, w, rows);
-  drawDust(x, marks, a, w, h, 0, y0);
-  compositeDust(strip, x.getImageData(0, 0, w, rows).data);
+  x.clearRect(0, 0, W, rows);
+  drawDustFramed(x, dust.marks, dust.around, a, w, h, mx, my, 0, y0);
+  compositeDust(strip, x.getImageData(0, 0, W, rows).data);
+}
+/** The film frame over an RGB strip (rows y0.. of the canvas): its colour by its coverage (the whole border, the gate's edge). */
+function frameIntoStrip(strip, style, seed, w, h, mx, my, y0, rows) {
+  if (style === 'none') return;
+  const W = w + 2 * mx, f = new Uint8ClampedArray(W * rows * 4);
+  drawFrame(f, style, seed, w, h, 0, y0, W, rows);
+  for (let p = 0, j = 0; p < f.length; p += 4, j += 3) {
+    const a = f[p + 3];
+    if (!a) continue;
+    const t = a / 255;
+    strip[j] += (f[p] - strip[j]) * t; strip[j + 1] += (f[p + 1] - strip[j + 1]) * t; strip[j + 2] += (f[p + 2] - strip[j + 2]) * t;
+  }
 }
 let dustStripCanvas = null;
 
@@ -562,7 +597,7 @@ function showBefore(on) {
   if (!photo?.after) return;
   if (on === showingBefore) return;
   showingBefore = on;
-  drawDustLayer();
+  drawOverlays();
   const img = on ? beforeImage() : photo.after;
   ctx.putImageData(img, 0, 0);
   drawHistogram(img);
@@ -579,7 +614,7 @@ const MIN_ZOOM = 0.05, MAX_ZOOM = 6;
 let zoom = 1, panX = 0, panY = 0, fitted = true;
 
 function applyTransform() {
-  view.style.transform = dustLayer.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+  view.style.transform = dustLayer.style.transform = frameLayer.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
   placeCrop();
   // 100% = one image pixel per device pixel.
   $('zoomLabel').textContent = photo ? `${Math.round(zoom * devicePixelRatio * 100)}%` : '';
@@ -588,7 +623,8 @@ function applyTransform() {
 function fitToScreen() {
   if (!photo) return;
   const r = stage.getBoundingClientRect(), pad = 8;
-  zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min((r.width - pad * 2) / view.width, (r.height - pad * 2) / view.height)));
+  const fw = view.width + 2 * frameM.mx, fh = view.height + 2 * frameM.my;   // the image with its film frame
+  zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min((r.width - pad * 2) / fw, (r.height - pad * 2) / fh)));
   panX = panY = 0; fitted = true;
   applyTransform();
 }
@@ -799,7 +835,7 @@ function sizeView() {
   const { w, h } = outFrame(photo.preview.w, photo.preview.h);
   view.width = w; view.height = h;
   view.style.width = w + 'px'; view.style.height = h + 'px';
-  drawDustLayer();
+  drawOverlays();
   fitToScreen();
 }
 function showPreview() {
@@ -1122,7 +1158,7 @@ async function exportFull(ig = false) {
   try {   // from `exporting = true` on: anything that throws must reach the finally (it re-enables the buttons)
     // A preview render in flight shares the engine and the GPU frame: let it finish first.
     while (rendering) await sleep(20);
-    const u = ui(), dust = dustAmount(), marks = dustMarks();   // fixed for every strip
+    const u = ui(), dust = dustAmount(), dustD = dustMarks(), style = frameStyle(), fseed = photo.grainSeed;   // fixed for every strip
     const t0 = performance.now();
     const rawPv = photo.preview.raw, size = photo.size;
     const rot = photo.rot || 0, turned = rot & 1;
@@ -1130,8 +1166,9 @@ async function exportFull(ig = false) {
     const c = viewCrop(), cw = fw * c.w, chh = fh * c.h;   // the output frame (Ritaglia) at full resolution
     const bFrac = borderFrac(), mat = matColour();
     // IG: the posted image (iw × ih) fits inside the canvas with a bFrac mat; the film renders at IG_SUPER × that.
-    const igFit = ig ? fitInside(cw, chh, IG_W, IG_H, Math.round(bFrac * IG_H)) : null;
-    const scale = ig ? Math.min(1, IG_SUPER * Math.max(igFit.iw, igFit.ih) / Math.max(cw, chh))
+    const fm = frameMargins(style, cw, chh), ecw = cw + 2 * fm.mx, ech = chh + 2 * fm.my;   // with the film frame (Cornice)
+    const igFit = ig ? fitInside(ecw, ech, IG_W, IG_H, Math.round(bFrac * IG_H)) : null;
+    const scale = ig ? Math.min(1, IG_SUPER * Math.max(igFit.iw, igFit.ih) / Math.max(ecw, ech))
       : Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (cw * chh)));
     if (ig) forceSRGB = true;
     const longCap = Math.round(Math.max(fw, fh) * scale);
@@ -1166,9 +1203,11 @@ async function exportFull(ig = false) {
     // v3.36: the mat keeps the photo's aspect (a 3:4 photo exports at exactly 3:4): bFrac of the long side on the long edges,
     // scaled by long / short across the short ones (portrait 2736x3648: 36 px left / right, 48 px top / bottom -> 2808x3744).
     // The base width moves by up to ±3 px to the value that makes the thick side a whole number (3:4 -> a multiple of 3: exact).
-    const border = bFrac && !ig ? matBase(Math.round(Math.max(w, h) * bFrac), Math.max(w, h) / Math.min(w, h)) : 0;
-    const borderX = w <= h ? border : Math.round(border * w / h), borderY = w <= h ? Math.round(border * h / w) : border;
-    log(`export start ${w}x${h} p3=${p3} progressive=${progressive} border=${borderX}x${borderY}`);
+    // The film frame (Cornice) around the image: the canvas is W×H, the image at (mx, my); the mat goes around the canvas.
+    const { mx, my } = frameMargins(style, w, h), W = w + 2 * mx, H = h + 2 * my;
+    const border = bFrac && !ig ? matBase(Math.round(Math.max(W, H) * bFrac), Math.max(W, H) / Math.min(W, H)) : 0;
+    const borderX = W <= H ? border : Math.round(border * W / H), borderY = W <= H ? Math.round(border * H / W) : border;
+    log(`export start ${w}x${h} p3=${p3} progressive=${progressive} frame=${style} ${mx}x${my} border=${borderX}x${borderY}`);
 
     const longSide = Math.max(w, h);
     const strips = Math.ceil(h / EXPORT_TILE), cols = Math.ceil(w / EXPORT_TILE);
@@ -1179,12 +1218,21 @@ async function exportFull(ig = false) {
     done.catch(() => {});
     const quality = +$('quality').value, distance = jpegDistance(quality);
     log(`export quality ${quality} (distance ${distance.toFixed(2)})`);
-    const igFull = ig ? new Uint8Array(w * h * 3) : null;   // IG: the whole supersampled render, downscaled at the end
-    if (!ig) enc.postMessage({ cmd: 'start', width: w, height: h, distance, progressive, yuv444: 1, border: borderX, borderY, mat });
+    const igFull = ig ? new Uint8Array(W * H * 3) : null;   // IG: the whole supersampled render, downscaled at the end
+    if (!ig) enc.postMessage({ cmd: 'start', width: W, height: H, distance, progressive, yuv444: 1, border: borderX, borderY, mat });
 
+    // a strip of canvas rows from ey0: the frame over it, the dust, then to the encoder (IG: into the whole canvas)
+    const emit = (strip, ey0, rows) => {
+      frameIntoStrip(strip, style, fseed, w, h, mx, my, ey0, rows);
+      dustIntoStrip(strip, w, h, mx, my, ey0, rows, dust, dustD);
+      if (ig) igFull.set(strip, ey0 * W * 3);
+      else enc.postMessage({ cmd: 'rows', rgb: strip.buffer }, [strip.buffer]);
+    };
+    const frameRows = (ey0, rows) => { for (let y = 0; y < rows; y += EXPORT_TILE) emit(new Uint8Array(W * Math.min(EXPORT_TILE, rows - y) * 3), ey0 + y, Math.min(EXPORT_TILE, rows - y)); };
+    frameRows(0, my);   // the frame above the image
     for (let s = 0; s < strips; s++) {
       const ty = s * EXPORT_TILE, ch = Math.min(EXPORT_TILE, h - ty);
-      const strip = new Uint8Array(w * ch * 3);
+      const strip = new Uint8Array(W * ch * 3);
       for (let c = 0; c < cols; c++) {
         if (encoderError) throw new Error(encoderError);
         const tx = c * EXPORT_TILE;
@@ -1197,18 +1245,17 @@ async function exportFull(ig = false) {
         const cw = Math.min(EXPORT_TILE, w - tx);
         const t32 = new Uint32Array(tile.buffer, tile.byteOffset, tw * th);
         for (let y = 0; y < ch; y++) {   // RGBA tile → RGB strip (one 32-bit read per pixel; little-endian, as the CPU path)
-          let src = (ty - y0 + y) * tw + (tx - x0), dst = (y * w + tx) * 3;
+          let src = (ty - y0 + y) * tw + (tx - x0), dst = (y * W + mx + tx) * 3;
           for (let x = 0; x < cw; x++) { const v = t32[src++]; strip[dst] = v; strip[dst + 1] = v >> 8; strip[dst + 2] = v >> 16; dst += 3; }
         }
       }
-      dustIntoStrip(strip, w, h, ty, ch, dust, marks);
-      if (ig) { igFull.set(strip, ty * w * 3); continue; }
-      enc.postMessage({ cmd: 'rows', rgb: strip.buffer }, [strip.buffer]);
+      emit(strip, my + ty, ch);
       log(`strip ${s + 1}/${strips} sent`);
     }
+    frameRows(my + h, my);   // and below it
     if (ig) {
       status('Esporto IG: ridimensiono e rendo nitido…');
-      const { iw, ih } = igFit, small = downscale(igFull, w, h, iw, ih);
+      const { iw, ih } = igFit, small = downscale(igFull, W, H, iw, ih);
       sharpenForScreen(small, iw, ih);
       const canvas = new Uint8Array(IG_W * IG_H * 3), matRGB = mat;
       for (let i = 0; i < IG_W * IG_H * 3; i += 3) canvas.set(matRGB, i);
@@ -1296,7 +1343,7 @@ const FORMAT = {
   grain: mult2, halation: mult,
   ca: pctOff, vignette: pctOff,
   falloff: pct,
-  texture: signPct, clarity: signPct, sharp: signPct, dust: pctOff, black: pctOff, htHi: (v) => HYPER_NAMES[v], htLo: (v) => HYPER_NAMES[v], hypersharp: pctOff,
+  texture: signPct, clarity: signPct, sharp: signPct, dust: pctOff, frame: (v) => FRAME_NAMES[FRAME_STYLES[v]], black: pctOff, htHi: (v) => HYPER_NAMES[v], htLo: (v) => HYPER_NAMES[v], hypersharp: pctOff,
   labD: (v) => `${sign(v)}${v}`, labGrad: (v) => GRAD_NAMES[v + 3], labHi: (v) => TONE_NAMES[v + 1], labLo: (v) => TONE_NAMES[v + 1],
   labSat: (v) => `${sign(v)}${v}`, labBright: (v) => `${sign(v)}${v}`, nbBright: (v) => `${sign(v)}${v}`,
 };
@@ -1487,11 +1534,16 @@ const V4_GRAIN = {
 const v4Grain = () => (neutralScan() ? { ...V4_GRAIN, scan_noise: 0 } : V4_GRAIN);
 const V4_GRAIN_SCALE = 1.95;   // Grana's slider unit for this grain: the fitted amount (3.95) at the default Grana (V4_FILM)
 const GRAIN_UNIT = 0.65;   // slider 1× -> engine amount (= old slider 0.25 / old default 0.4)
-const OVERLAY_ONLY = new Set(['dust']);   // drawn as a layer: no engine render
+const OVERLAY_ONLY = new Set(['dust', 'frame']);   // drawn as layers: no engine render
 function syncOutputs() { for (const id of Object.keys(FORMAT)) $(id).nextElementSibling.textContent = FORMAT[id](+$(id).value); }
 
 for (const id of Object.keys(FORMAT)) {
-  const update = () => { syncOutputs(); if (OVERLAY_ONLY.has(id)) drawDustLayer(); else render(); };
+  const update = () => {
+    syncOutputs();
+    if (!OVERLAY_ONLY.has(id)) { render(); return; }
+    drawOverlays();
+    if (id === 'frame' && fitted) fitToScreen();   // the frame changes the fitted size
+  };
   $(id).addEventListener('input', update);
   const zero = () => { $(id).value = 0; update(); };
   $(id).previousElementSibling.addEventListener('dblclick', zero);
@@ -1501,7 +1553,7 @@ $('reseed').addEventListener('click', () => {
   if (!photo) return;
   photo.dustSeed = newDustSeed();
   if (!dustAmount()) { $('dust').value = DUST_RESEED; syncOutputs(); }
-  drawDustLayer();
+  drawOverlays();
 });
 $('pick').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadPhoto(f); });
 // Drag & drop a photo anywhere on the page (desktop): same path as Scegli foto. Only file drags are taken.
@@ -1549,7 +1601,7 @@ $('resetAll').addEventListener('click', () => {
   syncOutputs();
   if (V3) for (const id of ['hlc', 'shadows']) $(id).dispatchEvent(new Event('input'));
   resetTransform();
-  if (photo) { drawDustLayer(); render(); }
+  if (photo) { drawOverlays(); render(); }
 });
 $('export').addEventListener('click', () => exportFull());
 // UI 2 (lib/ui2.js): the edit state it snapshots for undo / redo is every slider, the scanner, Raddrizza and the crop; a tool
@@ -1574,7 +1626,7 @@ if (UI2) {
       for (const b of document.querySelectorAll('[data-crop-format]')) drawFormat(b, CROP_FORMATS[+b.dataset.cropFormat], cropFormat);
       $('cropOut').textContent = cropFormat === 'lock' ? 'Bloccato' : formatName(cropFormat);
       placeCrop(); histoSoon();
-      if (st.scanner !== scanner) setScanner(st.scanner); else if (photo) { drawDustLayer(); render(); }
+      if (st.scanner !== scanner) setScanner(st.scanner); else if (photo) { drawOverlays(); render(); }
     },
     openTab: (t) => document.querySelector(`#tabs [data-tab="${t}"]`)?.click(),
     rotate: (q) => rotate(q),

@@ -214,6 +214,26 @@ export function drawDust(ctx, marks, amount, W, H, x0 = 0, y0 = 0) {
   ctx.restore();
 }
 
+/** The film around the frame (a film-style border, filmframe.js) catches dust too: the frame's own field covers the image, and
+ * eight neighbouring fields (the same density, their own seeds) tile the border around it, so the border's marks are as
+ * many per mm as the image's and the image's own marks stay exactly where they were. */
+const AROUND = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]];
+const GOLDEN = 0x9e3779b9;   // seed step between the neighbours (any odd constant; the golden ratio's spreads seeds evenly)
+export const borderFields = (seed, aspect) =>
+  AROUND.map(([i, j], k) => ({ i, j, marks: dustField((seed + Math.imul(GOLDEN, k + 1)) >>> 0, aspect) }));
+
+/** drawDust for a W×H image with an mx / my border on each side: the region (x0, y0) of the (W + 2 mx) × (H + 2 my) canvas.
+ * The border's fields are clipped to the border (the image keeps its own marks only). */
+export function drawDustFramed(ctx, marks, around, amount, W, H, mx, my, x0 = 0, y0 = 0) {
+  drawDust(ctx, marks, amount, W, H, x0 - mx, y0 - my);
+  if (!mx && !my) return;
+  const cw = ctx.canvas.width, ch = ctx.canvas.height;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, cw, ch); ctx.rect(mx - x0, my - y0, W, H); ctx.clip('evenodd');
+  for (const f of around) drawDust(ctx, f.marks, amount, W, H, x0 - mx - f.i * W, y0 - my - f.j * H);
+  ctx.restore();
+}
+
 /** Mix an RGB strip (w×h, row stride w*3) towards an RGBA overlay of the same size (its colour, by its alpha). */
 export function compositeDust(rgb, overlay) {
   for (let p = 0, j = 0; p < overlay.length; p += 4, j += 3) {

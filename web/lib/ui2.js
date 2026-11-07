@@ -13,13 +13,13 @@ const GROUPS = [
   { id: 'base', name: 'Base', icon: 'base', tools: ['ev', 'temp', 'vibrance', 'grain', 'halation'] },
   { id: 'scanner', name: 'Scanner', icon: 'look', tools: ['scan', 'labD', 'nbBright', 'labGrad', 'labHi', 'labLo', 'labSat', 'labBright', 'htLo', 'htHi', 'hypersharp', 'mshift', 'yshift'] },
   { id: 'transform', name: 'Trasforma', icon: 'crop', tools: [] },
-  { id: 'effects', name: 'Effetti', icon: 'fx', tools: ['texture', 'clarity', 'sharp', 'ca', 'vignette', 'falloff', 'dust'] },
+  { id: 'effects', name: 'Effetti', icon: 'fx', tools: ['texture', 'clarity', 'sharp', 'ca', 'vignette', 'falloff', 'dust', 'frame'] },
 ];
 // Short names for the strip (the full label, from the row, is the big slider's title).
 const SCANS = ['scanNone', 'scanFrontier', 'scanNoritsu'];
 const SHORT = { scan: 'Scanner', ev: 'Esposiz.', labD: 'Densità', nbBright: 'Luminos.', temp: 'Luce', mshift: 'Magenta', yshift: 'Giallo', vibrance: 'Vividezza',
   grain: 'Grana', labGrad: 'Gradaz.', labHi: 'Luci', labLo: 'Ombre', labSat: 'Saturaz.', labBright: 'Bright', htLo: 'HT ombre',
-  htHi: 'HT luci', hypersharp: 'Hyper Sh.', halation: 'Halation', texture: 'Texture', clarity: 'Chiarezza', sharp: 'Nitidezza',
+  htHi: 'HT luci', hypersharp: 'Hyper Sh.', halation: 'Halation', texture: 'Texture', clarity: 'Chiarezza', sharp: 'Nitidezza', frame: 'Cornice',
   ca: 'Aberraz.', vignette: 'Vignett.', falloff: 'Falloff', dust: 'Polvere' };
 const I = {
   base: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
@@ -52,7 +52,7 @@ const I = {
 };
 const ICON = { scan: 'look', ev: 'ev', labD: 'dens', nbBright: 'dens', temp: 'temp', mshift: 'tint', yshift: 'tint', vibrance: 'drop', grain: 'grain',
   labGrad: 'curve', labHi: 'hi', labLo: 'lo', labSat: 'sat', labBright: 'ev', htLo: 'lo', htHi: 'hi', hypersharp: 'sharp',
-  halation: 'glow', texture: 'grain', clarity: 'sat', sharp: 'sharp', ca: 'lens', vignette: 'lens', falloff: 'lens', dust: 'fx' };
+  halation: 'glow', texture: 'grain', clarity: 'sat', sharp: 'sharp', ca: 'lens', vignette: 'lens', falloff: 'lens', dust: 'fx', frame: 'crop' };
 const svg = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[k]}</svg>`;
 
 // Motion: a group / tool change slides the content the way the selection moved (FLOW +1, user: from a tab on the left to one

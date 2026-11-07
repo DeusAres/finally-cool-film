@@ -42,6 +42,8 @@
   #wrap { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
   #view { display: none; flex: none; transform-origin: center center; will-change: transform; }
   /* Dust layer: same size and transform as #view; an abs-pos flex child is centred like it. */
+  /* Film frame (Cornice): the same, sized to the image with its frame (symmetric margins: same centre). */
+  #frameLayer { position: absolute; display: none; transform-origin: center center; will-change: transform; pointer-events: none; }
   #dustLayer { position: absolute; display: none; transform-origin: center center; will-change: transform; pointer-events: none; }
   #empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
          justify-content: center; gap: 12px; color: var(--muted); text-align: center; padding: 16px; }
@@ -197,7 +199,7 @@
 </header>
 
 <div id="stage">
-  <div id="wrap"><canvas id="view"></canvas><canvas id="dustLayer"></canvas></div>
+  <div id="wrap"><canvas id="view"></canvas><canvas id="frameLayer"></canvas><canvas id="dustLayer"></canvas></div>
   <div id="empty">
     <label class="btn">Scegli foto<input type="file" id="pick" accept="image/*,.dng,image/x-adobe-dng,.orf,image/x-olympus-orf"></label>
     <div><span class="touch-hint">Pizzica per zoomare · trascina per spostarti</span><span class="mouse-hint">Rotellina per zoomare · trascina per spostarti</span><br>tieni premuto “A/B” per l’originale</div>
@@ -305,6 +307,7 @@
   <div class="pane" data-pane="dust" role="tabpanel" hidden>
   <div class="row"><label for="dust">Quantità</label><input type="range" id="dust" min="0" max="1" step="0.01" value="0"><output for="dust"></output></div>
   <div class="row check"><label><span class="chip" id="reseed">Rimescola</span></label></div>
+  <div class="row"><label for="frame">Cornice</label><input type="range" id="frame" min="0" max="3" step="1" value="0"><output for="frame"></output></div>
   </div>
 </div>
 <nav id="tabs" role="tablist">

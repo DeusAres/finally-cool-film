@@ -35,6 +35,7 @@ const TIPS = {
   vignette: 'Gli angoli un po’ più scuri, come con un obiettivo vero.',
   falloff: 'Come scuriscono gli angoli: 0 morbido e graduale, 1 più netto.',
   dust: 'Polvere e piccoli segni, come su un negativo vero.',
+  frame: 'Il bordo della pellicola attorno alla foto: nero sottile, carrier limato o la striscia intera coi fori. La Polvere ci finisce sopra; il Bordo colorato va fuori.',
   // File / Trasforma
   quality: 'La qualità del JPEG quando esporti. Più alta = file più grande.',
   border: 'Aggiunge una cornice bianca alla foto esportata.',
