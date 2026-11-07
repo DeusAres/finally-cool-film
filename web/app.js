@@ -349,14 +349,20 @@ const hyperLevel = (v) => (v / HYPER_LEVELS) * HYPER_MAX;
 const HYPER_NAMES = ['off', 'molto basso', 'basso', 'normale', 'alto', 'molto alto'];
 const HYPER_THUMB_PX = 512;   // the map's source thumb: its resolution is the map's (lib/hypertone.js MAP_LONG)
 // The lab operator's keys (Scanner tab, Frontier and Noritsu; SP-3000 manual, "Condition Setup and Maintenance" PP3-B1271E2:
-// density key, Gradation Selection Hard2..Soft3, Tone Adjustment highlight / shadow hard / soft, Saturation -9..+9, Bright Mode
+// density key, Gradation Selection Hard2..Soft3 (Hard3..5 ours), Tone Adjustment highlight / shadow hard / soft, Saturation -9..+9, Bright Mode
 // colour intensity -2..+4). The manual gives the levels, not what a step does: the step sizes below are choices.
 // Densità: + = brighter print (v4.13, user: the lab's own sign, + = denser / darker, read backwards), 1/4 EV per step
 // (FrontierParams.density, EV, + = brighter). Nessuno's Luminosità goes the same way and moves the inversion's mid grey by the
 // same step (invert.js; a choice: one step size in the tab).
 const LAB_D_EV = 0.25;
-// Gradazione: about 14 % of mid-tone slope per level (contrast key: slope x (1 + 1.9 c) up, x (1 + 0.85 c) down, frontier.rs).
-const GRAD_C = [-0.383, -0.271, -0.145, 0, 0.074, 0.157], GRAD_NAMES = ['Soft3', 'Soft2', 'Soft1', 'Normal', 'Hard1', 'Hard2'];
+// Gradazione: about 14 % of mid-tone slope per level in the key (slope x (1 + 1.9 c) up, x (1 + 0.85 c) down, frontier.rs),
+// measured +9..12 % of Normal's L* slope per level on a grey ramp (v4 Frontier, +-0.25 EV at mid grey: 18.2 .. 26.8 .. 32.3 L*/EV
+// for Soft3 .. Normal .. Hard2). Hard3..5 are not on the SP-3000 (user asked for more, 4.32): the same step, slope 1.31 / 1.42 /
+// 1.52 x Normal; white (L* 94.8) and black (1.8) do not move (highlights locked), shadows clip no more (EV below L* 5: 3.4 -> 3.6),
+// the lights pay: slope +1..+2 EV 15.7 -> 9.4 L*/EV at Hard5. The key clamps at k 2.9 (c = 1) and the grey ramp stays monotone up
+// to c ~ 0.85 (dips 0.3 L* from c 0.9; eval/out/gradazione_levels.png).
+const GRAD_C = [-0.383, -0.271, -0.145, 0, 0.074, 0.157, 0.25, 0.34, 0.43],
+  GRAD_NAMES = ['Soft3', 'Soft2', 'Soft1', 'Normal', 'Hard1', 'Hard2', 'Hard3', 'Hard4', 'Hard5'];
 // Tono luci / ombre (Tone Adjustment, one level each way): highlight key +-0.5 (Hard: opener, brighter lights, 4.31 gentler, see
 // frontier.rs HIGHLIGHT_UP; Soft: held down); the frame's brightness is Densità's (the negative as a whole, the shoulder keeps
 // the whites' detail);
