@@ -14,7 +14,12 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
-- **v4.31**: **Tono luci Hard non brucia più i bianchi**: alzava le luci avvicinandole al bianco fino al 42 %, così i toni
+- **v4.31**: **la mascotte**: un rullino in pixel art (8 bit, disegnato nel codice) nell'angolo della foto guarda il risultato
+  e parla solo quando serve: bianchi bruciati, neri chiusi, foto troppo scura o chiara, dominante sui grigi. Le soglie sono
+  appena oltre quello che fanno le 20 scansioni Gold vere di `samples/kg200` (parla su 3 di 20: quelle con difetti netti).
+  Ogni consiglio porta allo strumento giusto per lo scanner scelto (tasto "Apri …"); un tocco sul fumetto lo zittisce per
+  quella foto, un tocco sul rullino lo ripete (o dice che è tutto ok).
+  **Tono luci Hard non brucia più i bianchi**: alzava le luci avvicinandole al bianco fino al 42 %, così i toni
   sopra le luci medie tenevano solo il 57 % della loro separazione (pelo bianco, nuvole piatti). Ora il 25 %: tengono il 75 %,
   le luci salgono ancora (meno di prima). Per rendere più luminosa una foto la leva giusta è **Densità +** (schiarisce tutto
   il negativo, la spalla dello scanner tiene il dettaglio dei bianchi), con Tono luci Soft se il cielo sale troppo.

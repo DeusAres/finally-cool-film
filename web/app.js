@@ -445,7 +445,7 @@ async function render() {
       await renderRegion(pv, 0, 0, w, h, new Uint8Array(photo.after.data.buffer), u);
       const t1 = performance.now();
       if (view.width !== w || view.height !== h) sizeView();   // the crop changed the output frame
-      if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); }
+      if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); ui2?.rendered(photo.after); }
       const t2 = performance.now(), ms = (v) => Math.round(v);
       status(`${w}×${h} · ${ms(t2 - t0)} ms (render ${ms(t1 - t0)} · display ${ms(t2 - t1)})${gpu ? '' : ' CPU'}`);
       log(`render #${n} ${ms(t1 - t0)}+${ms(t2 - t1)} ms`);

@@ -3,6 +3,7 @@
 // Built over the app's own controls: the classic panes stay in the page (hidden) and remain the one source of truth: UI 2
 // sets their values and dispatches their events, reads their labels and their formatted outputs. Prototype: user, 2026-11-03.
 import { store } from './util.js';
+import { initMascot } from './mascot.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -354,7 +355,28 @@ export function initUI2(api) {
     .observe(document.body, { childList: true, subtree: true });
   draw(false);
   // a new photo: the history starts again from its state
-  return { photoLoaded() { hist = [api.snapshot()]; at = 0; syncUndo(); draw(false); } };
+  // --- the mascot (mascot.js): advice on the rendered frame, a tap on it opens the tool
+  function openTool(id) {
+    const g = GROUPS.find((x) => x.tools.includes(id))?.id;
+    if (!g || !visible(id)) return;
+    if (g !== group) {
+      const dir = Math.sign(GROUPS.findIndex((x) => x.id === g) - GROUPS.findIndex((x) => x.id === group));
+      if (group === 'transform') park.append(tiltBlock, cropBlock);
+      group = g; sel[g] = id; api.openTab('film'); draw(true, dir);
+    } else if (sel[g] !== id) {
+      sel[g] = id; draw(false);
+    }
+    haptic();
+  }
+  const SCAN_KIND = { scanNone: 'none', scanFrontier: 'frontier', scanNoritsu: 'noritsu' };
+  const mascot = initMascot($('stage'), {
+    scanner: () => SCAN_KIND[SCANS.find((b) => $(b)?.getAttribute('aria-checked') === 'true')] || 'none',
+    has: visible, openTool, name: (id) => SHORT[id] || labelOf(id),
+  });
+  return {
+    photoLoaded() { hist = [api.snapshot()]; at = 0; syncUndo(); draw(false); mascot.reset(); },
+    rendered(img) { mascot.update(img); },
+  };
 }
 
 const CSS = `
