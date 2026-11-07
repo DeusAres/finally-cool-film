@@ -14,6 +14,15 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.32**: **il rullino in 16 bit**: ridisegnato a 48×48 con sfumature a più toni, contorni colorati e luce da in alto a
+  sinistra; respira, sbatte le palpebre e muove la linguetta, e quando parla la bocca segue il testo che si scrive.
+  **Il controllo della mascotte non si fa più fregare**: una Temperatura estrema passava per "ok". Ora guarda la dominante
+  rispetto alla foto appena aperta (oltre 10 di a*/b* parla) e sui toni meno saturi (oltre 14, più di qualunque scansione Gold
+  vera), e la saturazione (×1,7 o ÷2 rispetto alla foto di partenza, o fuori 3..30 di croma); dice "tutto ok" solo se passano
+  tutti i controlli.
+  **Gradazione fino a Hard5**: dopo Hard2 (l'ultimo livello del Frontier vero) ci sono Hard3, Hard4 e Hard5, stesso passo
+  dei livelli esistenti (circa +10 % di contrasto nei mezzitoni ciascuno). Bianchi e neri non si spostano; il prezzo lo pagano
+  le luci, più compresse (misurato su una rampa grigia, `eval/out/gradazione_levels.png`).
 - **v4.31**: **la mascotte**: un rullino in pixel art (8 bit, disegnato nel codice) nell'angolo della foto guarda il risultato
   e parla solo quando serve: bianchi bruciati, neri chiusi, foto troppo scura o chiara, dominante sui grigi. Le soglie sono
   appena oltre quello che fanno le 20 scansioni Gold vere di `samples/kg200` (parla su 3 di 20: quelle con difetti netti).
