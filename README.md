@@ -14,6 +14,10 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.31**: **Tono luci Hard non brucia più i bianchi**: alzava le luci avvicinandole al bianco fino al 42 %, così i toni
+  sopra le luci medie tenevano solo il 57 % della loro separazione (pelo bianco, nuvole piatti). Ora il 25 %: tengono il 75 %,
+  le luci salgono ancora (meno di prima). Per rendere più luminosa una foto la leva giusta è **Densità +** (schiarisce tutto
+  il negativo, la spalla dello scanner tiene il dettaglio dei bianchi), con Tono luci Soft se il cielo sale troppo.
 - **v4.30**: **Nessuno: mezzitoni non più schiacciati**. La curva di inversione era fatta di due rette (nero → grigio medio,
   grigio medio → bianco) con un angolo sul grigio medio: sopra, la pendenza si dimezzava e i mezzitoni chiari si
   ammucchiavano subito sopra il grigio (un picco o uno scalino a ~118/255 in ogni istogramma). Ora le due pendenze si

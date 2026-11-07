@@ -357,7 +357,9 @@ const HYPER_THUMB_PX = 512;   // the map's source thumb: its resolution is the m
 const LAB_D_EV = 0.25;
 // Gradazione: about 14 % of mid-tone slope per level (contrast key: slope x (1 + 1.9 c) up, x (1 + 0.85 c) down, frontier.rs).
 const GRAD_C = [-0.383, -0.271, -0.145, 0, 0.074, 0.157], GRAD_NAMES = ['Soft3', 'Soft2', 'Soft1', 'Normal', 'Hard1', 'Hard2'];
-// Tono luci / ombre (Tone Adjustment, one level each way): highlight key +-0.5 (Hard: opener, brighter lights; Soft: held down);
+// Tono luci / ombre (Tone Adjustment, one level each way): highlight key +-0.5 (Hard: opener, brighter lights, 4.31 gentler, see
+// frontier.rs HIGHLIGHT_UP; Soft: held down); the frame's brightness is Densità's (the negative as a whole, the shoulder keeps
+// the whites' detail);
 // black lift +-0.15 of black_lift_max (Soft: lifted blacks; Hard: deeper, the darkest tones clip).
 const TONE_HI = 0.5, TONE_LO = 0.15, TONE_NAMES = ['Soft', 'Standard', 'Hard'];
 // Saturazione: 5 % per step on the scanner's saturation. Bright (Fujifilm: "saturation of primary colors ... without affecting

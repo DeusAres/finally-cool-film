@@ -52,7 +52,12 @@ use crate::profile::Profile;
 /// Up (h = +1): (gain, rise width): the remaining distance to white shrinks by `gain * smoothstep`.
 /// Both are linear in the key.
 const HIGHLIGHT_DOWN: (f64, f64, f64, f64) = (0.22, 0.7, 0.7, 0.8);
-const HIGHLIGHT_UP: (f64, f64) = (0.85, 0.6);
+/// Up gain 0.85 -> 0.5 (4.31, user: Tono luci Hard "alza troppo le luci e le brucia"): at Hard (key 0.5, app.js TONE_HI) the
+/// distance to white shrank by up to 42 %, so the tones above u 0.6 kept 57 % of their separation and white fur / clouds went
+/// flat. Now 25 %: they keep 75 %, the lights still rise (+0.12 of the upper range at u 0.5, was +0.20). Any lift with a fixed
+/// white compresses somewhere; a bump that returns to zero at white was tried and compresses its falling part harder (slope
+/// 0.16-0.38). Brightness itself is Densità's.
+const HIGHLIGHT_UP: (f64, f64) = (0.5, 0.6);
 /// Contrast key: mid-grey slope factor `1 + SLOPE_UP c` (c > 0) / `1 + SLOPE_DOWN c` (c < 0).
 const SLOPE_UP: f64 = 1.9;
 const SLOPE_DOWN: f64 = 0.85;
