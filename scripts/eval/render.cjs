@@ -118,7 +118,7 @@ function encodePng(w, h, rgba) {
     // special keys: _click: [button ids] clicked in order (each settles); _export: path to save the exported JPEG
     const clicks = sliders._click || [], exportTo = sliders._export, exportBtn = sliders._exportBtn || 'export';
     delete sliders._click; delete sliders._export; delete sliders._exportBtn;
-    const wantRender = Object.keys(sliders).some((k) => !['dust', 'quality', 'border'].includes(k));   // these never trigger a render: waiting for one hung
+    const wantRender = Object.keys(sliders).some((k) => !['dust', 'quality', 'border', 'borderPct', 'frame'].includes(k));   // these never trigger a render: waiting for one hung
     const all = { ...sliders, dust: 0 };   // dust is an overlay layer, never in the canvas; zero it anyway
     await page.evaluate((s) => {
       for (const [id, v] of Object.entries(s)) {
