@@ -1104,6 +1104,9 @@ async function setScanner(s) {
   internoBusy++;   // an export waits for the switch (same guard as Interno)
   try {
     while (rendering || exporting) await sleep(20);   // the engine is shared
+    // A fresh engine: updates are merged, so the last scanner's keys that this one does not send stayed in (Frontier -> Noritsu
+    // kept V4_AUTO's highlight_weight / highlight_max_channel: AutoSetup put a backlit sunset at L* 18 instead of 62).
+    engine?.free(); engine = null;
     prepareScanner();
   } finally { internoBusy--; }
   render();

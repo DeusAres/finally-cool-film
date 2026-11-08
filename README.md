@@ -21,6 +21,12 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
   senza fotogrammi vicini. È un negativo invertito: la pellicola vuota esce nera, i fori più neri ancora, dove il portanegativi
   copre la luce esce bianco. La Polvere ci finisce sopra (stesso campo, stessa densità per mm), il Bordo colorato va fuori.
   Si vede nell'anteprima e finisce nell'export.
+  **La mascotte giudica la foto finale**: il riferimento per dominante e saturazione era il primo render dopo l'apertura, quasi
+  sempre Nessuno; ora è la stessa foto con lo scanner scelto e gli slider a default (un render in più, fuori schermo, solo se
+  hai toccato qualcosa). Temperatura -2000 su Frontier / Noritsu non passa più per "ok", Saturazione +9 non è più letta come
+  dominante gialla, cambiare scanner da solo non la fa parlare.
+  **Bug: Frontier → Noritsu (e viceversa) diretto** lasciava nel motore le chiavi dell'altro scanner (l'AutoSetup del Frontier
+  pesava le luci): un tramonto in controluce usciva quasi nero. Ora ogni cambio di scanner riparte da un motore pulito.
 - **v4.32**: **il rullino in 16 bit**: ridisegnato a 48×48 con sfumature a più toni, contorni colorati e luce da in alto a
   sinistra; respira, sbatte le palpebre e muove la linguetta, e quando parla la bocca segue il testo che si scrive.
   **Il controllo della mascotte non si fa più fregare**: una Temperatura estrema passava per "ok". Ora guarda la dominante
