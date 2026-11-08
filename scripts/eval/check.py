@@ -9,6 +9,7 @@ render and compare with eval/check/baseline.json. Run it before every push that 
                                                   # DIR = a copy of eval/out/check made before the change (it is overwritten)
     python3 scripts/eval/check.py --chart         # also the ColorChecker score (builds sf-eval, see build-sf-eval.sh)
     python3 scripts/eval/check.py --cases v4_cat,wall_burn
+    python3 scripts/eval/check.py --auto          # the cases the changes since the deploy branch can move (see AUTO_* below)
 
 Metrics per render (PNG of the app canvas, read as Display P3 as render.cjs writes it; exports: sRGB JPEG):
   bands    mean Lab a*/b* per L* band 3-20 / 20-40 / 40-60 / 60-80 / 80-101 (colour casts by tone: magenta fur, teal shadows)
@@ -36,6 +37,30 @@ BASELINE = os.path.join(ROOT, 'eval', 'check', 'baseline.json')
 BANDS = ((3, 20), (20, 40), (40, 60), (60, 80), (80, 101))
 # Allowed drift vs baseline (absolute): band a*/b* and mean L* in Lab units, created edges, texture.
 TOL = {'band': 1.0, 'L': 1.0, 'edges': 0.05, 'tex': 0.03, 'chart': 0.15}
+
+
+# --auto (user 2026-11-08: "a check for any change, even a tiny one, takes ages"): the full set takes ~11 min, the three
+# exports ~4.5 of it (v4_cat 85 s, v4_rock_hypertone 100 s; measured). A change that only touches the interface, the overlays
+# (film frame, dust: no case turns them on) or the docs cannot move a render's pixels, except through a default: the smoke set
+# renders the default look once in the preview (v4_sea, ~18 s) and once through an export (jpeg_export_ig, ~32 s). Anything else
+# (engine, wasm, app.js, the look's modules, the harness itself) runs the full set. Two Chromiums at once save only ~20 %
+# (4 preview cases: 72 s at --jobs 1, 58 s at 2, 53 s at 4: SwiftShader is CPU bound), so --jobs stays 1.
+DEPLOY = 'origin/claude/spektrafilm-mobile-web-har40e'
+AUTO_UI = re.compile(r'^(README\.md|VERSION|CLAUDE\.md|eval/.*\.md|scripts/mascot/.*|web/index\.html|'
+                     r'web/lib/(ui2|mascot|rullino|ruler|tips|filmframe|dust|debuglog)\.js)$')
+AUTO_SMOKE = ['v4_sea', 'jpeg_export_ig']
+
+
+def auto_cases(cases):
+    """The cases for the changes since the deploy branch (committed or not): the smoke set when every changed file is in AUTO_UI."""
+    git = lambda *a: subprocess.run(['git', '-C', ROOT, *a], capture_output=True, text=True, check=True).stdout.split()
+    changed = sorted(set(git('diff', '--name-only', f'{DEPLOY}...HEAD') + git('diff', '--name-only', 'HEAD')))
+    other = [f for f in changed if not AUTO_UI.match(f)]
+    if other:
+        print(f'--auto: full set ({len(other)} file(s) beyond the interface, e.g. {", ".join(other[:3])})')
+        return cases
+    print(f'--auto: smoke set {AUTO_SMOKE} (only interface / overlay / docs changed: {", ".join(changed) or "nothing"})')
+    return {k: v for k, v in cases.items() if k in AUTO_SMOKE}
 
 
 def free_port():
@@ -173,12 +198,15 @@ def main():
     ap.add_argument('--compare')
     ap.add_argument('--chart', action='store_true')
     ap.add_argument('--cases')
+    ap.add_argument('--auto', action='store_true')
     ap.add_argument('--jobs', type=int, default=1)   # one Chromium at a time: two (plus a raw export) ran this container out of memory
     a = ap.parse_args()
 
     cases = json.load(open(os.path.join(ROOT, 'eval', 'check', 'cases.json')))['cases']
     if a.cases:
         cases = {k: v for k, v in cases.items() if k in a.cases.split(',')}
+    elif a.auto:
+        cases = auto_cases(cases)
     os.makedirs(OUT, exist_ok=True)
     if not a.no_build:
         subprocess.run([os.path.join(ROOT, 'scripts', 'build-web.sh')], check=True, capture_output=True)
