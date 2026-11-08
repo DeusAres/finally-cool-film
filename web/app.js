@@ -441,7 +441,7 @@ async function render() {
   try {
     do {
       dirty = false;
-      const u = ui();
+      const u = ui(), look = UI2 ? { key: defaultKey(), atDefault: atDefault(u) } : null;   // the mascot's, as this frame is rendered
       if (V4 && !loadingPhoto) prepareScanner();   // the scanner re-reads the negative when Esposizione / Interno moved (cached)
       const pv = photo.preview, { w, h } = outFrame(pv.w, pv.h), t0 = performance.now(), n = ++renderCount;
       // Breadcrumb: if iOS kills the tab mid-render, the next load says so.
@@ -452,7 +452,7 @@ async function render() {
       await renderRegion(pv, 0, 0, w, h, new Uint8Array(photo.after.data.buffer), u);
       const t1 = performance.now();
       if (view.width !== w || view.height !== h) sizeView();   // the crop changed the output frame
-      if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); ui2?.rendered(photo.after); }
+      if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); ui2?.rendered(photo.after, look); }
       const t2 = performance.now(), ms = (v) => Math.round(v);
       status(`${w}×${h} · ${ms(t2 - t0)} ms (render ${ms(t1 - t0)} · display ${ms(t2 - t1)})${gpu ? '' : ' CPU'}`);
       log(`render #${n} ${ms(t1 - t0)}+${ms(t2 - t1)} ms`);
@@ -466,6 +466,34 @@ async function render() {
   } finally {
     rendering = false;
     setBusy(exporting ? 'export' : loadingPhoto ? loadMark : null);   // a decode in flight gets its marker back
+  }
+}
+
+/** Every slider of `u` (ui()) at its default (sliderBase); the frame (turn, Raddrizza, crop) and Interno are not sliders. */
+const atDefault = (u) => Object.keys(FORMAT).every((id) => OVERLAY_ONLY.has(id) || Math.abs(u[id] - sliderBase(id)) < 1e-9);
+/** What the default render below depends on: the scanner, Interno, the frame as rendered now. */
+const defaultKey = () => JSON.stringify([scanner, $('indoor').checked, viewCrop(), $('tilt').value, photo?.rot]);
+/** The photo as the current scanner gives it with every slider at its default, at the frame as rendered now and with Interno as
+ * it is: UI 2's mascot judges the final render's colour against it (mascot.js), so a cast or a saturation is the sliders',
+ * never another scanner's look. One preview render, off screen; null without a photo or when `key` (defaultKey) is no longer
+ * what is shown. */
+async function renderDefault(key) {
+  while (rendering || exporting || loadingPhoto || internoBusy || rotBusy) await sleep(20);   // the engine is shared
+  const p = photo;
+  if (!p || defaultKey() !== key) return null;
+  rendering = true;
+  try {
+    const u = { ...ui(), ...Object.fromEntries(Object.keys(FORMAT).map((id) => [id, sliderBase(id)])) };
+    prepareScanner(u.ev);
+    const pv = photo.preview, { w, h } = outFrame(pv.w, pv.h);
+    syncEngine(u, { region: { x0: 0, y0: 0, fw: w, fh: h, W: w, H: h } });
+    const img = new ImageData(w, h, { colorSpace: outSpace() === 'p3' ? 'display-p3' : 'srgb' });
+    await renderRegion(pv, 0, 0, w, h, new Uint8Array(img.data.buffer), u);
+    return img;
+  } finally {
+    if (photo === p && !loadingPhoto) prepareScanner();   // the sliders' exposure again (cached); the next render syncs the engine
+    rendering = false;
+    if (dirty) render();   // an edit that arrived meanwhile
   }
 }
 
@@ -723,6 +751,8 @@ grip.addEventListener('dblclick', () => {
 // grain and halation are the film's own and start (and reset, Azzera) at its values: Grana at the measured Gold 200 strength
 // (the v3 default 2.5× is ~80 % of the full-frame Gold scans, README v3.32), Halation at the stock's antihalation (1).
 const V4_FILM = { grain: 3.1, halation: 1 };
+/** v4: a slider's default, what Azzera gives it (UI 2): the photo's Auto exposure, the film's grain / halation, else 0. */
+function sliderBase(id) { return id === 'ev' ? photo?.autoEv ?? 0 : id in V4_FILM ? V4_FILM[id] : 0; }
 if (V4) {
   document.querySelector('#tabs [data-tab="light"]').remove();   // v4: the light is the phone's exposure
   // Magenta ↔ Verde / Giallo ↔ Blu are the scanner's colour keys (the inversion's, or the Frontier's cmy): in the Scanner tab
@@ -1040,10 +1070,10 @@ async function runAuto() {
  * brighter print, its dark colours are cleaner); v3, the photo's Auto (its Esposizione moves the print after AutoSetup). */
 const scanEv = () => (V4 ? +$('ev').value : photo.autoEv);
 
-/** What the current scanner needs for this photo at that exposure and Interno state, measured once each: the neutral
- * inversion's anchors, or the Frontier / Noritsu AutoSetup. */
-function prepareScanner() {
-  const on = $('indoor').checked, ev = scanEv(), key = autoKey(on, ev);
+/** What the current scanner needs for this photo at exposure `ev` (default: the slider's) and Interno state, measured once
+ * each: the neutral inversion's anchors, or the Frontier / Noritsu AutoSetup. */
+function prepareScanner(ev = scanEv()) {
+  const on = $('indoor').checked, key = autoKey(on, ev);
   if (neutralScan()) {
     if (photo.inv?.key === key) return;
     photo.inv = { ...v4Anchors(ev), key };
@@ -1613,7 +1643,7 @@ if (V4) {
 }
 if (UI2) {
   ui2 = initUI2({
-    baseOf: (id) => (id === 'ev' ? photo?.autoEv ?? 0 : id in V4_FILM ? V4_FILM[id] : 0),
+    baseOf: sliderBase, renderDefault,
     snapshot: () => ({ v: Object.fromEntries(UI2_IDS().map((id) => [id, $(id).value])), tilt: $('tilt').value, crop: { ...crop }, cropFormat, cropPortrait, scanner, rot: photo?.rot ?? 0 }),
     restore: async (st) => {
       // the 90° turn first (it turns the crop with it), then the crop as it was in that turn

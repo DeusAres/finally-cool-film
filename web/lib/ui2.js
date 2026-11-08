@@ -372,10 +372,11 @@ export function initUI2(api) {
   const mascot = initMascot($('stage'), {
     scanner: () => SCAN_KIND[SCANS.find((b) => $(b)?.getAttribute('aria-checked') === 'true')] || 'none',
     has: visible, openTool, name: (id) => SHORT[id] || labelOf(id), modified,
+    renderDefault: api.renderDefault,
   });
   return {
     photoLoaded() { hist = [api.snapshot()]; at = 0; syncUndo(); draw(false); mascot.reset(); },
-    rendered(img) { mascot.update(img); },
+    rendered(img, look) { mascot.update(img, look); },
   };
 }
 
