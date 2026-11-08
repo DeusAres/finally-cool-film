@@ -14,6 +14,11 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.35**: **Bordo e Cornice in Trasforma**, con l'anteprima: il Bordo (il passe-partout colorato attorno alla foto) non è più
+  nel foglio di Esporta ma in Trasforma, con un righello a tacche come Raddrizza (0,25 % per tacca, fino al 10 %) e i colori
+  sotto; si vede nell'anteprima com'è nell'export. Accanto la Cornice (Nessuna, Bordo nero, Carrier limato, Pellicola intera).
+  Bordo e Cornice restano impostati da una foto all'altra. **Carrier limato più fine**: nero ~0,25 % del lato lungo e un
+  quarto dell'irregolarità, senza più un bianco suo: fuori dal bordo limato c'è il Bordo che scegli.
 - **v4.34**: **meno macchie di colore sui JPEG**: la foto del telefono porta già le sue chiazze di colore (compressione,
   riduzione rumore del telefono) e la pellicola le raddoppia in macchie "digitali" sulla pelle. La riduzione rumore colore (solo
   il colore, prima della pellicola: luce, dettaglio e grana intatti) sui JPEG ora lavora su un raggio 3 volte più largo: sul
