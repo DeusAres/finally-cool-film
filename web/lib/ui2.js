@@ -42,8 +42,8 @@ const I = {
   glow: '<circle cx="12" cy="12" r="3.5"/><circle cx="12" cy="12" r="8" stroke-dasharray="2 3"/>',
   lens: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/>',
   level: '<path d="M3 12h18"/><path d="M6 9l-3 3 3 3M18 9l3 3-3 3"/>',
-  rotl: '<path d="M4 4v5h5"/><path d="M5 9a8 8 0 1 1 1.5 8.5"/>',
-  rotr: '<path d="M20 4v5h-5"/><path d="M19 9a8 8 0 1 0-1.5 8.5"/>',
+  // a film strip: the frame and its sprocket holes (Cornice)
+  frame: '<rect x="3" y="4" width="18" height="16" rx="1.5"/><rect x="7" y="8" width="10" height="8" rx="1"/><path d="M6 6h1M10.5 6h1M15 6h1M6 18h1M10.5 18h1M15 18h1"/>',
   open: '<path d="M3 7.5a2 2 0 0 1 2-2h4.2l2 2.5H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   undo: '<path d="M9 7H15a5 5 0 0 1 0 10H8"/><path d="M12 4 9 7l3 3"/>',
   redo: '<path d="M15 7H9a5 5 0 0 0 0 10h7"/><path d="M12 4l3 3-3 3"/>',
@@ -158,8 +158,7 @@ export function initUI2(api) {
       const strip = chips([['tilt', 'Raddrizza', 'level', $('tiltOut').textContent, +$('tilt').value !== 0],
         ['crop', 'Ritaglia', 'crop', $('cropOut').textContent, $('cropOut').textContent !== 'Libero'],
         ['border', 'Bordo', 'photo', $('borderOut').textContent, +$('borderPct').value > 0],
-        ['frame', 'Cornice', 'crop', +$('frame').value ? FRAME_NAMES[FRAME_STYLES[+$('frame').value]] : '', +$('frame').value > 0],
-        ['rotL', '90° sx', 'rotl', '', false], ['rotR', '90° dx', 'rotr', '', false]], t);
+        ['frame', 'Cornice', 'frame', +$('frame').value ? FRAME_NAMES[FRAME_STYLES[+$('frame').value]] : '', +$('frame').value > 0]], t);
       return `<div class="u2tool u2tr" data-tr="${t}"></div>${strip}`;
     }
     const ids = toolsOf(g);
@@ -179,7 +178,6 @@ export function initUI2(api) {
     const q = (sel) => pg.querySelector(sel);
     pg.querySelectorAll('.u2t').forEach((b) => b.onclick = () => {
       const t = b.dataset.t;
-      if (t === 'rotL' || t === 'rotR') { haptic(); Promise.resolve(api.rotate(t === 'rotL' ? -1 : 1)).then(commit); return; }
       if (sel[g] === t) return;
       const ids = [...pg.querySelectorAll('.u2t')].map((x) => x.dataset.t), dir = Math.sign(ids.indexOf(t) - ids.indexOf(sel[g]));
       sel[g] = t; haptic(); swapTool(pg, g, dir);
@@ -406,6 +404,8 @@ export function initUI2(api) {
   return {
     photoLoaded() { hist = [api.snapshot()]; at = 0; syncUndo(); draw(false); mascot.reset(); },
     rendered(img, look) { mascot.update(img, look); },
+    // an edit made outside UI 2's own controls (the 90° turns, app.js): the strip follows, undo / redo gets it
+    edited() { commit(); refreshTransformChips(); },
   };
 }
 

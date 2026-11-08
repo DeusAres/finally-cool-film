@@ -928,7 +928,9 @@ async function rotate(quarters) {
     if (rotPending && photo) rotate(0);   // a turn tapped for a newer photo while the old loop was ending
   }
 }
-$('rotL').addEventListener('click', () => rotate(-1));
+// The 90° turns (their buttons sit in Raddrizza's header since 4.36): when one lands, UI 2 commits it to undo / redo.
+const turn = (q) => rotate(q).then(() => ui2?.edited?.());
+$('rotL').addEventListener('click', () => turn(-1));
 // Export JPEG quality (File tab): only read by exportFull, never re-renders. Double tap the label: back to the default.
 {
   const q = $('quality'), out = () => { q.nextElementSibling.textContent = `${q.value}%`; };
@@ -936,7 +938,7 @@ $('rotL').addEventListener('click', () => rotate(-1));
   q.previousElementSibling.addEventListener('dblclick', () => { q.value = JPEG_QUALITY_DEFAULT; out(); });
   out();
 }
-$('rotR').addEventListener('click', () => rotate(1));
+$('rotR').addEventListener('click', () => turn(1));
 
 // ---------- transform: Raddrizza (tilt) ----------
 // Tape-measure dial (lib/ruler.js) over the hidden #tilt range input: the angle goes into the input pass (lib/tilt.js) of the

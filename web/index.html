@@ -235,14 +235,12 @@
     <a href="https://github.com/DeusAres/finally-cool-film" target="_blank" rel="noopener">Codice sorgente</a> (GPL-3.0).</p>
   </div>
   <div class="pane" data-pane="transform" role="tabpanel" hidden>
-  <div class="filebtns">
-    <div class="wide row2">
-      <button class="btn ghost" id="rotL">↺ 90° sinistra</button>
-      <button class="btn ghost" id="rotR">↻ 90° destra</button>
-    </div>
-  </div>
   <div class="tilt">
-    <div class="tilthead"><label id="tiltLabel" for="tilt">Raddrizza</label><output id="tiltOut" for="tilt">0°</output></div>
+    <div class="tilthead"><label id="tiltLabel" for="tilt">Raddrizza</label><output id="tiltOut" for="tilt">0°</output>
+      <div class="icons">
+        <button type="button" class="iconbtn" id="rotL" aria-label="Ruota di 90° a sinistra"><svg viewBox="0 0 24 24"><path d="M4 4v5h5"/><path d="M5 9a8 8 0 1 1 1.5 8.5"/></svg></button>
+        <button type="button" class="iconbtn" id="rotR" aria-label="Ruota di 90° a destra"><svg viewBox="0 0 24 24"><path d="M20 4v5h-5"/><path d="M19 9a8 8 0 1 0-1.5 8.5"/></svg></button>
+      </div></div>
     <div id="tiltRuler" role="slider" tabindex="0" aria-labelledby="tiltLabel" aria-valuemin="-45" aria-valuemax="45" aria-valuenow="0" aria-orientation="horizontal"><span class="needle"></span></div>
     <input type="range" id="tilt" min="-45" max="45" step="0.1" value="0" hidden tabindex="-1">
   </div>

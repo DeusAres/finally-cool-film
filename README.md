@@ -14,6 +14,8 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.36**: in Trasforma le rotazioni di 90° sono due pulsanti nell'intestazione di Raddrizza (non più strumenti a sé, e
+  annulla / ripeti le prende); la Cornice ha la sua icona (una pellicola coi fori).
 - **v4.35**: **Bordo e Cornice in Trasforma**, con l'anteprima: il Bordo (il passe-partout colorato attorno alla foto) non è più
   nel foglio di Esporta ma in Trasforma, con un righello a tacche come Raddrizza (0,25 % per tacca, fino al 10 %) e i colori
   sotto; si vede nell'anteprima com'è nell'export. Accanto la Cornice (Nessuna, Bordo nero, Carrier limato, Pellicola intera).
