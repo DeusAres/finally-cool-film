@@ -14,6 +14,13 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.39**: **il colore della grana a grumi, come sulla pellicola**: il colore della nostra grana era un pepe fine pixel per
+  pixel, quello delle scansioni Gold vere si raccoglie in piccole chiazze alla scala dei grumi (27-108 µm: 0,04 contro
+  0,09-0,25 per unità di grana). Nella pellicola i tre strati non hanno la stessa grana: lo strato del giallo (sensibile al blu)
+  ha i cristalli veloci più grossi. Ora anche da noi (motore: `layer_blur_fast`, solo i cristalli grandi, ogni strato con la
+  sua forza di prima): nei mezzitoni le chiazze di colore passano da 0,04 a 0,06-0,08 (il vero 0,15), il colore fine non sale
+  (nelle luci scende, era il doppio del vero), forza e grandezza della grana come prima (entro 2,5 %). Il colore del rumore
+  dello scanner scende da 0,5 a 0,35. La v3 non cambia.
 - **v4.38**: **la mascotte non parla da sola**: quando ha un consiglio saltella (due saltelli ogni 2,4 s) e fa la faccia
   sorpresa, senza aprire il fumetto sulla foto; lo apri toccandola, e un secondo tocco (o un tocco sul fumetto) lo richiude.
   Se non ha niente da dire sbatte le palpebre e respira, e toccandola dice che è tutto ok.
