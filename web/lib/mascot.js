@@ -19,8 +19,10 @@
 //     the lab's own range: x1.35-1.55 / x0.46-0.57; Vividezza 100 x0.99-1.46, so at its end it speaks on vivid frames: 4 of 18;
 //     the fit's k reads Saturazione +9 as low as 1.19 on the ORF, under Vividezza's 1.22), or out of the real scans' 4.2..26.7
 //     (CHROMA_MIN / CHROMA_MAX).
-// One advice at a time, in that order (what is lost first: clipped tones cannot come back). A dismissed advice stays quiet
-// for this photo. No DOM outside the mascot's own elements; the host (ui2.js) gives the photo's pixels and opens tools.
+// One advice at a time, in that order (what is lost first: clipped tones cannot come back). It never opens its bubble by itself
+// (user 2026-11-08: "troppo chiacchierona ... deve saltellare quando ha info, così non mi copre tutto lo schermo"): with an
+// advice it hops now and then, mouth open, until tapped; with none it only blinks and breathes. A tap opens the advice (or a
+// short "all fine"); a tap on the bubble, or its tool's button, closes it and the advice stays quiet for this photo. No DOM outside the mascot's own elements; the host (ui2.js) gives the photo's pixels and opens tools.
 
 import { W, H, PAL, IDLE, FRAMES } from './rullino.js';
 
@@ -172,8 +174,9 @@ const idleFrame = (t) => (t % 9 < 3 ? BLINK[t % 9] : t % 5 === 0 ? 'wiggle' : t 
 const CSS = `
 #u2mascot { position: absolute; left: 8px; bottom: 34px; z-index: 6; display: flex; align-items: flex-end; gap: 6px; pointer-events: none; }
 #u2mascot canvas { width: 48px; height: 48px; image-rendering: pixelated; pointer-events: auto; cursor: pointer; filter: drop-shadow(0 1px 1px #0008); }
-#u2mascot.hop canvas { animation: u2hop 0.5s steps(3) 2; }
-@keyframes u2hop { 50% { transform: translateY(-4px); } }
+/* an advice waiting: two hops (pixel steps, no easing) every 2.4 s (a choice: noticeable, not a fidget) */
+#u2mascot.alert canvas { animation: u2alert 2.4s infinite step-end; }
+@keyframes u2alert { 0% { transform: none; } 4% { transform: translateY(-5px); } 9% { transform: none; } 13% { transform: translateY(-3px); } 18%, 100% { transform: none; } }
 #u2bubble { pointer-events: auto; max-width: min(62vw, 260px); margin-bottom: 26px; padding: 8px 10px; border-radius: 4px;
   background: #f6efe1; color: #2a2522; font: 12px/1.35 ui-monospace, Menlo, monospace; box-shadow: 0 0 0 2px #2a2522, 0 3px 0 2px #0006;
   position: relative; }
@@ -183,7 +186,7 @@ const CSS = `
 #u2bubble .rest { color: transparent; }
 #u2bubble button { margin-top: 6px; display: block; font: inherit; font-weight: 600; color: #2a2522; background: #e0b04a; border: 0;
   border-radius: 3px; padding: 3px 8px; box-shadow: 0 2px 0 #8a6a2a; }
-@media (prefers-reduced-motion: reduce) { #u2mascot.hop canvas { animation: none; } }
+@media (prefers-reduced-motion: reduce) { #u2mascot.alert canvas { animation: none; } }
 `;
 
 /** The mascot in `stage` (the photo's container). host: { scanner(): 'none'|'frontier'|'noritsu', has(id), openTool(id),
@@ -200,17 +203,21 @@ export function initMascot(stage, host) {
   paint(cx, 'idle');
   setInterval(() => {
     if (box.hidden || document.hidden || reduce.matches || talking) return;
-    paint(cx, idleFrame(++beat));
+    const f = idleFrame(++beat);
+    paint(cx, waiting() && (f === 'idle' || f === 'breathe') ? 'talk_half' : f);   // an advice waiting: an "oh!" face between blinks
   }, BEAT_MS);
 
   // refs: defaultKey -> Promise of the statistics of the photo as that scanner gives it with every slider at its default (the
   // final render itself when it is that, else one off-screen render): the reference of the colour checks, per scanner, so that
   // a scanner's own look is never read as an edit (user 2026-11-07: the advice judged Frontier against Nessuno)
   let advice = null, dismissed = new Set(), timer = 0, quietOk = 0, refs = new Map(), seq = 0;
+  let shown = null;   // the key of the advice in the open bubble
+  const waiting = () => advice && !dismissed.has(advice.key) && bubble.hidden;
+  const alert = () => box.classList.toggle('alert', !!waiting());
   // the text types out with the mouth moving, then the tool's button (reduced motion: all at once, mouth still)
   const show = (a) => {
-    clearInterval(talking); talking = 0;
-    if (!a) { bubble.hidden = true; paint(cx, 'idle'); return; }
+    clearInterval(talking); talking = 0; shown = a?.key ?? null;
+    if (!a) { bubble.hidden = true; paint(cx, 'idle'); alert(); return; }
     bubble.innerHTML = '';
     // the untyped rest is there but transparent: the bubble has its final size from the first letter (no reflow while it types)
     const text = document.createTextNode(''), rest = document.createElement('span'), button = a.tool && document.createElement('button');
@@ -223,8 +230,7 @@ export function initMascot(stage, host) {
       bubble.append(button);
     }
     const done = () => { clearInterval(talking); talking = 0; text.data = a.text; rest.textContent = ''; if (button) button.style.visibility = ''; paint(cx, 'idle'); };
-    bubble.hidden = false;
-    box.classList.remove('hop'); void box.offsetWidth; box.classList.add('hop');
+    bubble.hidden = false; alert();
     if (reduce.matches) { done(); return; }
     let n = 0;
     talking = setInterval(() => {
@@ -236,6 +242,7 @@ export function initMascot(stage, host) {
   bubble.onclick = () => { if (advice) dismissed.add(advice.key); show(null); };
   // a tap on the mascot: the current advice again, or a short "all fine" when there is none
   cv.onclick = () => {
+    if (!bubble.hidden) { if (advice) dismissed.add(advice.key); show(null); return; }   // a second tap closes it
     if (advice) { dismissed.delete(advice.key); show(advice); return; }
     const ok = { key: 'ok', text: 'Tutto ok: luci, ombre, dominante e saturazione dentro quello che fanno le scansioni Gold vere.' };
     show(ok);
@@ -263,7 +270,9 @@ export function initMascot(stage, host) {
         if (my !== seq) return;   // a newer frame or photo came while the reference rendered
         box.hidden = false;
         advice = advise(st, host.scanner(), host.has, ref, host.modified);
-        if (advice && !dismissed.has(advice.key)) show(advice); else show(null);
+        if (!advice || dismissed.has(advice.key)) { if (shown !== 'ok') show(null); }   // an open bubble whose advice is gone closes
+        else if (!bubble.hidden && shown !== advice.key) show(advice);   // open on another advice: this one
+        alert();
       }, 600);
     },
     // a new photo: its references start again (its first render is already on screen when the load ends)

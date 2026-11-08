@@ -14,6 +14,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.38**: **la mascotte non parla da sola**: quando ha un consiglio saltella (due saltelli ogni 2,4 s) e fa la faccia
+  sorpresa, senza aprire il fumetto sulla foto; lo apri toccandola, e un secondo tocco (o un tocco sul fumetto) lo richiude.
+  Se non ha niente da dire sbatte le palpebre e respira, e toccandola dice che è tutto ok.
 - **v4.37**: **Carrier limato, gli angoli**: con il nero sottile della 4.35 gli angoli arrotondati del bordo limato tagliavano
   l'angolo della foto, che spuntava squadrato oltre il nero sul Bordo (screenshot dell'utente). Ora l'angolo del limato segue lo
   spessore del nero (al massimo 2 volte la banda) e dentro il riquadro della foto il nero non lascia mai passare il Bordo.
