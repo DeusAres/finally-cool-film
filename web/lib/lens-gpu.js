@@ -45,6 +45,13 @@ const GAMUT_THR = [0.95, 0.95, 0.95], GAMUT_LIM = [1.35, 1.35, 1.35], GAMUT_POWE
 /** The RGC scale that maps distance `lim` onto 1 (the gamut edge) for threshold `thr`. */
 const rgcScale = (thr, lim) => (lim - thr) / Math.pow(Math.pow((1 - thr) / (lim - thr), -GAMUT_POWER) - 1, 1 / GAMUT_POWER);
 const CHROMA_R1 = 1.5, CHROMA_R2 = 3.0, CHROMA_K = 8.0, CHROMA_LIFT_UM = 120, NR_Y_MIN = 1e-5, NR_GRID = 4, NR_PITCH = 2;
+// The rings are in preview px and grow with finer pixels (as NR_PITCH): the export averages the same film area as the preview
+// (before 4.34 they were px at any resolution: a 12 MP export averaged a quarter of the preview's area, its colour mottle showed).
+// A JPEG (no sensor noise floor, p.nr = 0) brings its own colour mottle (4:2:0 chroma, the phone's noise reduction): the film
+// doubles it into digital-looking blotches (user 2026-11-08, skin). Its rings x CHROMA_JPEG: on the cat JPEG, grain off, the
+// colour mottle at 27-108 um (DoG, flat patches) 0.33 in the source -> 0.67 rendered -> 0.49 (x2) / 0.38 (x3); real Gold
+// scans (HQ Noritsu) carry more with their grain, 0.66-2.4. No bleeding at iso-luminant edges by eye (pink flowers on leaves).
+const CHROMA_JPEG = 3;
 const NR_KEEP = [3, 6];
 // Texture = micro-contrast: scale (µm), range k (per stop²), midtone width (stops), strength at ±1.
 const MICRO_UM = 60, MICRO_K = 0.4, MICRO_MID_STOPS = 2.5, MICRO_MAX = 0.8;
@@ -248,6 +255,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let y0 = dot(c, p.luma.xyz); let lift = chromaLift(pos);
     var sc = c; var sy = y0; var wt = 1.0; var w2 = 1.0; var lr = y0;
     let reach = lift * ${wf(CHROMA_LIFT_UM)} * p.fx.w; let ck = ${wf(CHROMA_K)} / ((1.0 + lift) * (1.0 + lift));
+    let rs = max(1.0, p.fx.w / ${wf(PREVIEW_KPX)}) * select(1.0, ${wf(CHROMA_JPEG)}, p.nr.x == 0.0);
     var gq: array<vec3<f32>, ${NR_GRID * NR_GRID}>;
     if (lift > 0.0) {
       // Hyper Tone: a dense grid, NR_GRID² bilinear taps at pixel corners (each the mean of 2x2 px) NR_PITCH px apart at
@@ -266,7 +274,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     for (var t = 0; t < 16; t++) {
       let ring = t / 8;
       let ang = f32(t) * 0.7853982 + f32(ring) * 0.3926991;
-      let q = inGamut(at(pos + vec2<f32>(cos(ang), sin(ang)) * select(${wf(CHROMA_R1)} + reach, ${wf(CHROMA_R2)} + 2.0 * reach, ring == 1)).rgb);
+      let q = inGamut(at(pos + vec2<f32>(cos(ang), sin(ang)) * select(${wf(CHROMA_R1)} * rs + reach, ${wf(CHROMA_R2)} * rs + 2.0 * reach, ring == 1)).rgb);
       let yq = dot(q, p.luma.xyz);
       let dl = log2(max(yq + nf, 0.5 * nf)) - l0;
       let w = exp(-dl * dl * ck) * select(1.0, 0.6, ring == 1);
