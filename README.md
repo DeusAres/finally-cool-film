@@ -14,6 +14,12 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.34**: **meno macchie di colore sui JPEG**: la foto del telefono porta già le sue chiazze di colore (compressione,
+  riduzione rumore del telefono) e la pellicola le raddoppia in macchie "digitali" sulla pelle. La riduzione rumore colore (solo
+  il colore, prima della pellicola: luce, dettaglio e grana intatti) sui JPEG ora lavora su un raggio 3 volte più largo: sul
+  gatto le macchie a media scala passano da 0,67 a 0,38 (la foto originale 0,33). La nostra grana non c'entrava: ha meno
+  macchie di colore delle scansioni Gold vere (0,17 contro 0,5-0,7 per unità di grana). E l'export ora pulisce la stessa
+  area di pellicola dell'anteprima (prima un quarto, a 12 MP).
 - **v4.33**: **la Cornice** (Effetti → Cornice): il bordo della pellicola attorno alla foto, in tre stili.
   **Bordo nero**: la pellicola non esposta attorno al fotogramma, sottile (0,5 % del lato lungo), nero vivo e un po' irregolare, angoli
   arrotondati. **Carrier limato**: come le stampe da portanegativi limato, il bordo esterno del nero frastagliato a colpi di
