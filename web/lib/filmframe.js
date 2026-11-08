@@ -9,8 +9,10 @@
 //     emulsion), very slightly wavy, rounded at the corners, and eats a few px into the picture.
 // Styles (FRAME_STYLES):
 //   - nero: the rebate as a thin band (0.5 % of the long side, user's choice) on all sides, cut straight by the scan crop;
-//   - limato: the darkroom "filed carrier": the same band, its outer edge the carrier opening filed by hand (straight
-//     file strokes, rough corners), carrier white beyond it;
+//   - limato: the darkroom "filed carrier": a thinner band (0.25 % on average), its outer edge the carrier opening filed
+//     by hand (straight file strokes, rough corners). No white of its own: beyond the filed edge the frame is transparent,
+//     the app's mat shows (user, 2026-11-08: "la parte nera è troppo spessa e un po' troppo irregolare, senza bordo
+//     bianco, tipo 0.25 %");
 //   - intera: the whole 35 mm strip: rails with sprocket holes and latent-image edge numbers, carrier white around.
 // No dust here: dust.js draws it over the frame as well, so the marks are one system everywhere. A mat around all of it
 // is the app's.
@@ -48,9 +50,9 @@ const GATE_RAMP = 1.5 * PX12;          // mm
 const GATE_RADIUS = 0.3;               // mm, corner radius: "slightly rounded". A visual choice, unverified
 
 // nero, limato: widths as fractions of the picture's long side (user's choice: "about 0.5 %").
-const BAND = 0.005;                    // black rebate band
-const FILED_ROUGH = 0.006;             // limato: the filed edge reaches up to this much further out, in places
-const FILED_CARRIER = 0.015;           // limato: the canvas margin beyond the band, carrier white where the file did not reach
+const BAND = 0.005;                    // nero: black rebate band
+const FILED_BAND = 0.0012;             // limato: the band's inner width. Measured (seed 7, 6000 px): + the file's mean reach (~0.1 %) + the gate's bite (~0.05 %) the visible black averages 0.25 % (user, 2026-11-08)
+const FILED_ROUGH = 0.0015;            // limato: the filed edge reaches up to this much further out, in places (a quarter of the former 0.6 %: user, 2026-11-08, "un po' troppo irregolare")
 const FILED_FACET = [0.6, 2.6];        // mm, length of one file cut (a straight facet). Visual
 const FILED_STEP = [0.3, 1.2];         // mm between the starts of successive cuts: < the cut's length, so they overlap
 const FILED_SLOPE = 0.025;             // mm per mm, the most a cut leans off the side's line. Visual
@@ -127,7 +129,7 @@ const rampPx = (mm, u) => Math.max(MIN_RAMP_PX, mm * u);
 function layout(style, W, H) {
   const L = Math.max(W, H), S = Math.min(W, H), u = L / FRAME_MM;
   const m = style === 'nero' ? [BAND * L, BAND * L]
-    : style === 'limato' ? [(BAND + FILED_CARRIER) * L, (BAND + FILED_CARRIER) * L]
+    : style === 'limato' ? [Math.ceil((FILED_BAND + FILED_ROUGH) * L), Math.ceil((FILED_BAND + FILED_ROUGH) * L)]   // the band's furthest reach
     : style === 'intera' ? [(GAP + CARRIER_MM) * u, (RAIL + CARRIER_MM) * u] : [0, 0];
   const ML = Math.round(m[0]), MS = Math.round(m[1]);
   return { portrait: H > W, L, S, u, ML, MS, FW: L + 2 * ML, FH: S + 2 * MS };
@@ -194,13 +196,13 @@ function pictureCover(F, x, y) {
 }
 
 /**
- * The filed opening (limato): the picture's box grown by the band, then by the file. Each stroke of the file cuts a
+ * The filed opening (limato): the picture's box grown by the band, then by the file (its outer edge ends the black). Each stroke of the file cuts a
  * straight line (its own length, depth and slope) and the opening is the union of the cuts, so a side is the outer
  * envelope of overlapping straight facets: flat runs, sharp kinks where one cut takes over from another, the odd deep
  * bite. A fine burr of file teeth on top.
  */
 function filedOpening(R, g) {
-  const { u, ML, MS, L, S, FW, FH } = g, band = BAND * L, rough = FILED_ROUGH * L / u;
+  const { u, ML, MS, L, S, FW, FH } = g, band = FILED_BAND * L, rough = FILED_ROUGH * L / u;
   const side = (along) => {
     const len = along / u, a = new Float32Array(along), sd = (R() * 4294967296) >>> 0;
     // the side's own line: filed by hand, it leans and bows off the gate's (up to FILED_LEAN of the depth)
@@ -447,9 +449,8 @@ function shadeNero(F, x, y, cx, cy, out, o) {
 
 function shadeLimato(F, x, y, cx, cy, out, o) {
   rebateInto(F.P, F.c, x, y, cx, cy);
-  const white = 1 - inside(rectDist(F.filed.rect, x, y), F.filed.ramp);
-  carrierMix(F.P, F.c, white, x, y, cx, cy);
-  put(out, o, F.c, 1 - pictureCover(F, x, y) * (1 - white));
+  const black = inside(rectDist(F.filed.rect, x, y), F.filed.ramp);   // beyond the filed edge: transparent, the mat's
+  put(out, o, F.c, black * (1 - pictureCover(F, x, y)));
 }
 
 function shadeIntera(F, x, y, cx, cy, out, o) {

@@ -5,11 +5,15 @@
 // The value lives in a hidden <input type=range> (`input`): every change is written there and announced with an 'input' event, so the
 // app (and scripts/eval/render.cjs) treat it like any other slider; setting input.value from outside + 'input' redraws the dial.
 
+// The same dial serves the Bordo (4.35, user: "righello con tacche" in Trasforma, with a preview): its own units through `opts`.
 const PX_PER_DEG = 10, BIG = 5, SNAP = 0.5;
-const fmt = (v) => (v === 0 ? '0°' : `${v > 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}°`);
+const fmtDeg = (v) => (v === 0 ? '0°' : `${v > 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}°`);
+const tickDeg = (d) => (d < 0 ? `−${-d}` : String(d));
 
-/** `el`: the dial element (gets a canvas); `input`: the hidden range input (min, max, step); `onDrag(active)`: drag start / end. */
-export function tiltRuler(el, input, out, { onDrag = () => {} } = {}) {
+/** `el`: the dial element (gets a canvas); `input`: the hidden range input (min, max, step); `onDrag(active)`: drag start / end.
+ * Units (defaults: Raddrizza's degrees): `fmt(v)` the output, `tickLabel(d)` a big tick's number, `tick` the small ticks' spacing,
+ * `big` the big (numbered) ticks' spacing, `px` px per unit, `snap` the drag's snap distance to 0. */
+export function tiltRuler(el, input, out, { onDrag = () => {}, fmt = fmtDeg, tickLabel = tickDeg, tick = 1, big = BIG, px = PX_PER_DEG, snap: snapTo = SNAP } = {}) {
   const min = +input.min, max = +input.max, step = +input.step || 0.1;
   const canvas = document.createElement('canvas'), g = canvas.getContext('2d');
   el.prepend(canvas);
@@ -27,19 +31,20 @@ export function tiltRuler(el, input, out, { onDrag = () => {} } = {}) {
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, h);
     const cx = w / 2, base = h - 6, lo = Math.min(0, value), hi = Math.max(0, value);
-    const first = Math.max(min, Math.ceil(value - cx / PX_PER_DEG) - 1), last = Math.min(max, Math.floor(value + cx / PX_PER_DEG) + 1);
+    const first = Math.max(Math.ceil(min / tick), Math.ceil((value - cx / px) / tick) - 1), last = Math.min(Math.floor(max / tick), Math.floor((value + cx / px) / tick) + 1);
     g.font = '500 10px ui-monospace, Menlo, monospace'; g.textAlign = 'center'; g.textBaseline = 'alphabetic';
-    for (let d = first; d <= last; d++) {
-      const x = Math.round(cx + (d - value) * PX_PER_DEG) + 0.5, big = d % BIG === 0, on = d !== 0 && d >= lo && d <= hi;
-      const len = big ? 14 : 7;
-      g.strokeStyle = on ? C.accent : big ? C.fg : C.muted;
-      g.globalAlpha = big || on ? 0.95 : 0.7;
-      g.lineWidth = big ? 1.5 : 1;
+    for (let k = first; k <= last; k++) {
+      const d = +(k * tick).toFixed(6), isBig = Math.abs(d / big - Math.round(d / big)) < 1e-6, on = d !== 0 && d >= lo && d <= hi;
+      const x = Math.round(cx + (d - value) * px) + 0.5;
+      const len = isBig ? 14 : 7;
+      g.strokeStyle = on ? C.accent : isBig ? C.fg : C.muted;
+      g.globalAlpha = isBig || on ? 0.95 : 0.7;
+      g.lineWidth = isBig ? 1.5 : 1;
       g.beginPath(); g.moveTo(x, base); g.lineTo(x, base - len); g.stroke();
-      if (big) {
+      if (isBig) {
         g.fillStyle = on ? C.accent : C.muted;
         g.globalAlpha = Math.min(1, Math.max(0.15, (Math.abs(x - cx) - 6) / 14));   // the number under the needle's head fades
-        g.fillText(d < 0 ? `−${-d}` : String(d), x, base - len - 5);
+        g.fillText(tickLabel(d), x, base - len - 5);
       }
     }
     g.globalAlpha = 1;
@@ -58,7 +63,7 @@ export function tiltRuler(el, input, out, { onDrag = () => {} } = {}) {
     v = Math.min(max, Math.max(min, v));
     v = Math.round(v / step) * step;
     v = +v.toFixed(3) || 0;   // no -0, no float dust
-    if (snap && Math.abs(v) < SNAP) v = 0;
+    if (snap && Math.abs(v) < snapTo) v = 0;
     if (v === value) return;
     if (v === 0 && snap) navigator.vibrate?.(8);
     value = v;
@@ -84,7 +89,7 @@ export function tiltRuler(el, input, out, { onDrag = () => {} } = {}) {
     const dx = e.clientX - drag.x;
     if (!drag.moved && Math.abs(dx) < 4) return;
     if (!drag.moved) { drag.moved = true; el.classList.add('drag'); onDrag(true); }
-    set(drag.v - dx / PX_PER_DEG, true);
+    set(drag.v - dx / px, true);
   });
   const end = (e) => {
     if (!drag || e.pointerId !== drag.id) return;
@@ -104,14 +109,14 @@ export function tiltRuler(el, input, out, { onDrag = () => {} } = {}) {
     const horiz = Math.abs(e.deltaX) > Math.abs(e.deltaY);
     let d = horiz ? e.deltaX : -e.deltaY;
     if (e.deltaMode === 1) d *= 33; else if (e.deltaMode === 2) d *= 300;
-    set(value + (horiz ? d / PX_PER_DEG : d / 100));
+    set(value + (horiz ? d / px : d / 100 * tick));
     onDrag(true); clearTimeout(wheelEnd); wheelEnd = setTimeout(() => onDrag(false), 700);
   }, { passive: false });
 
   el.addEventListener('keydown', (e) => {
     const k = e.key, s = e.shiftKey ? 1 : step;
     const v = k === 'ArrowRight' || k === 'ArrowUp' ? value + s : k === 'ArrowLeft' || k === 'ArrowDown' ? value - s
-      : k === 'PageUp' ? value + BIG : k === 'PageDown' ? value - BIG : k === 'Home' ? min : k === 'End' ? max
+      : k === 'PageUp' ? value + big : k === 'PageDown' ? value - big : k === 'Home' ? min : k === 'End' ? max
         : k === '0' || k === 'Delete' || k === 'Backspace' ? 0 : null;
     if (v === null) return;
     e.preventDefault();

@@ -42,6 +42,12 @@ const BORDER_FRACTION = 0.01;     // mat (white, MAT_WHITE), fraction of the lon
 /** Base mat width near `b` (±3 px, closest first) whose scaled side b·k is closest to a whole number (k = long / short side). */
 const matBase = (b, k) => [0, -1, 1, -2, 2, -3, 3].map((d) => Math.max(1, b + d))
   .reduce((best, c) => (Math.abs(c * k - Math.round(c * k)) < Math.abs(best * k - Math.round(best * k)) - 1e-9 ? c : best));
+/** The mat around a W×H canvas (the image with its film frame) at `bFrac` of the long side: { x, y } px on each side, the long
+ * edges' width bFrac, scaled by long / short across the short ones (the canvas keeps its aspect). The preview and the export. */
+function matMargins(W, H, bFrac) {
+  const border = bFrac ? matBase(Math.round(Math.max(W, H) * bFrac), Math.max(W, H) / Math.min(W, H)) : 0;
+  return { x: W <= H ? border : Math.round(border * W / H), y: W <= H ? Math.round(border * H / W) : border };
+}
 
 const $ = (id) => document.getElementById(id);
 const stage = $('stage'), view = $('view');
@@ -542,10 +548,10 @@ function drawHistogram(img) {
 // rendered image, the mat (Bordo) outside it; the dust lies on the film, so it covers the frame too (dust.js drawDustFramed).
 
 const dustLayer = $('dustLayer'), dctx = dustLayer.getContext('2d');
-const frameLayer = $('frameLayer'), fctx = frameLayer.getContext('2d');
+const frameLayer = $('frameLayer'), fctx = frameLayer.getContext('2d'), matLayer = $('matLayer');
 const dustAmount = () => +$('dust').value;
 const frameStyle = () => FRAME_STYLES[+$('frame').value] || 'none';
-let frameM = { mx: 0, my: 0 };   // the preview's frame margins (fitToScreen fits the image with its frame)
+let frameM = { mx: 0, my: 0 };   // the preview's frame + mat margins (fitToScreen fits the image with both)
 function dustMarks() {
   const { w, h } = outFrame(photo.preview.w, photo.preview.h), key = `${photo.dustSeed}|${w}x${h}`;
   if (photo.dustKey !== key) {
@@ -563,8 +569,14 @@ function sizeLayer(c, W, H) {
 function drawOverlays() {
   if (!photo) return;
   const { w, h } = outFrame(photo.preview.w, photo.preview.h), style = frameStyle();
-  const { mx, my } = frameM = frameMargins(style, w, h), W = w + 2 * mx, H = h + 2 * my;
+  const { mx, my } = frameMargins(style, w, h), W = w + 2 * mx, H = h + 2 * my;
   const showFrame = style !== 'none' && !showingBefore;
+  // the mat (Bordo, Trasforma) around the image and its frame, as the export adds it (matMargins)
+  const mat = showingBefore ? { x: 0, y: 0 } : matMargins(W, H, borderFrac());
+  frameM = { mx: mx + mat.x, my: my + mat.y };
+  matLayer.style.display = mat.x || (style !== 'none' && !showingBefore) ? 'block' : 'none';
+  matLayer.style.width = W + 2 * mat.x + 'px'; matLayer.style.height = H + 2 * mat.y + 'px';
+  matLayer.style.background = `rgb(${matColour().join(',')})`;
   frameLayer.style.display = showFrame ? 'block' : 'none';
   const fkey = `${style}|${photo.grainSeed}|${w}x${h}`;
   if (showFrame && frameLayer.dataset.key !== fkey) {
@@ -642,7 +654,7 @@ const MIN_ZOOM = 0.05, MAX_ZOOM = 6;
 let zoom = 1, panX = 0, panY = 0, fitted = true;
 
 function applyTransform() {
-  view.style.transform = dustLayer.style.transform = frameLayer.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+  view.style.transform = dustLayer.style.transform = frameLayer.style.transform = matLayer.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
   placeCrop();
   // 100% = one image pixel per device pixel.
   $('zoomLabel').textContent = photo ? `${Math.round(zoom * devicePixelRatio * 100)}%` : '';
@@ -1238,8 +1250,7 @@ async function exportFull(ig = false) {
     // The base width moves by up to ±3 px to the value that makes the thick side a whole number (3:4 -> a multiple of 3: exact).
     // The film frame (Cornice) around the image: the canvas is W×H, the image at (mx, my); the mat goes around the canvas.
     const { mx, my } = frameMargins(style, w, h), W = w + 2 * mx, H = h + 2 * my;
-    const border = bFrac && !ig ? matBase(Math.round(Math.max(W, H) * bFrac), Math.max(W, H) / Math.min(W, H)) : 0;
-    const borderX = W <= H ? border : Math.round(border * W / H), borderY = W <= H ? Math.round(border * H / W) : border;
+    const { x: borderX, y: borderY } = ig ? { x: 0, y: 0 } : matMargins(W, H, bFrac), border = borderX;
     log(`export start ${w}x${h} p3=${p3} progressive=${progressive} frame=${style} ${mx}x${my} border=${borderX}x${borderY}`);
 
     const longSide = Math.max(w, h);
@@ -1261,11 +1272,14 @@ async function exportFull(ig = false) {
       if (ig) igFull.set(strip, ey0 * W * 3);
       else enc.postMessage({ cmd: 'rows', rgb: strip.buffer }, [strip.buffer]);
     };
-    const frameRows = (ey0, rows) => { for (let y = 0; y < rows; y += EXPORT_TILE) emit(new Uint8Array(W * Math.min(EXPORT_TILE, rows - y) * 3), ey0 + y, Math.min(EXPORT_TILE, rows - y)); };
+    // a new strip: the mat's colour where the frame leaves its margin uncovered (Carrier limato outside the filed edge), the
+    // image's rows written over it
+    const matStrip = (rows) => { const a = new Uint8Array(W * rows * 3); if (mx || my) for (let i = 0; i < a.length; i += 3) a.set(mat, i); return a; };
+    const frameRows = (ey0, rows) => { for (let y = 0; y < rows; y += EXPORT_TILE) emit(matStrip(Math.min(EXPORT_TILE, rows - y)), ey0 + y, Math.min(EXPORT_TILE, rows - y)); };
     frameRows(0, my);   // the frame above the image
     for (let s = 0; s < strips; s++) {
       const ty = s * EXPORT_TILE, ch = Math.min(EXPORT_TILE, h - ty);
-      const strip = new Uint8Array(W * ch * 3);
+      const strip = matStrip(ch);
       for (let c = 0; c < cols; c++) {
         if (encoderError) throw new Error(encoderError);
         const tx = c * EXPORT_TILE;
@@ -1582,6 +1596,7 @@ for (const id of Object.keys(FORMAT)) {
   $(id).previousElementSibling.addEventListener('dblclick', zero);
   onThumbDoubleTap($(id), zero);
 }
+for (const id of ['borderPct', 'borderColor']) $(id).addEventListener('input', () => { drawOverlays(); if (fitted) fitToScreen(); });
 $('reseed').addEventListener('click', () => {
   if (!photo) return;
   photo.dustSeed = newDustSeed();

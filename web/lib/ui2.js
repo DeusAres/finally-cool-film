@@ -4,6 +4,8 @@
 // sets their values and dispatches their events, reads their labels and their formatted outputs. Prototype: user, 2026-11-03.
 import { store } from './util.js';
 import { initMascot } from './mascot.js';
+import { tiltRuler } from './ruler.js';
+import { FRAME_STYLES, FRAME_NAMES } from './filmframe.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -13,13 +15,13 @@ const GROUPS = [
   { id: 'base', name: 'Base', icon: 'base', tools: ['ev', 'temp', 'vibrance', 'grain', 'halation'] },
   { id: 'scanner', name: 'Scanner', icon: 'look', tools: ['scan', 'labD', 'nbBright', 'labGrad', 'labHi', 'labLo', 'labSat', 'labBright', 'htLo', 'htHi', 'hypersharp', 'mshift', 'yshift'] },
   { id: 'transform', name: 'Trasforma', icon: 'crop', tools: [] },
-  { id: 'effects', name: 'Effetti', icon: 'fx', tools: ['texture', 'clarity', 'sharp', 'ca', 'vignette', 'falloff', 'dust', 'frame'] },
+  { id: 'effects', name: 'Effetti', icon: 'fx', tools: ['texture', 'clarity', 'sharp', 'ca', 'vignette', 'falloff', 'dust'] },
 ];
 // Short names for the strip (the full label, from the row, is the big slider's title).
 const SCANS = ['scanNone', 'scanFrontier', 'scanNoritsu'];
 const SHORT = { scan: 'Scanner', ev: 'Esposiz.', labD: 'Densità', nbBright: 'Luminos.', temp: 'Luce', mshift: 'Magenta', yshift: 'Giallo', vibrance: 'Vividezza',
   grain: 'Grana', labGrad: 'Gradaz.', labHi: 'Luci', labLo: 'Ombre', labSat: 'Saturaz.', labBright: 'Bright', htLo: 'HT ombre',
-  htHi: 'HT luci', hypersharp: 'Hyper Sh.', halation: 'Halation', texture: 'Texture', clarity: 'Chiarezza', sharp: 'Nitidezza', frame: 'Cornice',
+  htHi: 'HT luci', hypersharp: 'Hyper Sh.', halation: 'Halation', texture: 'Texture', clarity: 'Chiarezza', sharp: 'Nitidezza',
   ca: 'Aberraz.', vignette: 'Vignett.', falloff: 'Falloff', dust: 'Polvere' };
 const I = {
   base: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
@@ -52,7 +54,7 @@ const I = {
 };
 const ICON = { scan: 'look', ev: 'ev', labD: 'dens', nbBright: 'dens', temp: 'temp', mshift: 'tint', yshift: 'tint', vibrance: 'drop', grain: 'grain',
   labGrad: 'curve', labHi: 'hi', labLo: 'lo', labSat: 'sat', labBright: 'ev', htLo: 'lo', htHi: 'hi', hypersharp: 'sharp',
-  halation: 'glow', texture: 'grain', clarity: 'sat', sharp: 'sharp', ca: 'lens', vignette: 'lens', falloff: 'lens', dust: 'fx', frame: 'crop' };
+  halation: 'glow', texture: 'grain', clarity: 'sat', sharp: 'sharp', ca: 'lens', vignette: 'lens', falloff: 'lens', dust: 'fx' };
 const svg = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[k]}</svg>`;
 
 // Motion: a group / tool change slides the content the way the selection moved (FLOW +1, user: from a tab on the left to one
@@ -61,8 +63,10 @@ const svg = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
 // "Riduci movimento" keeps only the fade. Choices.
 const FLOW = 1, SLIDE_W = 0.35, TOOL_W = 0.25, BLUR_PX = 6, SLIDE_MS = 260, TOOL_MS = 200;
 const EASE = 'cubic-bezier(.2,.8,.2,1)';
-// Export: border 0..BORDER_MAX % of the long side (0 = off), swatches; the app reads #borderPct / #borderColor (app.js).
-const BORDER_MAX = 10, BORDER_STEP = 0.5, SWATCHES = ['#ffffff', '#f3ead8', '#d9d4cc', '#111111'];
+// Bordo (Trasforma since 4.35, user: a ruler with ticks and a preview; it was in the export sheet): 0..10 % of the long side
+// (#borderPct: its max and step), ticks every BORDER_TICK %, a number every 1 %, BORDER_PX px per 1 % (the tilt dial's 10 px per tick);
+// swatches; the app reads #borderPct / #borderColor (app.js). The Cornice (filmframe.js) sits next to it: #frame.
+const BORDER_TICK = 0.25, BORDER_PX = 40, SWATCHES = ['#ffffff', '#f3ead8', '#d9d4cc', '#111111'];
 
 /** Haptic tick. Android: navigator.vibrate (also during a slider drag). iOS has no vibrate API, and a `switch` checkbox toggled
  * by script no longer ticks (WebKit plays its haptic only on a real tap, bug 285120; the user's iPhone, 4.25 test: a real
@@ -153,6 +157,8 @@ export function initUI2(api) {
       const t = sel.transform;
       const strip = chips([['tilt', 'Raddrizza', 'level', $('tiltOut').textContent, +$('tilt').value !== 0],
         ['crop', 'Ritaglia', 'crop', $('cropOut').textContent, $('cropOut').textContent !== 'Libero'],
+        ['border', 'Bordo', 'photo', $('borderOut').textContent, +$('borderPct').value > 0],
+        ['frame', 'Cornice', 'crop', +$('frame').value ? FRAME_NAMES[FRAME_STYLES[+$('frame').value]] : '', +$('frame').value > 0],
         ['rotL', '90° sx', 'rotl', '', false], ['rotR', '90° dx', 'rotr', '', false]], t);
       return `<div class="u2tool u2tr" data-tr="${t}"></div>${strip}`;
     }
@@ -163,8 +169,11 @@ export function initUI2(api) {
   }
 
   // the transform blocks of the classic pane (ruler, crop formats) move into UI 2 and back on demand: their listeners stay
-  const tiltBlock = document.querySelector('[data-pane="transform"] .tilt'), cropBlock = document.querySelector('[data-pane="transform"] .crop');
   const park = document.querySelector('[data-pane="transform"]');
+  const TR = { tilt: '.tilt', crop: '.crop', border: '.bordo', frame: '.cornice' };
+  const trBlocks = Object.fromEntries(Object.entries(TR).map(([t, q]) => [t, park.querySelector(q)]));
+  const parkAll = () => park.append(...Object.values(trBlocks));
+  const cropOverlay = () => document.body.classList.toggle('u2nocrop', sel.transform === 'border' || sel.transform === 'frame');
 
   function wire(g, pg) {
     const q = (sel) => pg.querySelector(sel);
@@ -177,8 +186,9 @@ export function initUI2(api) {
     });
     if (g === 'transform') {
       const host = q('.u2tr');
-      park.append(tiltBlock, cropBlock);   // both back first, then the selected one in
-      host.append(sel.transform === 'crop' ? cropBlock : tiltBlock);
+      parkAll();   // all back first, then the selected one in
+      host.append(trBlocks[sel.transform] || trBlocks.tilt);
+      cropOverlay();
       return;
     }
     wireTool(g, pg);
@@ -198,7 +208,7 @@ export function initUI2(api) {
     tmp.innerHTML = g === 'transform' ? '<div class="u2tool u2tr"></div>' : sliderPane(sel[g]);
     const nu = tmp.firstElementChild;
     old.after(nu); old.classList.add('u2out');
-    if (g === 'transform') { park.append(tiltBlock, cropBlock); nu.append(sel.transform === 'crop' ? cropBlock : tiltBlock); }
+    if (g === 'transform') { parkAll(); nu.append(trBlocks[sel.transform] || trBlocks.tilt); cropOverlay(); }
     else wireTool(g, pg);
     slide(old, nu, dir, TOOL_W, BLUR_PX / 2, TOOL_MS).onfinish = () => old.remove();
   }
@@ -249,7 +259,7 @@ export function initUI2(api) {
     const g = b.dataset.g;
     if (g === group) return;
     const dir = Math.sign(GROUPS.findIndex((x) => x.id === g) - GROUPS.findIndex((x) => x.id === group));
-    if (group === 'transform') park.append(tiltBlock, cropBlock);
+    if (group === 'transform') parkAll();
     group = g; haptic();
     api.openTab(g === 'transform' ? 'transform' : 'film');
     draw(true, dir);
@@ -266,6 +276,43 @@ export function initUI2(api) {
     const v = (t) => slot.lastElementChild?.querySelector(`.u2t[data-t="${t}"] .v`);
     if (v('tilt')) v('tilt').textContent = $('tiltOut').textContent;
     if (v('crop')) v('crop').textContent = $('cropOut').textContent;
+    if (v('border')) v('border').textContent = $('borderOut').textContent;
+    if (v('frame')) v('frame').textContent = +$('frame').value ? FRAME_NAMES[FRAME_STYLES[+$('frame').value]] : '';
+  }
+
+  // --- Bordo and Cornice (Trasforma): the dial, the swatches, the frame's styles; remembered across photos
+  {
+    const bp = $('borderPct'), bc = $('borderColor'), fr = $('frame'), legacy = store.get('fcf_border');
+    bp.value = store.get('fcf_borderPct') ?? (legacy === '0' ? 0 : 1);
+    bc.value = store.get('fcf_borderColor') || SWATCHES[0];
+    fr.value = Math.max(0, FRAME_STYLES.indexOf(store.get('fcf_frame')));
+    const pct = (v) => (v ? `${+v.toFixed(2)}%` : 'off');
+    tiltRuler($('borderRuler'), bp, $('borderOut'), { fmt: pct, tickLabel: (d) => (d ? `${d}` : 'off'), tick: BORDER_TICK, big: 1, px: BORDER_PX, snap: BORDER_TICK / 2 });
+    const sw = $('borderSwatches');
+    sw.className = 'u2sws';
+    sw.innerHTML = `${SWATCHES.map((c) => `<button data-c="${c}" style="background:${c}" aria-label="${c}"></button>`).join('')}
+      <label class="u2pick"><input type="color" value="${bc.value}" aria-label="Altro colore"></label><span class="u2hex"></span>`;
+    const syncB = () => {
+      sw.classList.toggle('off', !+bp.value);
+      sw.querySelectorAll('[data-c]').forEach((x) => x.classList.toggle('on', x.dataset.c === bc.value));
+      sw.querySelector('.u2hex').textContent = bc.value.toUpperCase();
+      refreshTransformChips();
+    };
+    const setC = (c) => { bc.value = c; store.set('fcf_borderColor', c); bc.dispatchEvent(new Event('input')); syncB(); };
+    sw.querySelectorAll('[data-c]').forEach((x) => x.onclick = () => { setC(x.dataset.c); haptic(); });
+    sw.querySelector('input').oninput = (e) => setC(e.target.value);
+    bp.addEventListener('input', () => { store.set('fcf_borderPct', bp.value); syncB(); });
+    const fc = $('frameChips');
+    fc.className = 'u2seg';
+    fc.innerHTML = FRAME_STYLES.map((st, i) => `<button role="radio" data-f="${i}">${FRAME_NAMES[st]}</button>`).join('');
+    const syncF = () => { fc.querySelectorAll('[data-f]').forEach((x) => { const on = +x.dataset.f === +fr.value; x.classList.toggle('on', on); x.setAttribute('aria-checked', String(on)); }); refreshTransformChips(); };
+    fc.querySelectorAll('[data-f]').forEach((x) => x.onclick = () => {
+      if (+fr.value === +x.dataset.f) return;
+      fr.value = x.dataset.f; store.set('fcf_frame', FRAME_STYLES[+fr.value]); haptic();
+      fr.dispatchEvent(new Event('input')); syncF();
+    });
+    fr.addEventListener('input', syncF);
+    syncB(); syncF();
   }
 
   // --- menu (open, reset all, classic UI, credits)
@@ -279,38 +326,20 @@ export function initUI2(api) {
     s.querySelector('#u2classic').onclick = () => { store.set('fcf_ui2', '0'); location.replace(location.pathname + location.search.replace(/[?&]ui2\b/, '')); };
   });
 
-  // --- export sheet
-  if (!$('borderPct')) {
-    const legacy = store.get('fcf_border');
-    document.body.insertAdjacentHTML('beforeend', `<input type="range" id="borderPct" hidden min="0" max="${BORDER_MAX}" step="${BORDER_STEP}"
-      value="${store.get('fcf_borderPct') ?? (legacy === '0' ? 0 : 1)}"><input type="color" id="borderColor" hidden value="${store.get('fcf_borderColor') || SWATCHES[0]}">`);
-  }
+  // --- export sheet (the Bordo moved to Trasforma, 4.35)
   $('u2export').onclick = () => {
     if ($('export').disabled) return;
-    const q = $('quality'), bp = $('borderPct'), bc = $('borderColor');
+    const q = $('quality');
     sheet(`<h2>Esporta<button class="u2x" data-close>✕</button></h2>
       <div class="u2sl"><div class="u2top"><span>Qualità JPEG</span><span class="u2val" id="u2q">${q.value}%</span></div>
         <input type="range" id="u2qr" min="${q.min}" max="${q.max}" step="1" value="${q.value}"></div>
-      <div class="u2sl"><div class="u2top"><span>Bordo</span><span class="u2val" id="u2b"></span></div>
-        <input type="range" id="u2br" min="0" max="${BORDER_MAX}" step="${BORDER_STEP}" value="${bp.value}">
-        <div class="u2ticks"><span>off</span><span>${BORDER_MAX / 2}%</span><span>${BORDER_MAX}%</span></div>
-        <div class="u2sws" id="u2sws">${SWATCHES.map((c) => `<button data-c="${c}" style="background:${c}"></button>`).join('')}
-          <label class="u2pick"><input type="color" id="u2cp" value="${bc.value}"></label><span id="u2hex"></span></div></div>
       <button class="u2go u2gopri" id="u2full">${svg('photo')}<span><b>Foto intera</b><i>risoluzione piena</i></span></button>
       <button class="u2go" id="u2ig">${svg('ig')}<span><b>Instagram</b><i>1080 × 1440 · 3:4, tutta la foto dentro</i></span></button>
       <div class="u2prog" id="u2prog" hidden><div class="u2st" id="u2st"></div><div class="u2bar"><i id="u2bar"></i></div></div>`, (s) => {
       const sync = () => {
         s.querySelector('#u2q').textContent = q.value + '%';
-        const b = +bp.value; s.querySelector('#u2b').textContent = b ? b + '%' : 'off';
-        s.querySelector('#u2sws').classList.toggle('off', !b);
-        s.querySelectorAll('[data-c]').forEach((x) => x.classList.toggle('on', x.dataset.c === bc.value));
-        s.querySelector('#u2hex').textContent = bc.value.toUpperCase();
       };
       s.querySelector('#u2qr').oninput = (e) => { q.value = e.target.value; q.dispatchEvent(new Event('input')); sync(); };
-      s.querySelector('#u2br').oninput = (e) => { const was = +bp.value; bp.value = e.target.value; if (!was !== !+bp.value || +bp.value === BORDER_MAX) haptic(); store.set('fcf_borderPct', bp.value); sync(); };
-      const setC = (c) => { bc.value = c; store.set('fcf_borderColor', c); sync(); };
-      s.querySelectorAll('[data-c]').forEach((x) => x.onclick = () => { setC(x.dataset.c); haptic(); });
-      s.querySelector('#u2cp').oninput = (e) => setC(e.target.value);
       const run = (ig) => {
         s.querySelector('#u2full').disabled = s.querySelector('#u2ig').disabled = true;
         s.querySelector('#u2prog').hidden = false; haptic();
@@ -361,7 +390,7 @@ export function initUI2(api) {
     if (!g || !visible(id)) return;
     if (g !== group) {
       const dir = Math.sign(GROUPS.findIndex((x) => x.id === g) - GROUPS.findIndex((x) => x.id === group));
-      if (group === 'transform') park.append(tiltBlock, cropBlock);
+      if (group === 'transform') parkAll();
       group = g; sel[g] = id; api.openTab('film'); draw(true, dir);
     } else if (sel[g] !== id) {
       sel[g] = id; draw(false);
@@ -421,7 +450,11 @@ body.ui2 #histo { left: auto; right: 8px; }
 .u2tr { padding-top: 0; overflow: hidden; }
 .u2tr .crop { padding: 0; } .u2tr .tilthead { margin: 0; min-height: 34px; } .u2tr .iconbtn { width: 32px; height: 32px; }
 .u2tr #cropFormats { padding: 2px 40px 0; } .u2tr #cropFormats button { height: 58px; gap: 4px; }
-.u2tr .tilt, .u2tr .crop { margin: 0; }
+.u2tr .tilt, .u2tr .crop, .u2tr .bordo, .u2tr .cornice { margin: 0; }
+.u2tr #borderRuler { height: 40px; } .u2tr .bordo .u2sws { margin: 4px 0 0; padding: 4px 4px; gap: 8px; }
+.u2tr .bordo .u2sws button, .u2tr .bordo .u2pick { width: 26px; height: 26px; } .u2tr .bordo .u2sws button.on { outline-offset: 2px; } .u2tr .u2hex { font-size: 11px; color: var(--muted); }
+/* Bordo / Cornice: no crop box over the preview (it darkens what is outside it: the mat, the frame) */
+body.u2nocrop #cropUI { display: none !important; }
 .u2nav { display: flex; border-top: 1px solid var(--line); padding: 2px 6px max(4px, calc(env(safe-area-inset-bottom) - 16px)); }
 body.ui2 #status { position: absolute; left: 8px; top: 8px; max-width: calc(100% - 150px); padding: 3px 8px; border-radius: 6px;
   background: rgba(14,13,12,.55); color: var(--muted); font: 10.5px ui-monospace, Menlo, monospace; min-height: 0; z-index: 3; cursor: pointer; }
