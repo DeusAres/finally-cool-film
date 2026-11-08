@@ -14,6 +14,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.37**: **Carrier limato, gli angoli**: con il nero sottile della 4.35 gli angoli arrotondati del bordo limato tagliavano
+  l'angolo della foto, che spuntava squadrato oltre il nero sul Bordo (screenshot dell'utente). Ora l'angolo del limato segue lo
+  spessore del nero (al massimo 2 volte la banda) e dentro il riquadro della foto il nero non lascia mai passare il Bordo.
 - **v4.36**: in Trasforma le rotazioni di 90° sono due pulsanti nell'intestazione di Raddrizza (non più strumenti a sé, e
   annulla / ripeti le prende); la Cornice ha la sua icona (una pellicola coi fori).
 - **v4.35**: **Bordo e Cornice in Trasforma**, con l'anteprima: il Bordo (il passe-partout colorato attorno alla foto) non è più

@@ -60,7 +60,10 @@ const FILED_BITE = 0.07;               // share of cuts that are short deep bite
 const FILED_TAPER = 0.12;             // mm per mm: how steeply a cut runs out past its ends (~7°). Visual
 const FILED_LEAN = 0.5;               // share of the roughness a side's line may lean or bow by. Visual
 const FILED_BURR = 0.004;              // mm, the teeth's burr along the edge. Visual
-const FILED_RADIUS = [0.25, 0.7];      // mm, corner radius of the filed opening; < 0.9 mm so it never cuts the picture's corner. Visual
+// Corner radius of the filed opening, in band widths. The opening is the picture's box grown by the band b: a corner of radius
+// r keeps the picture's corner inside while r <= (2 + sqrt 2) b = 3.4 b, hence at most 2 b. (It was 0.25-0.7 mm, safe with the
+// first 0.5 % band; on the 0.12 % band it cut the picture's corner: the photo showed square past the black, user 2026-11-08.)
+const FILED_RADIUS = [0.5, 2];
 const FILED_RAMP = 2.5 * PX12;         // mm: the carrier sits above the film, a little out of focus. Visual
 
 // intera: 135 film (ISO 1007), mm.
@@ -228,7 +231,7 @@ function filedOpening(R, g) {
     }
     return a;
   };
-  const radii = [0, 1, 2, 3].map(() => (FILED_RADIUS[0] + (FILED_RADIUS[1] - FILED_RADIUS[0]) * R()) * u);
+  const radii = [0, 1, 2, 3].map(() => (FILED_RADIUS[0] + (FILED_RADIUS[1] - FILED_RADIUS[0]) * R()) * band);
   return { rect: roughRect(ML - band, MS - band, ML + L + band, MS + S + band, side(FH), side(FH), side(FW), side(FW), radii),
     ramp: rampPx(FILED_RAMP, u) };
 }
@@ -449,7 +452,9 @@ function shadeNero(F, x, y, cx, cy, out, o) {
 
 function shadeLimato(F, x, y, cx, cy, out, o) {
   rebateInto(F.P, F.c, x, y, cx, cy);
-  const black = inside(rectDist(F.filed.rect, x, y), F.filed.ramp);   // beyond the filed edge: transparent, the mat's
+  // beyond the filed edge: transparent, the mat's; never within the picture's box (the film is there: the opening is wider)
+  const inBox = x >= F.ML && y >= F.MS && x <= F.ML + F.L && y <= F.MS + F.S;
+  const black = inBox ? 1 : inside(rectDist(F.filed.rect, x, y), F.filed.ramp);
   put(out, o, F.c, black * (1 - pictureCover(F, x, y)));
 }
 
