@@ -14,6 +14,13 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.33**: **la Cornice** (Effetti → Cornice): il bordo della pellicola attorno alla foto, in tre stili.
+  **Bordo nero**: la pellicola non esposta attorno al fotogramma, sottile (0,5 % del lato lungo), nero vivo e un po' irregolare, angoli
+  arrotondati. **Carrier limato**: come le stampe da portanegativi limato, il bordo esterno del nero frastagliato a colpi di
+  lima, il bianco del portanegativi fuori. **Pellicola intera**: la striscia 35 mm con i fori e i numeri dei fotogrammi in ambra,
+  senza fotogrammi vicini. È un negativo invertito: la pellicola vuota esce nera, i fori più neri ancora, dove il portanegativi
+  copre la luce esce bianco. La Polvere ci finisce sopra (stesso campo, stessa densità per mm), il Bordo colorato va fuori.
+  Si vede nell'anteprima e finisce nell'export.
 - **v4.32**: **il rullino in 16 bit**: ridisegnato a 48×48 con sfumature a più toni, contorni colorati e luce da in alto a
   sinistra; respira, sbatte le palpebre e muove la linguetta, e quando parla la bocca segue il testo che si scrive.
   **Il controllo della mascotte non si fa più fregare**: una Temperatura estrema passava per "ok". Ora guarda la dominante
