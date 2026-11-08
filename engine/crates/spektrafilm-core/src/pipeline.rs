@@ -1251,6 +1251,8 @@ impl Pipeline {
                         amount: hg.amount,
                         sharpen: gb.sharpen,
                         fast_blur: gb.fast_px,
+                        layer_px: gb.layer_px,
+                        layer_gain: gb.layer_gain,
                         fast_count_frac: hg.fast_count_frac,
                         scan_noise: [hg.scan_noise, hg.scan_noise_slope, hg.scan_noise_chroma],
                     }),

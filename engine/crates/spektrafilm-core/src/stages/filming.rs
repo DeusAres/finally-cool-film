@@ -477,7 +477,7 @@ pub fn develop(
         // sharpening (GrainBlur) too; the fast crystals' grain gets its own blur.
         density_cmy = if gb.fast_px > 0.0 {
             let [fast, slow] = spektrafilm_model::grain_hash::apply_grain_hash_split(&density_cmy, &hg);
-            let (fast, slow) = (gb.apply(backend, &fast, gb.fast_px), gb.apply(backend, &slow, gb.soft_px));
+            let (fast, slow) = (gb.apply(backend, &fast, 1), gb.apply(backend, &slow, 0));
             let mut out = density_cmy;
             for ((o, &f), &s) in out.data.iter_mut().zip(fast.data.iter()).zip(slow.data.iter()) {
                 *o += f + s;
@@ -488,7 +488,7 @@ pub fn develop(
             for (g, &d) in dev.data.iter_mut().zip(density_cmy.data.iter()) {
                 *g -= d;
             }
-            let dev = gb.apply(backend, &dev, gb.soft_px);
+            let dev = gb.apply(backend, &dev, 0);
             let mut out = density_cmy;
             for (o, &g) in out.data.iter_mut().zip(dev.data.iter()) {
                 *o += g;
@@ -586,30 +586,96 @@ pub fn hash_grain_setup(
     // the kernel sigma is the one whose noise-variance gain matches the
     // pixel-integrated one. Converges to blur_px above ~1.5 px (export sizes).
     // (Replaces the earlier s^0.47 fit for pixels coarser than 18 um, same effect.)
-    let blur_px = if g.blur > 0.0 { discrete_matched_sigma(blur_px) } else { blur_px };
-    let fast_px = if g.blur_fast > 0.0 && n_sub >= 2 {
-        let um = (g.blur_fast as f64 * GRAIN_REF_PIXEL_UM).hypot(g.blur_dye_clouds_um as f64);
-        discrete_matched_sigma(um / pix_um) as f32
-    } else {
-        0.0
+    let soft_px = if g.blur > 0.0 { discrete_matched_sigma(blur_px) } else { blur_px };
+    let fast_px = |m: f64| {
+        if g.blur_fast > 0.0 && n_sub >= 2 {
+            let um = (g.blur_fast as f64 * GRAIN_REF_PIXEL_UM).hypot(g.blur_dye_clouds_um as f64);
+            discrete_matched_sigma(um * m / pix_um)
+        } else {
+            0.0
+        }
     };
     let r_px = (g.scan_sharpen_um as f64 / pix_um) as f32;
     let sharpen = if g.scan_sharpen > 0.0 && r_px > 0.0 { [r_px, g.scan_sharpen] } else { [0.0, 0.0] };
-    (hg, GrainBlur { soft_px: blur_px as f32, fast_px, sharpen })
+    // one emulsion for B&W: its single noise field gets one blur
+    let layer_blur = if g.monochrome { [1.0; 3] } else { g.layer_blur_fast };
+    let (fast, fast_gain) = layer_blurs(fast_px, layer_blur, sharpen);
+    let soft = soft_px as f32;
+    let gb = GrainBlur {
+        soft_px: soft,
+        fast_px: fast_px(1.0) as f32,
+        layer_px: [[soft; 3], fast],
+        layer_gain: [[1.0; 3], fast_gain],
+        sharpen,
+    };
+    (hg, gb)
+}
+
+/// Per-layer sigmas (`sigma_px(multiplier)`, the population's px sigma) and amplitude gains of one grain population for
+/// the per-layer multipliers `mult` (GrainParams `layer_blur_fast`; the slow population keeps one blur). A wider kernel
+/// alone lowers a layer's grain std (white noise: variance gain ~ 1 / sigma^2), so each layer's blurred deviation is
+/// scaled by sqrt(V(base) / V(layer)), V = the white-noise variance gain of the whole sampled kernel (scanner sharpening
+/// included): the same std as with multiplier 1, the grain only coarser or finer. Multiplier 1 gives exactly the base
+/// sigma and gain 1.0 (ratio of equal numbers).
+fn layer_blurs(sigma_px: impl Fn(f64) -> f64, mult: [f32; 3], sharpen: [f32; 2]) -> ([f32; 3], [f32; 3]) {
+    let base = sigma_px(1.0);
+    let (mut px, mut gain) = ([0.0f32; 3], [1.0f32; 3]);
+    for c in 0..3 {
+        let s = sigma_px(mult[c] as f64);
+        px[c] = s as f32;
+        if s > 0.0 && base > 0.0 {
+            gain[c] = (kernel_variance_gain(base, sharpen) / kernel_variance_gain(s, sharpen)).sqrt() as f32;
+        }
+    }
+    (px, gain)
+}
+
+/// White-noise variance gain (2D) of `(1 + a) G(s) - a G(sqrt(s^2 + r^2))` with the backends' sampled kernels
+/// (`[r, a]` = GrainBlur `sharpen`, a = 0: G(s) alone): the kernels are separable, so each product sums to a 1D sum squared.
+/// Exact for the GPU's kernels (wgpu_backend `grain_blur_job`); the CPU blurs sigma >= 3 with an IIR instead, whose gain
+/// differs (a layer at sigma 2.8 px, sharpened sigma 3.1: std +10 %, unverified beyond that test case), so V4_GRAIN's
+/// multiplier keeps the CPU eval's kernels under 3 px at the 12 MP pitch.
+fn kernel_variance_gain(s: f64, sharpen: [f32; 2]) -> f64 {
+    let [r, a] = [sharpen[0] as f64, sharpen[1] as f64];
+    let w = s.hypot(r);
+    let (k1, k2) = (1.0 + a, a);
+    let (ss, ww, sw) = (sampled_cross(s, s), sampled_cross(w, w), sampled_cross(s, w));
+    k1 * k1 * ss * ss + k2 * k2 * ww * ww - 2.0 * k1 * k2 * sw * sw
 }
 
 /// The hash grain's blurs in px of the region: the dye clouds (`soft_px`; `fast_px` > 0: the fast crystals' own, their
-/// deviation blurred apart) and the scanner sharpening `[radius_px, amount]` on each (amount 0 = off).
+/// deviation blurred apart) and the scanner sharpening `[radius_px, amount]` on each (amount 0 = off). `layer_px` /
+/// `layer_gain` (`[soft, fast]`, per channel): the per-layer sigmas and amplitude gains (`layer_blurs`; GrainParams
+/// `layer_blur_fast` moves the fast ones only); with [1, 1, 1] every channel has `soft_px` / `fast_px` and gain 1.
 #[derive(Debug, Clone, Copy)]
 pub struct GrainBlur {
     pub soft_px: f32,
     pub fast_px: f32,
+    pub layer_px: [[f32; 3]; 2],
+    pub layer_gain: [[f32; 3]; 2],
     pub sharpen: [f32; 2],
 }
 
 impl GrainBlur {
-    /// `(1 + a) G(s) - a G(sqrt(s^2 + r^2))` of `dev` (just G(s) when the sharpening is off).
-    pub fn apply(&self, backend: &dyn spektrafilm_gpu::ComputeBackend, dev: &ImageBuf, s: f32) -> ImageBuf {
+    /// Population `pop` (0 soft, 1 fast) of `dev`: per channel `gain (1 + a) G(s) - a G(sqrt(s^2 + r^2))` (just G(s) when
+    /// the sharpening is off) with that channel's `layer_px` / `layer_gain`.
+    pub fn apply(&self, backend: &dyn spektrafilm_gpu::ComputeBackend, dev: &ImageBuf, pop: usize) -> ImageBuf {
+        let (px, gain) = (self.layer_px[pop], self.layer_gain[pop]);
+        if px[1] == px[0] && px[2] == px[0] && gain == [1.0; 3] {
+            return self.apply_one(backend, dev, px[0]);
+        }
+        // one blur per layer (CPU path: eval and tests), each channel taken from its own
+        let blurred: Vec<ImageBuf> = (0..3).map(|c| self.apply_one(backend, dev, px[c])).collect();
+        let mut out = ImageBuf::new(dev.width, dev.height);
+        for c in 0..3 {
+            let k = from_f32(gain[c]);
+            let ch: Vec<_> = blurred[c].extract_channel(c).into_iter().map(|v| k * v).collect();
+            out.write_channel(c, &ch);
+        }
+        out
+    }
+
+    fn apply_one(&self, backend: &dyn spektrafilm_gpu::ComputeBackend, dev: &ImageBuf, s: f32) -> ImageBuf {
         let soft = backend.gaussian_blur(dev, s);
         let [r, a] = self.sharpen;
         if a <= 0.0 {
@@ -635,10 +701,21 @@ fn pixel_integrated_gain(s: f64) -> f64 {
 /// Variance gain (per axis) of white noise through the normalised sampled
 /// gaussian the backends build (radius ceil(3 sigma)).
 fn sampled_gain(s: f64) -> f64 {
+    sampled_cross(s, s)
+}
+
+/// The normalised sampled gaussian of the backends (radius ceil(3 sigma)), indexed from -radius.
+fn sampled_kernel(s: f64) -> (i32, Vec<f64>) {
     let r = (3.0 * s).ceil().max(1.0) as i32;
     let w: Vec<f64> = (-r..=r).map(|k| (-(k * k) as f64 / (2.0 * s * s)).exp()).collect();
     let sum: f64 = w.iter().sum();
-    w.iter().map(|v| (v / sum) * (v / sum)).sum()
+    (r, w.into_iter().map(|v| v / sum).collect())
+}
+
+/// Sum over k of the sampled kernels of `s1` and `s2` multiplied tap by tap (1D white-noise covariance of the two blurs).
+fn sampled_cross(s1: f64, s2: f64) -> f64 {
+    let ((r1, w1), (r2, w2)) = (sampled_kernel(s1), sampled_kernel(s2));
+    (-r1.min(r2)..=r1.min(r2)).map(|k| w1[(k + r1) as usize] * w2[(k + r2) as usize]).sum()
 }
 
 /// Sampled-kernel sigma with the same noise-variance gain as the
@@ -705,6 +782,71 @@ mod tests {
             height: h,
             data: vec![from_f64(v); (w * h * 3) as usize],
         }
+    }
+
+    /// GrainParams `layer_blur_fast`: [1, 1, 1] is exactly the one blur (sigma and gain bit-equal), and a coarser layer
+    /// keeps its grain std (white noise through the gained kernel, scanner sharpening on) while the blur gets wider.
+    #[test]
+    fn layer_blurs_identity_and_std_kept() {
+        let sigma = |m: f64| discrete_matched_sigma(0.71 * m); // the app's fast sigma at the 12 MP export pitch
+        let sharpen = [1.34, 0.85]; // 12 um at 8.95 um/px, amount 0.85 (V4_GRAIN)
+        let (px, gain) = layer_blurs(sigma, [1.0; 3], sharpen);
+        assert_eq!(px, [sigma(1.0) as f32; 3]);
+        assert_eq!(gain, [1.0; 3]);
+        let (px, gain) = layer_blurs(sigma, [0.9, 1.0, 3.5], sharpen);
+        assert!(px[2] > 2.0 * px[1] && gain[2] > 1.0 && gain[1] == 1.0);
+        let (w, h) = (256u32, 256u32);
+        let mut st = 12345u32;
+        let noise: Vec<_> = (0..w * h * 3)
+            .map(|_| {
+                st = spektrafilm_model::grain_hash::pcg(st);
+                from_f32(spektrafilm_model::grain_hash::unit_open(st) - 0.5)
+            })
+            .collect();
+        let dev = ImageBuf::from_data(w, h, noise);
+        let gb = GrainBlur { soft_px: 0.0, fast_px: px[1], layer_px: [[0.0; 3], px], layer_gain: [[1.0; 3], gain], sharpen };
+        let out = gb.apply(&spektrafilm_gpu::cpu_backend::CpuBackend, &dev, 1);
+        let std = |c: usize| {
+            let v: Vec<f64> = out.extract_channel(c).iter().map(|&x| x as f64).collect();
+            let n = v.len() as f64;
+            let m = v.iter().sum::<f64>() / n;
+            (v.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / n).sqrt()
+        };
+        for c in [0, 2] {
+            assert!((std(c) / std(1) - 1.0).abs() < 0.04, "layer {c} std {} vs {}", std(c), std(1));
+        }
+    }
+
+    /// GrainParams `layer_blur_fast` in the GPU-resident chain (per-layer grain blur jobs) matches the CPU stage, scanner
+    /// sharpening on. Same budget as the other resident-chain parity tests (f32 shaders); the grain draws are the same
+    /// hash on both, so a wrong per-layer sigma or gain shows as a grain-sized difference (amount 4: ~0.05 in density).
+    /// Skips without a GPU adapter.
+    #[test]
+    fn layer_blur_fast_gpu_resident_matches_cpu() {
+        let Some(gpu) = spektrafilm_gpu::wgpu_backend::WgpuBackend::new() else {
+            eprintln!("no GPU adapter available; skipping");
+            return;
+        };
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().join("data");
+        let film = crate::profile::load_profile_by_name(&dir, "kodak_gold_200").unwrap();
+        let print = crate::profile::load_profile_by_name(&dir, "kodak_portra_endura").unwrap();
+        let mut params = RuntimeParams::default();
+        params.camera.auto_exposure = false;
+        params.io.output_gamut_compress.algorithm = "off".into(); // keeps the resident chain
+        let g = &mut params.film_render.grain;
+        (g.blur, g.blur_fast, g.fast_count_frac, g.amount) = (0.2, 0.35, 0.02, 4.0);
+        (g.scan_sharpen_um, g.scan_sharpen) = (12.0, 0.85);
+        g.layer_blur_fast = [0.9, 1.0, 1.4];
+        let pipeline = crate::pipeline::Pipeline::new_with_spectral(film, print, params, &dir).unwrap();
+        let (w, h) = (64u32, 64u32);
+        let data: Vec<_> = (0..w * h * 3).map(|i| from_f64(0.1 + 0.3 * ((i / 3) % 7) as f64 / 7.0)).collect();
+        let img = ImageBuf::from_data(w, h, data);
+        let out_gpu = pipeline.process(img.clone(), &gpu);
+        let out_cpu = pipeline.process(img, &spektrafilm_gpu::cpu_backend::CpuBackend);
+        let d: Vec<f64> = out_gpu.data.iter().zip(out_cpu.data.iter()).map(|(a, b)| (*a as f64 - *b as f64).abs()).collect();
+        let mean = d.iter().sum::<f64>() / d.len() as f64;
+        let max = d.iter().cloned().fold(0.0, f64::max);
+        assert!(mean < 5e-3 && max < 5e-2, "GPU vs CPU: mean {mean}, max {max}");
     }
 
     #[test]

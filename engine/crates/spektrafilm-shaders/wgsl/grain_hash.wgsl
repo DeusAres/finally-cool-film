@@ -8,7 +8,7 @@
 // above), then a log-normal micro-structure on the deviation. The dye-cloud
 // blur is a separate gaussian pass on the grain only: with `dev_only` set the
 // density is left as is and the deviation goes to `grain_dev`, blurred and
-// added back (gaussian_blur_v_add.wgsl), so the image itself is not softened.
+// added back (grain_blur_v_add.wgsl), so the image itself is not softened.
 
 struct Params {
     width: u32,

@@ -492,9 +492,6 @@ pub struct GrainParams {
     pub blur: f32,
     #[serde(default = "default_one")]
     pub blur_dye_clouds_um: f32,
-    /// The lab scanner's sharpening on the grain (hash grain only): an unsharp mask of radius `scan_sharpen_um` (um on the
-    /// film) and amount `scan_sharpen` on the blurred grain, `(1 + a) G(blur) - a G(sqrt(blur^2 + r^2))`: the crisp-edged
-    /// clumps of a real lab scan instead of a soft mottle. 0 = off. The image itself is not sharpened (Hyper Sharpness is).
     /// Dye-cloud blur of the FAST crystals' grain (hash grain, `n_sub_layers >= 2`), in the units of `blur` (reference
     /// px): the few big crystals that develop first (the positive's shadows) make bigger clouds. 0 = one blur for both.
     #[serde(default)]
@@ -502,6 +499,15 @@ pub struct GrainParams {
     /// Share of the crystals that are fast (two-population emulsions): how much of the grain is theirs.
     #[serde(default = "default_fast_count_frac")]
     pub fast_count_frac: f32,
+    /// Per-layer multiplier on the FAST crystals' dye-cloud blur sigma (`blur_fast`; hash grain, colour films), R, G, B
+    /// channel = cyan, magenta, yellow dye layer. In a real colour negative the layers have different big crystals (the
+    /// blue-sensitive yellow layer the biggest), so their clumps do not coincide: colour mottle at clump scale instead of
+    /// a per-pixel colour pepper. Each layer's grain std is kept (filming.rs `layer_blurs`): only its spatial scale moves.
+    /// The slow crystals keep one blur: on both populations the fine scale lost its match between layers (fine colour
+    /// pepper +23 %, luma r50 +20 % at [1, 1, 2], 2026-11-08 measurement, web/app.js V4_GRAIN).
+    /// [1, 1, 1] = one blur for the three layers (bit-identical to before the field existed). Ignored for B&W.
+    #[serde(default = "default_layer_blur")]
+    pub layer_blur_fast: [f32; 3],
     /// The lab scanner's sensor noise, density sigma at density 1 per 10 um pixel (filming.rs SCAN_NOISE_REF_UM; area-
     /// averaged at other pitches), growing as 10^(slope (d - 1)) (grain_hash `scan_noise_rgb`):
     /// a scan of a dense negative area (the positive's lights) is noisier. Added to the grain's deviation (it is read in
@@ -515,6 +521,9 @@ pub struct GrainParams {
     /// noise reduction).
     #[serde(default = "default_one")]
     pub scan_noise_chroma: f32,
+    /// The lab scanner's sharpening on the grain (hash grain only): an unsharp mask of radius `scan_sharpen_um` (um on the
+    /// film) and amount `scan_sharpen` on the blurred grain, `(1 + a) G(blur) - a G(sqrt(blur^2 + r^2))`: the crisp-edged
+    /// clumps of a real lab scan instead of a soft mottle. 0 = off. The image itself is not sharpened (Hyper Sharpness is).
     #[serde(default)]
     pub scan_sharpen_um: f32,
     #[serde(default)]
@@ -573,6 +582,9 @@ fn default_particle_scale_f64() -> [f64; 3] {
 fn default_fast_count_frac() -> f32 {
     spektrafilm_model::grain_hash::FAST_COUNT_FRAC
 }
+fn default_layer_blur() -> [f32; 3] {
+    [1.0; 3]
+}
 fn default_particle_scale_layers_f64() -> [f64; 3] {
     [2.0, 1.0, 0.5]
 }
@@ -597,6 +609,7 @@ impl Default for GrainParams {
             blur_dye_clouds_um: 1.0,
             blur_fast: 0.0,
             fast_count_frac: spektrafilm_model::grain_hash::FAST_COUNT_FRAC,
+            layer_blur_fast: default_layer_blur(),
             scan_noise: 0.0,
             scan_noise_slope: 1.0,
             scan_noise_chroma: 1.0,

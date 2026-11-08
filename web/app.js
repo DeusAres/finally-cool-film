@@ -1571,9 +1571,19 @@ const GRAIN_BLUR = 0.45;
 // - the scanner's own noise: scan_noise, sigma in density at density 1 growing as 10^(slope (d - 1)) (dense negative = the
 //   positive's lights: little light reaches the sensor), colour share scan_noise_chroma (the scanner software's colour NR).
 // Left: the two references disagree (Frontier lights / Noritsu mid-lights), one set cannot fit both; shadows a bit weak.
+// Colour mottle (user request 2026-11-08: our grain's colour was a per-pixel pepper, the real scans' sits at clump scale):
+// layer_blur_fast, the fast crystals' dye cloud per layer (R, G, B), the yellow (blue-sensitive) layer's 3.5x coarser at the same
+// std, with scan_noise_chroma 0.5 -> 0.35 (most of the per-pixel colour is the scanner noise's). Measured on the Noritsu set at
+// the 12 MP pitch (scratch ours_full.py / blot2.py), tones 15-50 / 130-170 / 170-210 / 210-235, before -> after (real):
+//   chroma / luma, mid band 27-108 um   0.079 / 0.037 / 0.036 / 0.039 -> 0.077 / 0.082 / 0.056 / 0.036   (0.246 / 0.154 / 0.154 / 0.087)
+//   chroma / luma, fine < 2 px          0.44 / 0.26 / 0.28 / 0.31     -> 0.45 / 0.23 / 0.22 / 0.23       (0.35 / 0.22 / 0.19 / 0.12)
+//   luma std 4.6 / 15.0 / 14.3 / 8.0 -> 4.6 / 15.0 / 14.5 / 8.2; r50 8.2 / 6.8 / 6.4 / 6.2 -> 8.3 / 6.8 / 6.4 / 6.2 um.
+// Shadows and lights barely move: there G is what the mid band answers to (G 1.5: shadows 0.107, but r50 +18 %), and B 4+
+// saturates (and leaves the CPU's sampled-kernel range at this pitch). The same multiplier on the slow crystals too: fine colour
+// +23 %, r50 +20 % (B 2): not taken.
 const V4_GRAIN = {
-  blur: 0.2, blur_fast: 0.35, fast_count_frac: 0.02, scan_sharpen_um: HS_UM, scan_sharpen: 0.85,
-  scan_noise: 0.0098, scan_noise_slope: 0.6, scan_noise_chroma: 0.5,   // scan_noise per 10 um pixel (0.011 at the fit's 8.95 um)
+  blur: 0.2, blur_fast: 0.35, fast_count_frac: 0.02, layer_blur_fast: [1, 1, 3.5], scan_sharpen_um: HS_UM, scan_sharpen: 0.85,
+  scan_noise: 0.0098, scan_noise_slope: 0.6, scan_noise_chroma: 0.35,   // scan_noise per 10 um pixel (0.011 at the fit's 8.95 um)
 };
 /** The v4 grain for the chosen scanner: Scanner 'Nessuno' (a neutral read, no lab machine) has no lab scanner noise. Checked on
  * the gold200 dataset (eval/gold200: the real negatives' narrowband raw scans at full resolution, 11.6 um/px, inverted as

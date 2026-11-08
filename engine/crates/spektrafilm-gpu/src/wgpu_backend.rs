@@ -5764,27 +5764,40 @@ struct GrainState {
 
 /// One separable gaussian blur of the grain: H pass `src` -> `mid`, V pass adds `scale` x the blurred value into `dst`
 /// (hash grain; the legacy path's V pass writes instead, scale 1). The scale is folded into the V kernel.
+/// Per colour channel (R, G, B = the three dye layers): its own sigma and scale. The kernel buffers hold the three
+/// kernels one after the other, each zero-padded to the widest radius (`grain_blur_*.wgsl`); with equal sigmas channel 0's
+/// kernel is exactly the former single kernel (the legacy path's `gaussian_blur_h/v.wgsl` read channel 0's only).
 #[cfg(feature = "wgpu-backend")]
 #[allow(clippy::too_many_arguments)]
 fn grain_blur_job(
     device: &wgpu::Device,
     pipe_h: &CachedPipelineRef,
     pipe_v: &CachedPipelineRef,
-    sigma: f32,
-    scale: f32,
+    sigma: [f32; 3],
+    scale: [f32; 3],
     src: &wgpu::Buffer,
     mid: &wgpu::Buffer,
     dst: &wgpu::Buffer,
     width: u32,
     height: u32,
 ) -> BlurJob {
-    let sigma = sigma.max(0.01);
-    let radius = fir_blur_radius(sigma);
-    let two_sigma_sq = 2.0 * (sigma as f64) * (sigma as f64);
-    let kernel: Vec<f64> = (0..2 * radius + 1).map(|k| { let x = k as f64 - radius as f64; (-x * x / two_sigma_sq).exp() }).collect();
-    let sum: f64 = kernel.iter().sum();
-    let k_h: Vec<f32> = kernel.iter().map(|v| (v / sum) as f32).collect();
-    let k_v: Vec<f32> = kernel.iter().map(|v| (v / sum * scale as f64) as f32).collect();
+    let sigma = sigma.map(|s| s.max(0.01));
+    let radius = sigma.iter().map(|&s| fir_blur_radius(s)).max().unwrap();
+    let size = (2 * radius + 1) as usize;
+    let mut k_h: Vec<f32> = Vec::with_capacity(3 * size);
+    let mut k_v: Vec<f32> = Vec::with_capacity(3 * size);
+    for c in 0..3 {
+        let r_c = fir_blur_radius(sigma[c]) as i64;
+        let two_sigma_sq = 2.0 * (sigma[c] as f64) * (sigma[c] as f64);
+        // taps beyond this channel's own radius are 0 (the shared loop runs to the widest radius)
+        let kernel: Vec<f64> = (0..size as i64).map(|k| {
+            let x = (k - radius as i64) as f64;
+            if x.abs() <= r_c as f64 { (-x * x / two_sigma_sq).exp() } else { 0.0 }
+        }).collect();
+        let sum: f64 = kernel.iter().sum();
+        k_h.extend(kernel.iter().map(|v| (v / sum) as f32));
+        k_v.extend(kernel.iter().map(|v| (v / sum * scale[c] as f64) as f32));
+    }
     let storage = |label, data: &[f32]| device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
         label: Some(label),
         contents: bytemuck::cast_slice(data),
@@ -5999,34 +6012,41 @@ fn build_grain_state(
         wgpu::BufferBindingType::Storage { read_only: true },
         wgpu::BufferBindingType::Storage { read_only: false },
     ];
+    // Hash grain: per-channel kernels (layer sizes, `grain_blur_*.wgsl`); legacy grain: the single-kernel blur.
+    let hashed = gp.hash.is_some();
     let blur_pipe_h = backend.cached_pipeline(
-        include_str!("../../spektrafilm-shaders/wgsl/gaussian_blur_h.wgsl"),
+        if hashed {
+            include_str!("../../spektrafilm-shaders/wgsl/grain_blur_h.wgsl")
+        } else {
+            include_str!("../../spektrafilm-shaders/wgsl/gaussian_blur_h.wgsl")
+        },
         blur_layout,
     );
     let blur_pipe_v = backend.cached_pipeline(
-        if dev_only {
-            include_str!("../../spektrafilm-shaders/wgsl/gaussian_blur_v_add.wgsl")
+        if hashed {
+            include_str!("../../spektrafilm-shaders/wgsl/grain_blur_v_add.wgsl")
         } else {
             include_str!("../../spektrafilm-shaders/wgsl/gaussian_blur_v.wgsl")
         },
         blur_layout,
     );
-    // Hash grain: (1 + a) G(grain_blur) - a G(sharpen sigma) of the deviation, two H+V jobs adding into buf_a (the
+    // Hash grain: per population p (soft from grain_dev, with `split` the fast crystals' from grain_dev_fast) and channel c,
+    // gain[p][c] ((1 + a) G(px[p][c]) - a G(hypot(px[p][c], r))) of the deviation: two H+V jobs adding into buf_a (the
     // scale rides on the V kernel); a = 0: the one dye-cloud blur. Legacy grain: the plain blur of the grainy density.
     let sharp = gp.hash.map(|h| h.sharpen).unwrap_or([0.0, 0.0]);
     let mut blur: Vec<BlurJob> = Vec::new();
-    if dev_only || gp.grain_blur > 0.1 {
-        let src = if dev_only { &grain_dev } else { buf_a };
-        let a = if dev_only { sharp[1] } else { 0.0 };
-        // (the rest from grain_dev at grain_blur; with `split` the fast crystals' from grain_dev_fast at their own blur)
-        let fast = gp.hash.map_or(0.0, |h| h.fast_blur);
-        let sources: &[(&wgpu::Buffer, f32)] = if split { &[(src, gp.grain_blur), (&grain_dev_fast, fast)] } else { &[(src, gp.grain_blur)] };
-        for &(src, s) in sources {
-            blur.push(grain_blur_job(device, &blur_pipe_h, &blur_pipe_v, s, 1.0 + a, src, buf_b, buf_a, width, height));
+    if let (true, Some(h)) = (dev_only, gp.hash.as_ref()) {
+        let a = sharp[1];
+        let pops: &[(&wgpu::Buffer, usize)] = if split { &[(&grain_dev, 0), (&grain_dev_fast, 1)] } else { &[(&grain_dev, 0)] };
+        for &(src, p) in pops {
+            let (px, gain) = (h.layer_px[p], h.layer_gain[p]);
+            blur.push(grain_blur_job(device, &blur_pipe_h, &blur_pipe_v, px, gain.map(|g| (1.0 + a) * g), src, buf_b, buf_a, width, height));
             if a > 0.0 {
-                blur.push(grain_blur_job(device, &blur_pipe_h, &blur_pipe_v, s.hypot(sharp[0]), -a, src, buf_b, buf_a, width, height));
+                blur.push(grain_blur_job(device, &blur_pipe_h, &blur_pipe_v, px.map(|s| s.hypot(sharp[0])), gain.map(|g| -a * g), src, buf_b, buf_a, width, height));
             }
         }
+    } else if !hashed && gp.grain_blur > 0.1 {
+        blur.push(grain_blur_job(device, &blur_pipe_h, &blur_pipe_v, [gp.grain_blur; 3], [1.0; 3], buf_a, buf_b, buf_a, width, height));
     }
 
     GrainState {
@@ -6127,5 +6147,22 @@ mod grain_hash_shader_tests {
         )
         .validate(&module)
         .expect("wgsl validate");
+    }
+}
+
+#[cfg(test)]
+mod grain_blur_shader_tests {
+    /// No adapter in CI: at least check the per-channel grain blur shaders parse and validate.
+    #[test]
+    fn grain_blur_wgsl_validates() {
+        for src in [include_str!("../../spektrafilm-shaders/wgsl/grain_blur_h.wgsl"), include_str!("../../spektrafilm-shaders/wgsl/grain_blur_v_add.wgsl")] {
+            let module = wgpu::naga::front::wgsl::parse_str(src).expect("wgsl parse");
+            wgpu::naga::valid::Validator::new(
+                wgpu::naga::valid::ValidationFlags::all(),
+                wgpu::naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .expect("wgsl validate");
+        }
     }
 }
