@@ -428,13 +428,28 @@ function hyperPassArray(u) {
   return photo.hyperArr.arr;
 }
 
+// Nessuno's mid grey (what lands on display mid grey, invert.js): a level of the scene's light set by the exposure, not by the
+// frame. Until 4.39 it was the frame's median density: a low-key frame, a room in shade with the sun on a face
+// (IDG_20261108_155937_321, ~7 stops), had its room lifted to mid grey (median L* 49, the iPhone's 15) and the black -> mid
+// slope ~3x steeper than the film's, which turned the room's small colour differences into regional casts (blue / orange walls).
+// Now: the meter's grey (Auto puts the metered scene at SCENE_GREY, 18 % linear, on the film) MEDIAN_EV lower, moved with
+// Esposizione (a denser negative is not a brighter print, as the lab scanners; Luminosità moves the print), read as the density
+// of a uniform GREY_PX-square patch through the same engine (uniform: halation and DIR diffusion do nothing to it; 8 px: small
+// and cheap, a choice). MEDIAN_EV: the engine's meter averages light, so an ordinary frame's median sits under its grey;
+// measured on the check photos (sea / rock / cat / ORF / sunset: -0.7 / -1.65 / -0.7 / -1.1 / -1.0 EV, mean -1.0; the IDG room
+// above -3.4): -1 keeps the old median anchor's brightness on average (the look the user approved), each frame now within its
+// own +-0.6 EV of it. Tried: the meter's grey itself (check cases 6-12 L* darker) and the DNG's grey (18 % after its
+// BaselineExposure; 10-17 L* darker: the phone exposes for the highlights and its renderer lifts the mids).
+const SCENE_GREY = 0.18, MEDIAN_EV = -1.0, GREY_PX = 8;
 /** v4: the inversion anchors of this frame (lib/invert.js), from the engine's negative scan of the metered thumb (no grain,
- * lens, dodge or Temperatura: the frame's own range, the sliders act on top). */
+ * lens, dodge or Temperatura: the frame's own range, the sliders act on top) and of a mid-grey patch at the same exposure. */
 function v4Anchors(ev) {
   const { rgb, w, h } = thumbOf(photo.preview);
   const g = 2 ** (ev + baselineEv());
   for (let i = 0; i < rgb.length; i++) rgb[i] *= g;
-  return invertAnchors(syncEngine(ui(), { noGrain: true }).process(rgb, w, h), { shared: true });   // the scan is on the stock's grey axis (NARROWBAND)
+  const eng = syncEngine(ui(), { noGrain: true }), scan = eng.process(rgb, w, h);
+  const grey = eng.process(new Float32Array(GREY_PX * GREY_PX * 3).fill(SCENE_GREY * 2 ** (ev - (photo.autoEv ?? ev) + MEDIAN_EV)), GREY_PX, GREY_PX).slice(0, 3);
+  return invertAnchors(scan, { shared: true, grey });   // the scan is on the stock's grey axis (NARROWBAND)
 }
 const invUniform = (u) => (neutralScan() ? invertUniform(photo.inv, { mshift: u.mshift, yshift: u.yshift, ev: u.nbBright * LAB_D_EV }) : null);
 

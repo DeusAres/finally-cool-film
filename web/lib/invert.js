@@ -10,7 +10,11 @@
 //   - per channel (raw scans of a real negative, eval/gold200: their stock's grey axis is not known): each channel's own black /
 //     white from the frame, so the orange mask and any overall cast go. On a frame with a strong cast this stretches the channel
 //     with the least range: a sunset (IDG_20261022_182651_466) came out with a cyan sky the DNG does not have (v4 until 3.48);
-//   - mid grey: the frame's median density lands on display mid grey (0.18 linear);
+//   - mid grey: the density of the scene's mid grey lands on display mid grey (0.18 linear). The app gives it (`grey`: the
+//     engine's scan of a grey patch at the level the exposure sets, app.js v4Anchors), so the scene keeps its key: a room in shade
+//     stays dark. Without it (eval/gold200's real negatives: their exposure is not known) the frame's median density stands
+//     in, which is right only for an average frame: a low-key one (a sunlit face in a dark room, IDG_20261108_155937_321)
+//     had its room lifted to mid grey and the black -> mid slope ~3x the film's contrast (regional colour casts);
 //   - between the anchors, density maps to log display light (density is log exposure) with two slopes, black -> mid grey
 //     and mid grey -> white, joined smoothly (CORNER_W): the film's toe and shoulder shape the shadows and highlights,
 //     nothing else does. 4.30: they were two straight lines with a corner on mid grey (above it the slope ~halves: 7.6 vs
@@ -55,9 +59,10 @@ const NEUTRAL_SIGMA = 0.06;
 const pct = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))))];
 
 /** Inversion anchors from the engine's negative scan of a thumb (RGB, display-encoded): { lo[3], hi[3], xm }; `shared`: one
- * black / white for the three channels (a scan on the stock's grey axis, see above). */
-export function invertAnchors(scan, { shared = false } = {}) {
-  const n = scan.length / 3, d = [0, 1, 2].map(() => new Float32Array(n)), mean = new Float32Array(n);
+ * black / white for the three channels (a scan on the stock's grey axis, see above); `grey`: the scan of the scene's mid grey
+ * (one RGB pixel, display-encoded), else the frame's median stands in for it. */
+export function invertAnchors(scan, { shared = false, grey = null } = {}) {
+  const n = scan.length / 3, d = [0, 1, 2].map(() => new Float32Array(n));
   for (let i = 0; i < n; i++) {
     for (let c = 0; c < 3; c++) d[c][i] = -Math.log10(Math.max(T_MIN, srgbDec(scan[3 * i + c])));
   }
@@ -87,12 +92,15 @@ export function invertAnchors(scan, { shared = false } = {}) {
       lo.push(l); hi.push(h);
     }
   }
-  for (let i = 0; i < n; i++) {
-    let m = 0;
-    for (let c = 0; c < 3; c++) m += (d[c][i] - lo[c]) / (hi[c] - lo[c]);
-    mean[i] = m / 3;
+  const x = (px, i) => [0, 1, 2].reduce((m, c) => m + (px[c][i] - lo[c]) / (hi[c] - lo[c]), 0) / 3;   // mean normalised density
+  let xm;
+  if (grey) xm = x([0, 1, 2].map((c) => [-Math.log10(Math.max(T_MIN, srgbDec(grey[c])))]), 0);
+  else {
+    const mean = new Float32Array(n);
+    for (let i = 0; i < n; i++) mean[i] = x(d, i);
+    xm = pct(mean.sort(), 0.5);
   }
-  return { lo, hi, xm: Math.min(XM_MAX, Math.max(XM_MIN, pct(mean.sort(), 0.5))) };
+  return { lo, hi, xm: Math.min(XM_MAX, Math.max(XM_MIN, xm)) };
 }
 
 /** Uniform values for INVERT_WGSL: lo[3], 1 / range[3], xm, the G / B key offsets, then the mid grey's offset (ln units);
