@@ -14,6 +14,14 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.40**: **Nessuno tiene la luce della scena**: l'inversione metteva sul grigio medio la mediana della foto, così una scena
+  scura (un volto al sole in una stanza in ombra, 7 stop di differenza) usciva con la stanza schiarita a grigio (L* 49, l'iPhone
+  15) e le ombre tirate 3 volte il contrasto della pellicola, che trasformava i piccoli colori della stanza in dominanti a
+  chiazze (muro blu, colonna arancio). Ora il grigio medio è quello dell'esposimetro (1 EV sotto, dove sta la mediana di una
+  foto normale, misurato): sulla foto dell'utente stanza 17, volto 88 invece di 93, muri entro ~4 dall'iPhone; le foto normali
+  si spostano di ±0,3-0,65 EV ciascuna. **La mascotte sui bianchi bruciati** (Frontier) consiglia Hyper Tone luci + Tono luci
+  Soft invece di Densità, che scurisce tutto: sul volto al sole 95,8 -> 79 con la stanza com'era (con Densità -9: volto 88,
+  stanza nera). Il Frontier di default resta com'è: come un AutoSetup vero stampa per la stanza e lascia il volto all'operatore.
 - **v4.39**: **il colore della grana a grumi, come sulla pellicola**: il colore della nostra grana era un pepe fine pixel per
   pixel, quello delle scansioni Gold vere si raccoglie in piccole chiazze alla scala dei grumi (27-108 µm: 0,04 contro
   0,09-0,25 per unità di grana). Nella pellicola i tre strati non hanno la stessa grana: lo strato del giallo (sensibile al blu)
