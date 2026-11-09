@@ -108,8 +108,12 @@ export function advise(s, scanner, has, ref = null, modified = () => false) {
   const pick = (...ids) => ids.find((id) => has(id)) || null;
   const bright = lab ? pick('labD', 'ev') : pick('nbBright', 'ev'), brightName = bright === 'labD' ? 'Densità' : bright === 'nbBright' ? 'Luminosità' : 'Esposizione';
   if (s.whitePct > WHITE_CLIP_PCT) {
-    const t = lab ? pick('labHi', 'labD', 'ev') : bright;
-    const how = t === 'labHi' ? 'a mettere Tono luci su Soft o ad abbassare Densità' : `ad abbassare ${brightName}`;
+    // On a lab scanner the lights come back with the lab's highlight tools, not with Densità, which darkens the whole print (user
+    // 2026-11-08, a sunlit face in a shaded room: Densità -9 put the room at L* 2 with the face still at 88; Hyper Tone luci 5 +
+    // Tono luci Soft took the face's p95 from 95.8 to 79 with the room unchanged). Densità only when the frame is bright as a whole.
+    const t = lab ? (s.medianL > LIGHT_L ? pick('labD', 'labHi') : pick('htHi', 'labHi', 'labD')) : bright;
+    const how = t === 'htHi' ? 'Hyper Tone luci alto, con Tono luci su Soft: recupera le luci senza scurire il resto'
+      : t === 'labHi' ? 'a mettere Tono luci su Soft' : `ad abbassare ${brightName}`;
     return { key: 'white', text: `Bianchi bruciati sul ${pct(s.whitePct)} della foto. Prova ${how}.`, tool: t };
   }
   if (s.blackPct > BLACK_CLIP_PCT) {
