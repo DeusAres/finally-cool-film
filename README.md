@@ -14,6 +14,11 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.42**: **Interfaccia desktop a pannelli**: su schermi larghi (orizzontale, da 900 px) la colonna a destra ha
+  l'istogramma in alto, le schede Base / Scanner / Trasforma / Effetti e sotto tutti gli strumenti della scheda insieme
+  (prima uno slider alla volta come sul telefono, con ~600 px vuoti); Trasforma mostra Raddrizza, Ritaglia, Bordo e
+  Cornice uno sotto l'altro. Doppio clic su uno slider lo azzera; la riga di stato sta in fondo alla colonna invece che
+  sopra la foto. Telefono e tablet in verticale invariati.
 - **v4.41**: **Pulizia dei campioni**: tolti dal repo i 14 DNG che non usa nessun check (restano i 5 dei casi di
   `eval/check/cases.json`, l'ORF e i JPEG kg200). I nomi nei commenti restano come fonte delle misure; i file sono nella
   cronologia git (`samples/README.md`). Nessun cambio all'app, check completo senza regressioni.

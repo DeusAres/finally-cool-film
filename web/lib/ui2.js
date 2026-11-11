@@ -1,5 +1,8 @@
 // UI 2 (the default since 4.25; the classic UI: its menu, or ?ui1): one big slider at a time, the tools of a group in a strip, four groups
 // (Base, Scanner, Trasforma, Effetti), undo / redo and Esporta in the header, the export options in a sheet.
+// Desktop (DESK, the same query as `desk` in app.js; user, 2026-11-11: "più friendly nella disposizione"): a right-hand column
+// with the histogram on top, the groups as tabs and every tool of the group listed at once (Lightroom-style); the status
+// line at its foot. The strip and one-slider-at-a-time stay for phones and portrait tablets.
 // Built over the app's own controls: the classic panes stay in the page (hidden) and remain the one source of truth: UI 2
 // sets their values and dispatches their events, reads their labels and their formatted outputs. Prototype: user, 2026-11-03.
 import { store } from './util.js';
@@ -61,6 +64,7 @@ const svg = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
 // on the right the content goes left -> right, "si vede che si sposta"; -1 would be the carousel convention), by a share of
 // the panel's width (groups SLIDE_W, a tool's title + slider TOOL_W) with a blur (BLUR_PX, half for a tool), eased out;
 // "Riduci movimento" keeps only the fade. Choices.
+const DESK = matchMedia('(orientation: landscape) and (min-width: 900px) and (min-height: 500px)');
 const FLOW = 1, SLIDE_W = 0.35, TOOL_W = 0.25, BLUR_PX = 6, SLIDE_MS = 260, TOOL_MS = 200;
 const EASE = 'cubic-bezier(.2,.8,.2,1)';
 // Bordo (Trasforma since 4.35, user: a ruler with ticks and a preview; it was in the export sheet): 0..10 % of the long side
@@ -111,7 +115,14 @@ export function initUI2(api) {
     <nav class="u2nav">${GROUPS.map((g) => `<button data-g="${g.id}">${svg(g.icon)}<span>${g.name}</span></button>`).join('')}</nav></div>`);
   const slot = $('u2slot');
   // the status line (render times, messages; a tap opens the log, as in the classic UI) on the photo's top left, small
-  const st = $('status'); $('stage').append(st);
+  const st = $('status'), u2 = $('u2');
+  // desktop: the histogram on top of the column and the status line at its foot; elsewhere both on the photo
+  const place = () => {
+    if (DESK.matches) { u2.prepend($('histo')); u2.append(st); } else { $('stage').append($('histo'), st); }
+    document.body.classList.toggle('u2desk', DESK.matches);
+  };
+  place();
+  DESK.addEventListener('change', () => { place(); draw(false); });
   new MutationObserver(() => st.classList.toggle('msg', !/^\d+×\d+ · /.test(st.textContent)))
     .observe(st, { childList: true, characterData: true, subtree: true });
   const reduce = matchMedia('(prefers-reduced-motion: reduce)');
@@ -144,16 +155,17 @@ export function initUI2(api) {
       ${svg(icon)}<span>${name}</span><span class="v">${val}</span></button>`).join('')}</div>`;
   }
   function sliderPane(id) {
-    if (id === 'scan') return `<div class="u2tool"><div class="u2top"><span class="u2name">Scanner</span></div>
+    if (id === 'scan') return `<div class="u2tool" data-id="scan"><div class="u2top"><span class="u2name">Scanner</span></div>
       <div class="u2seg">${SCANS.filter($).map((b) => `<button data-scan="${b}" class="${$(b).getAttribute('aria-checked') === 'true' ? 'on' : ''}">${$(b).textContent.trim()}</button>`).join('')}</div></div>`;
     const el = $(id), min = +el.min, max = +el.max, base = api.baseOf(id), z = (base - min) / (max - min) * 100;
     const auto = id === 'ev' && $('auto') ? '<button class="u2auto">Auto</button>' : '';
-    return `<div class="u2tool"><div class="u2top"><span class="u2name">${labelOf(id)}</span><span class="u2val">${valueOf(id)}</span>${auto}
+    return `<div class="u2tool" data-id="${id}"><div class="u2top"><span class="u2name">${labelOf(id)}</span><span class="u2val">${valueOf(id)}</span>${auto}
       <button class="u2reset"${modified(id) ? '' : ' disabled'}>${svg('reset')}Azzera</button></div>
       <div class="u2track"><span class="u2zero" style="left:${z}%"></span><input type="range" class="u2range" min="${min}" max="${max}" step="${el.step || 'any'}" value="${el.value}"></div></div>`;
   }
   function body(g) {
     if (g === 'transform') {
+      if (DESK.matches) return `<div class="u2list">${Object.keys(TR).map((t) => `<div class="u2tool u2tr" data-tr="${t}"></div>`).join('')}</div>`;
       const t = sel.transform;
       const strip = chips([['tilt', 'Raddrizza', 'level', $('tiltOut').textContent, +$('tilt').value !== 0],
         ['crop', 'Ritaglia', 'crop', $('cropOut').textContent, $('cropOut').textContent !== 'Libero'],
@@ -162,6 +174,7 @@ export function initUI2(api) {
       return `<div class="u2tool u2tr" data-tr="${t}"></div>${strip}`;
     }
     const ids = toolsOf(g);
+    if (DESK.matches) return ids.length ? `<div class="u2list">${ids.map(sliderPane).join('')}</div>` : '<div class="u2tool u2none">Nessun controllo per questo scanner</div>';
     if (!ids.includes(sel[g])) sel[g] = ids[0];
     return (sel[g] ? sliderPane(sel[g]) : '<div class="u2tool u2none">Nessun controllo per questo scanner</div>') +
       chips(ids.map((id) => [id, SHORT[id] || labelOf(id), ICON[id] || 'base', id === 'scan' ? scanName() : modified(id) ? valueOf(id) : '', modified(id)]), sel[g]);
@@ -182,6 +195,15 @@ export function initUI2(api) {
       const ids = [...pg.querySelectorAll('.u2t')].map((x) => x.dataset.t), dir = Math.sign(ids.indexOf(t) - ids.indexOf(sel[g]));
       sel[g] = t; haptic(); swapTool(pg, g, dir);
     });
+    if (g === 'transform' && DESK.matches) {
+      // all four blocks at once; the one last touched decides the crop box (hidden while editing Bordo / Cornice)
+      pg.querySelectorAll('.u2tr').forEach((h) => {
+        h.append(trBlocks[h.dataset.tr]);
+        h.onpointerdown = () => { sel.transform = h.dataset.tr; cropOverlay(); };
+      });
+      cropOverlay();
+      return;
+    }
     if (g === 'transform') {
       const host = q('.u2tr');
       parkAll();   // all back first, then the selected one in
@@ -189,7 +211,8 @@ export function initUI2(api) {
       cropOverlay();
       return;
     }
-    wireTool(g, pg);
+    if (DESK.matches) pg.querySelectorAll('.u2tool[data-id]').forEach((t) => wireOne(t, t.dataset.id, null));
+    else wireTool(g, pg);
   }
   // `old` out and `nu` in, sliding `dir` (+1: the selection moved right) by `w` of the panel's width
   function slide(old, nu, dir, w, blur, ms) {
@@ -211,9 +234,14 @@ export function initUI2(api) {
     slide(old, nu, dir, TOOL_W, BLUR_PX / 2, TOOL_MS).onfinish = () => old.remove();
   }
   function wireTool(g, pg) {
-    const q = (s) => pg.querySelector(`.u2tool:not(.u2out) ${s}`) || pg.querySelector(`.u2tool:last-of-type ${s}`);
-    pg.querySelectorAll('.u2tool:not(.u2out) [data-scan]').forEach((b) => b.onclick = () => { $(b.dataset.scan).click(); haptic(); setTimeout(() => { draw(false); commit(); }, 60); });
-    const id = sel[g], r = q('.u2range');
+    wireOne(pg.querySelector('.u2tool:not(.u2out)'), sel[g], pg.querySelector(`.u2t[data-t="${sel[g]}"]`));
+  }
+  // one tool's pane `t` (its title, value, reset, slider; or the scanner's segments); `chip`: its strip button, if any
+  function wireOne(t, id, chip) {
+    if (!t) return;
+    const q = (s) => t.querySelector(s);
+    t.querySelectorAll('[data-scan]').forEach((b) => b.onclick = () => { $(b.dataset.scan).click(); haptic(); setTimeout(() => { draw(false); commit(); }, 60); });
+    const r = q('.u2range');
     if (!r) return;
     const el = $(id), min = +el.min, max = +el.max, base = api.baseOf(id);
     const step = +el.step || (max - min) / 100, stepped = (max - min) / step <= 12;   // a stepped slider ticks at each step
@@ -228,11 +256,14 @@ export function initUI2(api) {
       el.value = v; el.dispatchEvent(new Event('input', { bubbles: true }));
       q('.u2val').textContent = valueOf(id);
       q('.u2reset').disabled = !modified(id);
-      const chip = pg.querySelector(`.u2t[data-t="${id}"]`);
-      chip.classList.toggle('mod', modified(id)); chip.querySelector('.v').textContent = modified(id) ? valueOf(id) : '';
+      t.classList.toggle('mod', modified(id));
+      if (chip) { chip.classList.toggle('mod', modified(id)); chip.querySelector('.v').textContent = modified(id) ? valueOf(id) : ''; }
     };
     r.onchange = () => { el.dispatchEvent(new Event('change', { bubbles: true })); commit(); };
-    q('.u2reset').onclick = () => { r.value = base; r.oninput(); commit(); haptic(); };
+    const reset = () => { r.value = base; r.oninput(); commit(); haptic(); };
+    q('.u2reset').onclick = reset;
+    r.ondblclick = reset;   // a double click on the slider resets it (desktop editors' convention)
+    t.classList.toggle('mod', modified(id));
     const a = q('.u2auto');
     if (a) a.onclick = async () => { $('auto').click(); haptic(); setTimeout(() => { draw(false); commit(); }, 400); };
   }
@@ -241,7 +272,11 @@ export function initUI2(api) {
   let busy = null;
   function draw(anim = true, dir = 0, ms = SLIDE_MS) {
     const html = body(group);
-    if (!anim) { slot.innerHTML = `<div class="u2page">${html}</div>`; wire(group, slot.firstElementChild); syncNav(); return; }
+    if (!anim) {
+      const y = slot.firstElementChild?.scrollTop || 0;
+      slot.innerHTML = `<div class="u2page">${html}</div>`; slot.firstElementChild.scrollTop = y;
+      wire(group, slot.firstElementChild); syncNav(); return;
+    }
     const old = slot.firstElementChild, nu = document.createElement('div');
     nu.className = 'u2page'; nu.innerHTML = html;
     slot.append(nu); wire(group, nu); syncNav();
@@ -393,6 +428,11 @@ export function initUI2(api) {
     } else if (sel[g] !== id) {
       sel[g] = id; draw(false);
     }
+    if (DESK.matches) {
+      const t = slot.lastElementChild?.querySelector(`.u2tool[data-id="${id}"]`);
+      t?.scrollIntoView({ block: 'nearest', behavior: reduce.matches ? 'auto' : 'smooth' });
+      t?.animate([{ background: '#3a3127' }, { background: 'transparent' }], { duration: 1200, easing: 'ease-out' });
+    }
     haptic();
   }
   const SCAN_KIND = { scanNone: 'none', scanFrontier: 'frontier', scanNoritsu: 'noritsu' };
@@ -458,6 +498,28 @@ body.u2nocrop #cropUI { display: none !important; }
 .u2nav { display: flex; border-top: 1px solid var(--line); padding: 2px 6px max(4px, calc(env(safe-area-inset-bottom) - 16px)); }
 body.ui2 #status { position: absolute; left: 8px; top: 8px; max-width: calc(100% - 150px); padding: 3px 8px; border-radius: 6px;
   background: rgba(14,13,12,.55); color: var(--muted); font: 10.5px ui-monospace, Menlo, monospace; min-height: 0; z-index: 3; cursor: pointer; }
+/* desktop: the column (see DESK) */
+body.u2desk { grid-template-columns: minmax(0, 1fr) clamp(320px, 25vw, 380px); grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "head head" "stage u2"; }
+body.u2desk #u2 { grid-area: u2; display: flex; flex-direction: column; min-height: 0; border-top: 0; border-left: 1px solid var(--line); }
+body.u2desk #histo { position: static; flex: none; width: auto; height: 104px; margin: 12px 16px 8px; background: #000; }
+body.u2desk .u2nav { order: -1; flex: none; border-top: 0; border-bottom: 1px solid var(--line); padding: 0 6px; }
+body.u2desk #histo { order: -2; }
+body.u2desk .u2nav button { flex-direction: row; justify-content: center; gap: 6px; font-size: 13px; padding: 10px 0; }
+body.u2desk .u2nav button svg { width: 18px; height: 18px; }
+body.u2desk .u2slot { flex: 1; height: auto; min-height: 0; }
+body.u2desk .u2page { overflow-y: auto; padding: 0 0 12px; scrollbar-width: thin; }
+body.u2desk .u2list .u2tr { height: auto; overflow: visible; padding: 10px 16px 8px; }
+.u2list .u2tool { height: auto; padding: 10px 16px 2px; border-bottom: 1px solid #262320; }
+.u2list .u2name { font-size: 13.5px; font-weight: 500; color: #cfc6bb; } .u2list .u2tool.mod .u2name { color: var(--fg); }
+.u2list .u2val { font-size: 13px; order: 3; } .u2list .u2top { margin-bottom: 0; } .u2list .u2auto { order: 1; padding: 1px 9px; font-size: 12px; }
+.u2list .u2reset { visibility: hidden; order: 2; padding: 0 8px; } .u2list .u2tool:hover .u2reset:not(:disabled) { visibility: visible; }
+.u2list .u2track { height: 30px; } .u2list .u2zero { top: 8px; height: 14px; }
+.u2list .u2track input { height: 30px; cursor: pointer; }
+.u2list .u2track input::-webkit-slider-thumb { width: 16px; height: 16px; margin-top: -6px; }
+.u2list .u2seg { margin: 8px 0 10px; }
+body.u2desk #status { position: static; flex: none; order: 2; max-width: none; border-radius: 0; margin: 0; padding: 6px 16px;
+  border-top: 1px solid var(--line); background: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 body.ui2 #status.msg { color: var(--fg); background: rgba(14,13,12,.8); font-size: 12px; }
 body.ui2 #status:empty { display: none; }
 .u2nav button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; border: 0; background: none; color: var(--muted); font: 11px -apple-system, system-ui, sans-serif; padding: 5px 0; }
