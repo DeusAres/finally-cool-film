@@ -47,6 +47,7 @@ const I = {
   level: '<path d="M3 12h18"/><path d="M6 9l-3 3 3 3M18 9l3 3-3 3"/>',
   // a film strip: the frame and its sprocket holes (Cornice)
   frame: '<rect x="3" y="4" width="18" height="16" rx="1.5"/><rect x="7" y="8" width="10" height="8" rx="1"/><path d="M6 6h1M10.5 6h1M15 6h1M6 18h1M10.5 18h1M15 18h1"/>',
+  movie: '<rect x="2.5" y="4.5" width="19" height="14" rx="2"/><rect x="4.5" y="6.5" width="7" height="5" rx="1"/><path d="M9 21h6"/>',
   open: '<path d="M3 7.5a2 2 0 0 1 2-2h4.2l2 2.5H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   undo: '<path d="M9 7H15a5 5 0 0 1 0 10H8"/><path d="M12 4 9 7l3 3"/>',
   redo: '<path d="M15 7H9a5 5 0 0 0 0 10h7"/><path d="M12 4l3 3-3 3"/>',
@@ -106,6 +107,7 @@ export function initUI2(api) {
   const controls = $('controls');
   // header: open / menu, undo, redo, Esporta
   document.querySelector('header').insertAdjacentHTML('beforeend', `<div class="u2head">
+    <button class="u2ib" id="u2movie" aria-label="Modalità Movie: tutto a destra, spazio libero a sinistra" title="Movie">${svg('movie')}</button>
     <button class="u2ib" id="u2menu" aria-label="Foto e impostazioni">${svg('open')}</button>
     <button class="u2ib" id="u2undo" aria-label="Annulla">${svg('undo')}</button>
     <button class="u2ib" id="u2redo" aria-label="Ripeti">${svg('redo')}</button>
@@ -123,6 +125,11 @@ export function initUI2(api) {
   };
   place();
   DESK.addEventListener('change', () => { place(); draw(false); });
+  // Movie (desktop; user, 2026-11-11): the photo and the column move to the right, the left of the window stays empty for
+  // picture-in-picture windows (a film playing while editing). The photo refits on its own (app.js observes #stage's size).
+  const movie = (on) => { document.body.classList.toggle('u2movie', on); $('u2movie').setAttribute('aria-pressed', on); store.set('fcf_movie', on ? '1' : '0'); };
+  movie(store.get('fcf_movie') === '1');
+  $('u2movie').onclick = () => movie(!document.body.classList.contains('u2movie'));
   new MutationObserver(() => st.classList.toggle('msg', !/^\d+×\d+ · /.test(st.textContent)))
     .observe(st, { childList: true, characterData: true, subtree: true });
   const reduce = matchMedia('(prefers-reduced-motion: reduce)');
@@ -501,6 +508,9 @@ body.ui2 #status { position: absolute; left: 8px; top: 8px; max-width: calc(100%
 /* desktop: the column (see DESK) */
 body.u2desk { grid-template-columns: minmax(0, 1fr) clamp(320px, 25vw, 380px); grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas: "head head" "stage u2"; }
+/* Movie: an empty column on the left (46 % of the window: the user's sketch, room for a PiP player), the photo and the panel on the right */
+body.u2desk.u2movie { grid-template-columns: minmax(0, 46vw) minmax(0, 1fr) clamp(320px, 25vw, 380px); grid-template-areas: "head head head" ". stage u2"; }
+#u2movie { display: none; } body.u2desk #u2movie { display: grid; } body.u2movie #u2movie { color: var(--accent); }
 body.u2desk #u2 { grid-area: u2; display: flex; flex-direction: column; min-height: 0; border-top: 0; border-left: 1px solid var(--line); }
 body.u2desk #histo { position: static; flex: none; width: auto; height: 104px; margin: 12px 16px 8px; background: #000; }
 body.u2desk .u2nav { order: -1; flex: none; border-top: 0; border-bottom: 1px solid var(--line); padding: 0 6px; }

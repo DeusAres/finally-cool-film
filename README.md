@@ -14,6 +14,11 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.43**: **Modalità Movie** (desktop): il pulsante a schermo accanto alla cartella sposta foto e pannello a destra e lascia
+  libero il 46 % sinistro della finestra, per un video in Picture-in-Picture mentre si modifica; resta ricordata. Motore: il
+  test GPU/CPU della grana per strato ora lavora alla scala dell'anteprima (prima passava comunque) e conferma la GPU;
+  `cargo test -p spektrafilm-core` compila di nuovo. La crema nelle luci del bracketing non era un errore della catena
+  (eval/V4.md).
 - **v4.42**: **Interfaccia desktop a pannelli**: su schermi larghi (orizzontale, da 900 px) la colonna a destra ha
   l'istogramma in alto, le schede Base / Scanner / Trasforma / Effetti e sotto tutti gli strumenti della scheda insieme
   (prima uno slider alla volta come sul telefono, con ~600 px vuoti); Trasforma mostra Raddrizza, Ritaglia, Bordo e
