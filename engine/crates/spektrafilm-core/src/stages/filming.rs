@@ -818,9 +818,16 @@ mod tests {
     }
 
     /// GrainParams `layer_blur_fast` in the GPU-resident chain (per-layer grain blur jobs) matches the CPU stage, scanner
-    /// sharpening on. Same budget as the other resident-chain parity tests (f32 shaders); the grain draws are the same
-    /// hash on both, so a wrong per-layer sigma or gain shows as a grain-sized difference (amount 4: ~0.05 in density).
-    /// Skips without a GPU adapter.
+    /// sharpening on, at the app's values ([1, 1, 3.5], web/app.js V4_GRAIN). Same budget as the other resident-chain parity
+    /// tests (f32 shaders); the grain draws are the same hash on both, so a wrong per-layer sigma or gain shows as a
+    /// grain-sized difference. The frame is 1.5 mm wide (64 px at ~23 um, the app's preview scale): on a 35 mm frame a pixel
+    /// is ~0.5 mm, the dye clouds vanish under it and the test passed whatever the per-layer blur (4.43: same error with and
+    /// without it). It also checks that the GPU error is small next to what the per-layer blur changes.
+    /// Halation is off: at this scale its in-emulsion scatter (core ~2 um, tail ~9 um: under a pixel) differs between the
+    /// backends on pixel-sharp edges (GPU: one Gaussian per pass at the channels' mean sigma; CPU: per channel, the tail an
+    /// exponential), mean 0.044 on this pixel-to-pixel pattern; with it off the error is ~0.0002 (4.43, SwiftShader Vulkan).
+    /// Skips without a GPU adapter. Runs only with the wgpu backend compiled in and the profiles at engine/data:
+    /// `cargo test -p spektrafilm-core --features spektrafilm-gpu/wgpu-backend`.
     #[test]
     fn layer_blur_fast_gpu_resident_matches_cpu() {
         let Some(gpu) = spektrafilm_gpu::wgpu_backend::WgpuBackend::new() else {
@@ -828,24 +835,35 @@ mod tests {
             return;
         };
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().join("data");
-        let film = crate::profile::load_profile_by_name(&dir, "kodak_gold_200").unwrap();
-        let print = crate::profile::load_profile_by_name(&dir, "kodak_portra_endura").unwrap();
-        let mut params = RuntimeParams::default();
-        params.camera.auto_exposure = false;
-        params.io.output_gamut_compress.algorithm = "off".into(); // keeps the resident chain
-        let g = &mut params.film_render.grain;
-        (g.blur, g.blur_fast, g.fast_count_frac, g.amount) = (0.2, 0.35, 0.02, 4.0);
-        (g.scan_sharpen_um, g.scan_sharpen) = (12.0, 0.85);
-        g.layer_blur_fast = [0.9, 1.0, 1.4];
-        let pipeline = crate::pipeline::Pipeline::new_with_spectral(film, print, params, &dir).unwrap();
+        let pipeline = |layer_blur_fast: [f32; 3]| {
+            let film = crate::profile::load_profile_by_name(&dir, "kodak_gold_200").unwrap();
+            let print = crate::profile::load_profile_by_name(&dir, "kodak_portra_endura").unwrap();
+            let mut params = RuntimeParams::default();
+            params.camera.auto_exposure = false;
+            params.camera.film_format_mm = 1.5;
+            params.film_render.halation.active = false;
+            params.io.output_gamut_compress.algorithm = "off".into(); // keeps the resident chain
+            let g = &mut params.film_render.grain;
+            (g.blur, g.blur_fast, g.fast_count_frac, g.amount) = (0.2, 0.35, 0.02, 4.0);
+            (g.scan_sharpen_um, g.scan_sharpen) = (12.0, 0.85);
+            g.layer_blur_fast = layer_blur_fast;
+            crate::pipeline::Pipeline::new_with_spectral(film, print, params, &dir).unwrap()
+        };
         let (w, h) = (64u32, 64u32);
         let data: Vec<_> = (0..w * h * 3).map(|i| from_f64(0.1 + 0.3 * ((i / 3) % 7) as f64 / 7.0)).collect();
         let img = ImageBuf::from_data(w, h, data);
-        let out_gpu = pipeline.process(img.clone(), &gpu);
-        let out_cpu = pipeline.process(img, &spektrafilm_gpu::cpu_backend::CpuBackend);
-        let d: Vec<f64> = out_gpu.data.iter().zip(out_cpu.data.iter()).map(|(a, b)| (*a as f64 - *b as f64).abs()).collect();
-        let mean = d.iter().sum::<f64>() / d.len() as f64;
-        let max = d.iter().cloned().fold(0.0, f64::max);
+        let diff = |a: &ImageBuf, b: &ImageBuf| {
+            let d: Vec<f64> = a.data.iter().zip(b.data.iter()).map(|(x, y)| (*x as f64 - *y as f64).abs()).collect();
+            (d.iter().sum::<f64>() / d.len() as f64, d.iter().cloned().fold(0.0, f64::max))
+        };
+        let app = pipeline([1.0, 1.0, 3.5]);
+        let out_cpu = app.process(img.clone(), &spektrafilm_gpu::cpu_backend::CpuBackend);
+        let out_gpu = app.process(img.clone(), &gpu);
+        let plain = pipeline([1.0; 3]).process(img, &spektrafilm_gpu::cpu_backend::CpuBackend);
+        let (mean, max) = diff(&out_gpu, &out_cpu);
+        let (effect, _) = diff(&out_cpu, &plain);
+        eprintln!("GPU vs CPU: mean {mean}, max {max}; layer blur effect (CPU, mean) {effect}");
+        assert!(effect > 4.0 * mean, "the GPU error is not small next to the per-layer blur: {mean} vs {effect}");
         assert!(mean < 5e-3 && max < 5e-2, "GPU vs CPU: mean {mean}, max {max}");
     }
 

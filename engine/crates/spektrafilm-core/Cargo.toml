@@ -31,3 +31,8 @@ blas-src = { version = "0.10", features = ["accelerate"] }
 [target.'cfg(all(not(target_os = "macos"), not(target_os = "windows"), not(target_arch = "wasm32")))'.dependencies]
 cblas = "0.4"
 blas-src = { version = "0.10", features = ["openblas"] }
+
+[dev-dependencies]
+# The GPU-resident parity tests (filming.rs, mallett.rs) need the wgpu backend, off in the workspace dependency
+# (default-features = false): without it `cargo test -p spektrafilm-core` did not compile (4.43). They skip without an adapter.
+spektrafilm-gpu = { workspace = true, features = ["wgpu-backend"] }
