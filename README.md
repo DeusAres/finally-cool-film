@@ -14,6 +14,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.41**: **Pulizia dei campioni**: tolti dal repo i 14 DNG che non usa nessun check (restano i 5 dei casi di
+  `eval/check/cases.json`, l'ORF e i JPEG kg200). I nomi nei commenti restano come fonte delle misure; i file sono nella
+  cronologia git (`samples/README.md`). Nessun cambio all'app, check completo senza regressioni.
 - **v4.40**: **Nessuno tiene la luce della scena**: l'inversione metteva sul grigio medio la mediana della foto, così una scena
   scura (un volto al sole in una stanza in ombra, 7 stop di differenza) usciva con la stanza schiarita a grigio (L* 49, l'iPhone
   15) e le ombre tirate 3 volte il contrasto della pellicola, che trasformava i piccoli colori della stanza in dominanti a
