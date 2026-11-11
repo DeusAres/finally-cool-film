@@ -46,20 +46,26 @@ TOL = {'band': 1.0, 'L': 1.0, 'edges': 0.05, 'tex': 0.03, 'chart': 0.15}
 # (engine, wasm, app.js, the look's modules, the harness itself) runs the full set. Two Chromiums at once save only ~20 %
 # (4 preview cases: 72 s at --jobs 1, 58 s at 2, 53 s at 4: SwiftShader is CPU bound), so --jobs stays 1.
 DEPLOY = 'origin/claude/spektrafilm-mobile-web-har40e'
+# Files that can move a render: the served app (web/: the engine counts only once rebuilt into web/pkg), the check's own cases,
+# baseline and harness, and the case photos. Engine sources, tests, docs, other scripts and unused samples cannot (user 2026-11-11:
+# a test-only engine change and a deleted sample ran the full ~14 min set).
+AUTO_RENDER = re.compile(r'^(web/|eval/check/|scripts/eval/(check\.py|render\.cjs)$)')
 AUTO_UI = re.compile(r'^(README\.md|VERSION|CLAUDE\.md|eval/.*\.md|scripts/mascot/.*|web/index\.html|'
                      r'web/lib/(ui2|mascot|rullino|ruler|tips|filmframe|dust|debuglog)\.js)$')
 AUTO_SMOKE = ['v4_sea', 'jpeg_export_ig']
 
 
 def auto_cases(cases):
-    """The cases for the changes since the deploy branch (committed or not): the smoke set when every changed file is in AUTO_UI."""
+    """The cases for the changes since the deploy branch (committed or not): the smoke set unless a file that can change a
+    render (AUTO_RENDER, or a case's photo) changed outside the interface (AUTO_UI)."""
     git = lambda *a: subprocess.run(['git', '-C', ROOT, *a], capture_output=True, text=True, check=True).stdout.split()
     changed = sorted(set(git('diff', '--name-only', f'{DEPLOY}...HEAD') + git('diff', '--name-only', 'HEAD')))
-    other = [f for f in changed if not AUTO_UI.match(f)]
+    photos = {c['photo'] for c in cases.values()}
+    other = [f for f in changed if (AUTO_RENDER.match(f) or f in photos) and not AUTO_UI.match(f)]
     if other:
-        print(f'--auto: full set ({len(other)} file(s) beyond the interface, e.g. {", ".join(other[:3])})')
+        print(f'--auto: full set ({len(other)} file(s) that can change a render, e.g. {", ".join(other[:3])})')
         return cases
-    print(f'--auto: smoke set {AUTO_SMOKE} (only interface / overlay / docs changed: {", ".join(changed) or "nothing"})')
+    print(f'--auto: smoke set {AUTO_SMOKE} (nothing that renders changed beyond the interface: {", ".join(changed) or "nothing"})')
     return {k: v for k, v in cases.items() if k in AUTO_SMOKE}
 
 
