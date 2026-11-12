@@ -399,6 +399,15 @@ function hyperSharp(u, region) {
 }
 
 const htOn = (u) => V4 && scanner === 'frontier' && (u.htHi > 0 || u.htLo > 0);
+// Densità with Hyper Tone on: the slider counts as resting LABD_REST_MS after its last step (a choice: longer than the gap
+// between a drag's input events, short enough that the exact map follows at once); then one render with the rebuilt map.
+const LABD_REST_MS = 250;
+let labDMovedAt = 0, labDRest = 0;
+$('labD').addEventListener('input', () => {
+  labDMovedAt = performance.now();
+  clearTimeout(labDRest);
+  labDRest = setTimeout(() => { if (photo && htOn(ui())) render(); }, LABD_REST_MS);
+});
 /** photo.hyper: the Hyper Tone map of the output frame (lib/hypertone.js): built from the thumb at HYPER_THUMB_PX once per photo
  * and scanner density (photo.hyperBase, the guided filter: the costly part), then turned and cropped like the render, a cheap
  * resample of the smooth map, so a Raddrizza drag or a crop does not rebuild it. */
@@ -406,10 +415,14 @@ function syncHyperMap(u) {
   // The thumb as the scanner renders it, as on the machine (Hypertone dodges the scanned image): Auto's exposure + baseline (v4 has
   // no exposure slider), the AutoSetup's density key (EV) and the operator's (Densità). Without the key a dark backlit frame that AutoSetup lifts by 2 EV
   // left its sky outside the map's dead zone: Hyper Tone luci 5 did nothing while the sky lost its blue (sunset, measured).
-  const gain = 2 ** (scanEv() + baselineEv() + (photo.auto?.[0] ?? 0) + u.labD * LAB_D_EV);   // the operator's density key too
-  if (photo.hyperBase?.gain !== gain) {
+  const key0 = scanEv() + baselineEv() + (photo.auto?.[0] ?? 0), gain = 2 ** (key0 + u.labD * LAB_D_EV);   // the operator's density key too
+  // While Densità is being dragged the map is kept (only its density key moved): a new map changes the input pass, so the
+  // developed film (cached on it, wgpu_backend film_key) was re-run on every step (the user's PC: ~270 ms a step instead of
+  // ~20-80). The render after the slider rests (labDRest) rebuilds it.
+  const dragD = performance.now() - labDMovedAt < LABD_REST_MS && photo.hyperBase?.key0 === key0;
+  if (photo.hyperBase?.gain !== gain && !dragD) {
     const { preview } = photo, { rgb, w, h } = thumbOf(preview, HYPER_THUMB_PX, true);   // a raw's mean thumb (raw.js rawMeanThumb)
-    photo.hyperBase = { ...hyperToneMap(rgb, w, h, LUMA[preview.raw || preview.p3 ? 'rec2020' : 'srgb'], gain, noiseAt(Math.max(w, h))[0]), gain };   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
+    photo.hyperBase = { ...hyperToneMap(rgb, w, h, LUMA[preview.raw || preview.p3 ? 'rec2020' : 'srgb'], gain, noiseAt(Math.max(w, h))[0]), gain, key0 };   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
     log(`hyper tone map ${photo.hyperBase.w}x${photo.hyperBase.h}`);
   }
   // the map spans the output frame as rendered (turned and cropped like it: the input pass samples it in output-frame px)
