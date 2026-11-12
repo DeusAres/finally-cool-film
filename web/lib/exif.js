@@ -258,3 +258,16 @@ export function insertExif(jpeg, seg) {
   out.set(j.subarray(from), 2 + seg.length);
   return out;
 }
+
+/** The exported JPEG (`result` from the encoder: jpeg bytes, width, height) with its metadata. The segments go right after SOI,
+ * JFIF dropped: inserted ICC, XMP, Exif so the file reads Exif, XMP, ICC (Exif first for iOS Photos). The description carries
+ * MARKER (what Photos search can find) and the film. `icc`: the output space's profile segment (icc.js). From app.js (4.45). */
+export async function withMetadata(result, file, film, space, icc, log) {
+  const desc = `${MARKER}, ${film}`;
+  let bytes = insertExif(result.jpeg, icc);
+  bytes = insertExif(bytes, xmpSegment(desc, [MARKER, 'Kodak Gold 200']));
+  const seg = await exportExif(file, desc, log);
+  bytes = insertExif(bytes, patchExif(seg, result.width, result.height, space === 'p3'));
+  log(`EXIF + marker (${seg.length} B)`);
+  return bytes;
+}

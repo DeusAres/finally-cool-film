@@ -87,3 +87,15 @@ export function fitInside(fw, fh, cw, ch, mat = 0) {
   const k = Math.min((cw - 2 * mat) / fw, (ch - 2 * mat) / fh);
   return { iw: Math.round(fw * k), ih: Math.round(fh * k) };
 }
+
+/** The Instagram canvas (cw × ch, RGB, filled with `mat`) with the supersampled render `full` (W × H RGB) Lanczos-downscaled in
+ * linear light to `fit` (fitInside: iw × ih), output-sharpened for screen and centred on it. From app.js (4.45). */
+export function igCanvas(full, W, H, fit, cw, ch, mat) {
+  const { iw, ih } = fit, small = downscale(full, W, H, iw, ih);
+  sharpenForScreen(small, iw, ih);
+  const canvas = new Uint8Array(cw * ch * 3);
+  for (let i = 0; i < cw * ch * 3; i += 3) canvas.set(mat, i);
+  const ox = (cw - iw) >> 1, oy = (ch - ih) >> 1;
+  for (let y = 0; y < ih; y++) canvas.set(small.subarray(y * iw * 3, (y + 1) * iw * 3), ((oy + y) * cw + ox) * 3);
+  return canvas;
+}

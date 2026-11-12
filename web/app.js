@@ -3,9 +3,10 @@ import { sleep, store, stripRows, PREVIEW_LONG_SIDE, PREVIEW_KPX, FRAME_UM, DESK
 import { drawHistogram as paintHistogram } from './lib/histogram.js';
 import { initViewport } from './lib/viewport.js';
 import { initPanel, PANEL_DEFAULT_VH } from './lib/panel.js';
+import { JPEG_QUALITY_DEFAULT, jpegDistance, PROGRESSIVE_PIXEL_LIMIT, startEncoder, openEncoder, download } from './lib/encoder.js';
 import { DISPLAY_GAIN_LUT } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
-import { MARKER, exportExif, xmpSegment, patchExif, insertExif } from './lib/exif.js';
+import { withMetadata } from './lib/exif.js';
 import { isRaw, loadRaw, uploadRaw, previewThumb, withRotation } from './lib/raw.js';
 import { internoParams } from './lib/interno.js';
 import { invertAnchors, invertUniform, invertCPU } from './lib/invert.js';
@@ -14,7 +15,7 @@ import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, INPUT_WGSL_V3, INPUT_WGSL_HT, inputUniform } from './lib/lens-gpu.js';
 import { dodgeBase, dodgeParams, dodgeArray, dodgeCPU } from './lib/dodge.js';
 import { LUMA, XYZ_TO_RGB } from './lib/color.js';
-import { downscale, sharpenForScreen, fitInside } from './lib/igout.js';
+import { igCanvas, fitInside } from './lib/igout.js';
 import { dustField, borderFields, drawDustFramed, compositeDust } from './lib/dust.js';
 import { FRAME_STYLES, FRAME_NAMES, frameMargins, drawFrame } from './lib/filmframe.js';
 import { OUTPUT_WGSL, packParams, toSpaceCPU } from './lib/output.js';
@@ -38,10 +39,6 @@ const IG_SUPER = 2;                // IG: the film is rendered at this × the po
 // INTERNO_EV off the scene exposure before the film: a pure function of the checkbox. The lab scanner's AutoSetup
 // (frontier.auto) decides what it does about the thin negative.
 const NO_AUTO = [0, 0, 0, 0];   // scanner AutoSetup result [d, c, m, y]: neutral
-const JPEG_QUALITY_DEFAULT = 90;   // export slider default: jpegli quality 90 = distance 1.0 (visually lossless), the pre-v3.15 fixed setting
-/** jpegli's quality -> butteraugli distance (jpegli_quality_to_distance): 90 -> 1.0, 100 -> 0.1 (largest files). */
-const jpegDistance = (q) => (q >= 30 ? 0.1 + (100 - q) * 0.09 : 53 / 3000 * q * q - 23 / 20 * q + 25);
-const PROGRESSIVE_PIXEL_LIMIT = 6e6; // progressive keeps all DCT coeffs in the wasm heap (~29 B/px): baseline above
 const BORDER_FRACTION = 0.01;     // mat (white, MAT_WHITE), fraction of the long side; normal export: thicker across the short side so the aspect is kept
 /** Base mat width near `b` (±3 px, closest first) whose scaled side b·k is closest to a whole number (k = long / short side). */
 const matBase = (b, k) => [0, -1, 1, -2, 2, -3, 3].map((d) => Math.max(1, b + d))
@@ -1013,52 +1010,11 @@ if (V4) {
 
 // ---------- export ----------
 // Full resolution rendered in tiles, one strip of tiles at a time; each strip
-// is streamed to jpegli in a worker and dropped. Neither the full float image
+// is streamed to jpegli in a worker (lib/encoder.js) and dropped. Neither the full float image
 // nor the full RGB image ever exists (in JS, wasm or on the GPU).
 // Each tile keeps the frame's physical pixel size (film_format_mm scaled to the
 // tile) and the same engine parameters as the preview, with an overlap margin cropped away.
-
-// The jpegli worker. A worker whose script or wasm failed to load never answers, and an export would wait on it for ever: it
-// posts 'ready' once jpegli is up and an export waits for that (ENCODER_READY_MS: generous, jpegli's ~200 KB wasm compiles
-// in well under a second; unmeasured on device). After an error, and after every export, the worker is replaced: its wasm heap never
-// shrinks and would keep the export's peak (hundreds of MB at 12 MP) for the whole session.
-const ENCODER_READY_MS = 20000;
-let encoder = null, encoderReady = null, encoderError = null, encoderDone = null;
-function startEncoder() {
-  encoder?.terminate();
-  const w = encoder = new Worker('export-worker.js');
-  let ready;
-  encoderReady = new Promise((r) => { ready = r; });
-  w.onmessage = ({ data }) => {
-    if (data.cmd === 'ready') ready(true);
-    else if (data.cmd === 'error') { encoderError = data.error; log('jpegli error: ' + data.error); encoderDone?.reject(new Error(data.error)); if (encoder === w) { w.terminate(); encoder = null; } }
-    else if (data.cmd === 'done') { log(`jpegli done ${data.width}x${data.height}, heap ${data.heapMB} MB`); encoderDone?.resolve(data); }
-  };
-  w.onerror = (e) => {
-    encoderError = e.message || 'worker error'; log('jpegli worker error: ' + encoderError);
-    encoderDone?.reject(new Error(encoderError));
-    if (encoder === w) { w.terminate(); encoder = null; }   // the next export starts a fresh one
-  };
-}
 startEncoder();
-/** The encoder, up and answering, or an error after ENCODER_READY_MS (the worker is then replaced). */
-async function encoderUp() {
-  if (!encoder) startEncoder();
-  if (await Promise.race([encoderReady, sleep(ENCODER_READY_MS).then(() => false)])) return;
-  startEncoder();
-  throw new Error('encoder JPEG non disponibile, riprova');
-}
-
-// iOS Safari fetches a download's blob only after the user confirms the sheet,
-// which can take any time: keep the URL until the next export (or a minute).
-let lastDownloadUrl = null;
-function download(blob, name) {
-  if (lastDownloadUrl) URL.revokeObjectURL(lastDownloadUrl);
-  const url = lastDownloadUrl = URL.createObjectURL(blob);
-  const a = Object.assign(document.createElement('a'), { href: url, download: name });
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => { if (lastDownloadUrl === url) { URL.revokeObjectURL(url); lastDownloadUrl = null; } }, 60000);
-}
 
 // The mat (Bordo bianco, IG canvas) is pure white (user, v4.10): it was the scanner's own paper white, ~244 / 244 / 246 on the
 // Frontier, which read as a grey-blue border; the photo's brightest whites may now look a touch less white beside it.
@@ -1100,9 +1056,7 @@ async function exportFull(ig = false) {
       : Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (cw * chh)));
     if (ig) forceSRGB = true;
     const longCap = Math.round(Math.max(fw, fh) * scale);
-    encoderError = null;   // from here, any error of this export's worker fails it (also one during the decode below)
-    await encoderUp();   // before the decode: a dead encoder fails the export at once
-    enc = encoder;       // this export's worker (encoder may be replaced by an error mid-way)
+    enc = await openEncoder();   // before the decode: a dead encoder fails the export at once
     status('Esporto: decodifica…');
     let frame;   // { data (CPU path only), w, h, p3, raw }
     if (rawPv) {
@@ -1140,20 +1094,19 @@ async function exportFull(ig = false) {
     const strips = Math.ceil(h / EXPORT_TILE), cols = Math.ceil(w / EXPORT_TILE);
 
     let tileBuf = null;   // reused across tiles
-    if (encoderError || encoder !== enc) throw new Error(encoderError || 'encoder JPEG terminato');
-    const done = new Promise((resolve, reject) => { encoderDone = { resolve, reject }; });
-    done.catch(() => {});
+    enc.check();
+    const done = enc.result();
     const quality = +$('quality').value, distance = jpegDistance(quality);
     log(`export quality ${quality} (distance ${distance.toFixed(2)})`);
     const igFull = ig ? new Uint8Array(W * H * 3) : null;   // IG: the whole supersampled render, downscaled at the end
-    if (!ig) enc.postMessage({ cmd: 'start', width: W, height: H, distance, progressive, yuv444: 1, border: borderX, borderY, mat });
+    if (!ig) enc.post({ cmd: 'start', width: W, height: H, distance, progressive, yuv444: 1, border: borderX, borderY, mat });
 
     // a strip of canvas rows from ey0: the frame over it, the dust, then to the encoder (IG: into the whole canvas)
     const emit = (strip, ey0, rows) => {
       frameIntoStrip(strip, style, fseed, w, h, mx, my, ey0, rows);
       dustIntoStrip(strip, w, h, mx, my, ey0, rows, dust, dustD);
       if (ig) igFull.set(strip, ey0 * W * 3);
-      else enc.postMessage({ cmd: 'rows', rgb: strip.buffer }, [strip.buffer]);
+      else enc.post({ cmd: 'rows', rgb: strip.buffer }, [strip.buffer]);
     };
     // a new strip: the mat's colour where the frame leaves its margin uncovered (Carrier limato outside the filed edge), the
     // image's rows written over it
@@ -1164,7 +1117,7 @@ async function exportFull(ig = false) {
       const ty = s * EXPORT_TILE, ch = Math.min(EXPORT_TILE, h - ty);
       const strip = matStrip(ch);
       for (let c = 0; c < cols; c++) {
-        if (encoderError) throw new Error(encoderError);
+        if (enc.failed()) throw new Error(enc.failed());
         const tx = c * EXPORT_TILE;
         status(`Esporto ${w}×${h}: tile ${s * cols + c + 1}/${strips * cols}…`);
         const x0 = Math.max(0, tx - EXPORT_PAD), y0 = Math.max(0, ty - EXPORT_PAD);
@@ -1185,31 +1138,19 @@ async function exportFull(ig = false) {
     frameRows(my + h, my);   // and below it
     if (ig) {
       status('Esporto IG: ridimensiono e rendo nitido…');
-      const { iw, ih } = igFit, small = downscale(igFull, W, H, iw, ih);
-      sharpenForScreen(small, iw, ih);
-      const canvas = new Uint8Array(IG_W * IG_H * 3), matRGB = mat;
-      for (let i = 0; i < IG_W * IG_H * 3; i += 3) canvas.set(matRGB, i);
-      const ox = (IG_W - iw) >> 1, oy = (IG_H - ih) >> 1;
-      for (let y = 0; y < ih; y++) canvas.set(small.subarray(y * iw * 3, (y + 1) * iw * 3), ((oy + y) * IG_W + ox) * 3);
-      log(`IG ${w}x${h} -> ${iw}x${ih} on ${IG_W}x${IG_H}`);
-      enc.postMessage({ cmd: 'start', width: IG_W, height: IG_H, distance, progressive: 2, yuv444: 1, border: 0 });
+      const canvas = igCanvas(igFull, W, H, igFit, IG_W, IG_H, mat);
+      log(`IG ${w}x${h} -> ${igFit.iw}x${igFit.ih} on ${IG_W}x${IG_H}`);
+      enc.post({ cmd: 'start', width: IG_W, height: IG_H, distance, progressive: 2, yuv444: 1, border: 0 });
       for (let y = 0; y < IG_H; y += 256) {
         const rows = canvas.slice(y * IG_W * 3, Math.min(IG_H, y + 256) * IG_W * 3);
-        enc.postMessage({ cmd: 'rows', rgb: rows.buffer }, [rows.buffer]);
+        enc.post({ cmd: 'rows', rgb: rows.buffer }, [rows.buffer]);
       }
     }
     status('Esporto: JPEG (jpegli)…');
-    enc.postMessage({ cmd: 'finish' });
+    enc.post({ cmd: 'finish' });
     const result = await done;
-    let bytes = result.jpeg;
-    // segments go right after SOI, JFIF dropped: inserted ICC, XMP, Exif so the file reads Exif, XMP, ICC (Exif first for iOS Photos)
     const film = `Kodak Gold 200${neutralScan() ? '' : `, ${scanner === 'frontier' ? 'Frontier' : 'Noritsu'} scan`}`;
-    const desc = `${MARKER}, ${film}`;   // the marker: what Photos search can find (exif.js)
-    bytes = insertExif(bytes, iccSegment(outSpace()));
-    bytes = insertExif(bytes, xmpSegment(desc, [MARKER, 'Kodak Gold 200']));
-    const seg = await exportExif(photo.file, desc, log);
-    bytes = insertExif(bytes, patchExif(seg, result.width, result.height, outSpace() === 'p3'));
-    log(`EXIF + marker (${seg.length} B)`);
+    const bytes = await withMetadata(result, photo.file, film, outSpace(), iccSegment(outSpace()), log);
     const blob = new Blob([bytes], { type: 'image/jpeg' });
     const base = (photo.file.name || 'foto').replace(/\.[^.]+$/, '');
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
@@ -1217,7 +1158,7 @@ async function exportFull(ig = false) {
     status(`Esportata: ${result.width}×${result.height}, ${(blob.size / 1e6).toFixed(1)} MB in ${secs} s`);
     download(blob, `${base}_gold200${ig ? '_ig' : ''}${border || (ig && bFrac) ? '_bordo' : ''}.jpg`);
   } catch (e) {
-    enc?.postMessage({ cmd: 'abort' });
+    enc?.post({ cmd: 'abort' });
     log('export error: ' + (e?.stack || e));
     status('Export fallito: ' + (e?.message || e) + ' (tocca qui per il log)');
   } finally {
