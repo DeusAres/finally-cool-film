@@ -223,10 +223,28 @@ export const GRAIN_BLUR = 0.45;
 // Shadows and lights barely move: there G is what the mid band answers to (G 1.5: shadows 0.107, but r50 +18 %), and B 4+
 // saturates (and leaves the CPU's sampled-kernel range at this pitch). The same multiplier on the slow crystals too: fine colour
 // +23 %, r50 +20 % (B 2): not taken.
+// Clump scale (user 2026-11-12: "non sembra Kodak Gold 200"): fitted at the finest scale, the grain had no power at 20-60 um:
+// on screen (box-resampled to 29.6 um/px) a per-pixel sand, r50 ~0.5 px at every tone (white noise), too coloured. Measured
+// (scratch kg200grain/: ours.py CPU grey ramp at 8.95 um, real.py, appwedge.py on the grain.py wedge) the grainstats.py way
+// (residual Lab - gauss 4 px, flattest 10 % of patches; fine = std(Lab - gauss 1) / std(Lab - gauss 4)) at both pitches;
+// the real targets: the 19 samples/kg200 scans at 29.6 um and its 6 Frontier scans at their 10-11.5 um (IJG q70 4:2:0, ours
+// through the same JPEG), IMG_1514 (a soft extreme) left out. The fast crystals now make the clumps: few (fast_count_frac
+// 0.02 -> 0.0023) and big (blur_fast 0.35 -> 1.2; their std falls as 1 / blur, their count keeps it: 1 / frac ~ blur^2), the
+// yellow layer's multiplier 3.5 -> 2.5 (its clumps are coarse already, less chroma at clump scale); scan_noise 0.0098 ->
+// 0.004 (a per-pixel, coloured component: the lights were ~1.6x the real at both pitches); amount 3.93 -> 4.51 for the mids.
+// Grey L* mids (45-65), before -> after (real median [p25-p75]):
+//   29.6 um, app wedge (Frontier) Lstd 2.96 -> 2.97 (2.63 [1.82-3.67]); r50 0.51 -> 0.87 px (0.74 [0.59-0.89]); fine 0.87 ->
+//     0.67 (0.75 [0.68-0.83]); C/L 0.94 -> 0.87 (0.71 [0.52-0.96]). Shadows (5-25) r50 0.54 -> 1.11 (0.94), 25-45 0.53 -> 1.01
+//     (0.91), lights (65-85) 0.49 -> 0.74 (0.58); lights Lstd 2.33 -> 2.16, still over the real 1.33 [0.96-1.57].
+//   ~11 um (CPU, JPEG): Lstd 5.19 -> 3.43 (6.19 [3.30-6.36]); r50 0.77 -> 0.99 px = 8.5 -> 10.9 um (0.84 [0.72-0.92]); fine
+//     0.75 -> 0.66 (0.72 [0.68-0.78]); C/L 0.31 -> 0.32 (0.34). Shadows r50 1.04 -> 1.68 px (1.09 [1.02-1.41]): too coarse here.
+// The price is the native pitch (export at 100 %): slightly coarse and soft (fine share at the low edge, shadows coarse) and
+// the mids at the low edge of the real strength; the screen (29.6 um) look was preferred: it is what the user sees. CPU (sf-eval) vs the app
+// at 29.6: r50 0.84 / 0.87, unverified beyond this wedge. Nessuno follows (29.6 um mids r50 0.53 -> 0.95, C/L 1.28 -> 1.09).
 export const V4_GRAIN = {
-  blur: 0.2, blur_fast: 0.35, fast_count_frac: 0.02, layer_blur_fast: [1, 1, 3.5], scan_sharpen_um: HS_UM, scan_sharpen: 0.85,
-  scan_noise: 0.0098, scan_noise_slope: 0.6, scan_noise_chroma: 0.35,   // scan_noise per 10 um pixel (0.011 at the fit's 8.95 um)
+  blur: 0.2, blur_fast: 1.2, fast_count_frac: 0.0023, layer_blur_fast: [1, 1, 2.5], scan_sharpen_um: HS_UM, scan_sharpen: 0.85,
+  scan_noise: 0.004, scan_noise_slope: 0.6, scan_noise_chroma: 0.35,   // scan_noise per 10 um pixel
 };
 
-export const V4_GRAIN_SCALE = 1.95;   // Grana's slider unit for this grain: the fitted amount (3.95) at the default Grana (V4_FILM)
+export const V4_GRAIN_SCALE = 2.24;   // Grana's slider unit for this grain: the fitted amount (4.51) at the default Grana (V4_FILM)
 export const GRAIN_UNIT = 0.65;   // slider 1× -> engine amount (= old slider 0.25 / old default 0.4)
