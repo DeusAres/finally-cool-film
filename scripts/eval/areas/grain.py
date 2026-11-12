@@ -55,8 +55,9 @@ def main():
     src = os.path.join(OUT, 'grain_wedge.jpg'); wedge(src)
     with socket.socket() as s:
         s.bind(('127.0.0.1', 0)); port = s.getsockname()[1]
-    srv = http.server.ThreadingHTTPServer(('127.0.0.1', port), functools.partial(http.server.SimpleHTTPRequestHandler, directory=os.path.join(ROOT, 'web')))
-    srv.RequestHandlerClass.log_message = lambda *a: None
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a): pass
+    srv = http.server.ThreadingHTTPServer(('127.0.0.1', port), functools.partial(Quiet, directory=os.path.join(ROOT, 'web')))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     got = {}
     for name, ui in SCANNERS.items():

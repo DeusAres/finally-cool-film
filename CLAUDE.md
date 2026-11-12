@@ -29,9 +29,11 @@ The user writes Italian; answer in Italian, short, human bullet points.
 - Prefer measuring to guessing: `scripts/eval/check.py` (browser, ~5 min), `engine/target/release/sf-eval` (CPU, fast).
 
 ## Verification
-- `python3 scripts/eval/check.py --auto` before every publish (user 2026-11-08: checks took ~11 min for any change): a smoke set
-  (~1 min) unless something that can change a render changed since the deploy branch (web/ beyond the interface, the
-  check's cases / harness, a case photo: check.py AUTO_RENDER / AUTO_UI; engine sources count once rebuilt into web/pkg), the full set otherwise. It shows what changed; an intended change is fine, an
+- `python3 scripts/eval/check.py --auto` before every publish. It runs the checks of the areas the changes touch (user
+  2026-11-12: grain changes check the grain, crop changes the geometry, slider changes the sliders; scripts/eval/areas,
+  check.py AREAS): geometry always (< 1 s), grain (~1 min), sliders (~3 min); the photo cases only for what can move the
+  look: a smoke set (~1 min) unless something that renders changed beyond the interface (AUTO_RENDER / AUTO_UI; engine
+  sources count once rebuilt into web/pkg), the full set (~14 min) then. One area alone: `--area NAME --area-only`. It shows what changed; an intended change is fine, an
   unexplained one is a bug. Never `--update` blindly; never `--cases __none__`.
 - Show the user before/after images for any look change; numbers alone are not enough.
 - Long jobs: check progress periodically and keep the user posted.

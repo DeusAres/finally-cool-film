@@ -55,11 +55,69 @@ AUTO_UI = re.compile(r'^(README\.md|VERSION|CLAUDE\.md|eval/.*\.md|scripts/masco
 AUTO_SMOKE = ['v4_sea', 'jpeg_export_ig']
 
 
-def auto_cases(cases):
-    """The cases for the changes since the deploy branch (committed or not): the smoke set unless a file that can change a
-    render (AUTO_RENDER, or a case's photo) changed outside the interface (AUTO_UI)."""
+# Area checks (user 2026-11-12: "se modifichi solo la grana, controlli la grana; se modifichi il ritaglio, il ritaglio; se
+# modifichi gli slider, gli slider"): each part of the app has its own check (scripts/eval/areas), run by --auto when a file of
+# its area changed since the deploy branch; the photo cases only for what can move the look. geometry (pure functions, < 1 s)
+# always runs. Area: (files, what it checks).
+AREAS = {
+    'geometry': (re.compile(r'^(web/lib/(tilt|cropui|filmframe)\.js|scripts/eval/areas/geometry\.mjs)$'),
+                 'Raddrizza, Ritaglia, quarter turns, frame margins: invariants (node, < 1 s)'),
+    'grain': (re.compile(r'^(web/pkg/.*|web/lib/look\.js|scripts/eval/areas/grain\.py|eval/check/grain_baseline\.json)$'),
+              'a flat wedge, Nessuno and Frontier: grain strength, colour, clump size, fine share (~1 min)'),
+    'sliders': (re.compile(r'^(web/app\.js|web/pkg/.*|web/lib/(look|lens|lens-gpu|hypertone|invert|output|color|sliders|interno|dodge)\.js|'
+                           r'scripts/eval/areas/sliders\.cjs|eval/check/sliders_baseline\.json)$'),
+                'every slider moves the image its way and by its size (~3 min)'),
+}
+
+
+def changed_files():
+    """Files changed since the deploy branch (committed or not)."""
     git = lambda *a: subprocess.run(['git', '-C', ROOT, *a], capture_output=True, text=True, check=True).stdout.split()
-    changed = sorted(set(git('diff', '--name-only', f'{DEPLOY}...HEAD') + git('diff', '--name-only', 'HEAD')))
+    return sorted(set(git('diff', '--name-only', f'{DEPLOY}...HEAD') + git('diff', '--name-only', 'HEAD')))
+
+
+def auto_areas(changed):
+    """The area checks the changes call for (geometry always), with the file that called each."""
+    out = {'geometry': 'always'}
+    for name, (rx, _) in AREAS.items():
+        hit = next((f for f in changed if rx.match(f)), None)
+        if hit:
+            out[name] = hit
+    return out
+
+
+def run_area(name, port, update):
+    """Run one area check; '' when it passed, else its report."""
+    py, node = sys.executable, 'node'
+    if name == 'geometry':
+        cmd = [node, os.path.join(ROOT, 'scripts', 'eval', 'areas', 'geometry.mjs')]
+    elif name == 'grain':
+        cmd = [py, os.path.join(ROOT, 'scripts', 'eval', 'areas', 'grain.py')] + (['--update'] if update else [])
+    else:
+        cmd = [node, os.path.join(ROOT, 'scripts', 'eval', 'areas', 'sliders.cjs'), f'http://127.0.0.1:{port}/index.html', sliders_photo()] + (['--update'] if update else [])
+    t0 = time.time()
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
+    out = (r.stdout + r.stderr).strip()
+    print(f'area {name:9s} {out.splitlines()[-1] if out else "(no output)"} [{time.time() - t0:.0f} s]')
+    return '' if r.returncode == 0 else out
+
+
+def sliders_photo():
+    """The sliders check's photo: a real Gold 200 scan (samples/kg200/IMG_1510) at 900 px (a small frame: ~3 min for every slider
+    on SwiftShader instead of ~15 at the preview's 2000), fixed mtime (the grain seed)."""
+    dst = os.path.join(ROOT, 'eval', 'out', 'areas', 'sliders_photo.jpg')
+    if not os.path.exists(dst):
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        im = Image.open(os.path.join(ROOT, 'samples', 'kg200', 'IMG_1510.jpeg')).convert('RGB')
+        k = 900 / max(im.size)
+        im.resize((round(im.size[0] * k), round(im.size[1] * k)), Image.LANCZOS).save(dst, quality=95)
+    os.utime(dst, (1_700_000_000, 1_700_000_000))
+    return dst
+
+
+def auto_cases(cases, changed):
+    """The photo cases for the changes: the smoke set unless a file that can change a render (AUTO_RENDER, or a case's photo)
+    changed outside the interface (AUTO_UI)."""
     photos = {c['photo'] for c in cases.values()}
     other = [f for f in changed if (AUTO_RENDER.match(f) or f in photos) and not AUTO_UI.match(f)]
     if other:
@@ -205,14 +263,24 @@ def main():
     ap.add_argument('--chart', action='store_true')
     ap.add_argument('--cases')
     ap.add_argument('--auto', action='store_true')
+    ap.add_argument('--area', help='area checks to run too (comma-separated: ' + ', '.join(AREAS) + ')')
+    ap.add_argument('--area-only', action='store_true', help='only the area checks (no photo case): a quick look at one area')
     ap.add_argument('--jobs', type=int, default=1)   # one Chromium at a time: two (plus a raw export) ran this container out of memory
     a = ap.parse_args()
 
     cases = json.load(open(os.path.join(ROOT, 'eval', 'check', 'cases.json')))['cases']
-    if a.cases:
+    areas = {n: 'asked' for n in a.area.split(',')} if a.area else {}
+    if a.auto:
+        changed = changed_files()
+        areas = {**auto_areas(changed), **areas}
+        for n, why in areas.items():
+            print(f'--auto: area {n} ({why}): {AREAS[n][1]}')
+    if a.area_only:
+        cases = {}
+    elif a.cases:
         cases = {k: v for k, v in cases.items() if k in a.cases.split(',')}
     elif a.auto:
-        cases = auto_cases(cases)
+        cases = auto_cases(cases, changed)
     os.makedirs(OUT, exist_ok=True)
     if not a.no_build:
         subprocess.run([os.path.join(ROOT, 'scripts', 'build-web.sh')], check=True, capture_output=True)
@@ -226,6 +294,7 @@ def main():
         with ThreadPoolExecutor(a.jobs) as ex:
             res = dict(zip(cases, ex.map(lambda kv: render(port, kv[1]['photo'], kv[1]['ui'], os.path.join(OUT, kv[0] + '.png'), kv[1].get('query', ''), kv[1].get('export')), cases.items())))
         print(f'renders: {len(cases)} in {time.time() - t0:.0f} s')
+        area_bad = {n: r for n in areas if (r := run_area(n, port, a.update))}
     finally:
         srv.terminate()
 
@@ -266,6 +335,8 @@ def main():
                 if dm:
                     bad.append(f'{k}: pixels differ from {a.compare} (max {dm})')
 
+    for n, r in area_bad.items():
+        bad.append(f'area {n}:\n    ' + '\n    '.join(r.splitlines()[-12:]))
     if a.update:
         base.update(metrics)
         json.dump(base, open(BASELINE, 'w'), indent=1, sort_keys=True)

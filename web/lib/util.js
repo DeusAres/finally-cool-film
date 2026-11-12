@@ -49,4 +49,6 @@ export const wf = (n) => (Number.isInteger(n) ? n.toFixed(1) : String(n));
 export const wv3 = (a) => `vec3<f32>(${a.map(wf).join(', ')})`;
 
 /** Desktop / tablet landscape: the sidebar layout (index.html's CSS, the same query; ui2.js its panel column). */
-export const DESK = matchMedia('(orientation: landscape) and (min-width: 900px) and (min-height: 500px)');
+// Outside a browser (node: the eval scripts and area checks import util.js) never desktop.
+export const DESK = typeof matchMedia === 'function' ? matchMedia('(orientation: landscape) and (min-width: 900px) and (min-height: 500px)')
+  : { matches: false, addEventListener() {} };
