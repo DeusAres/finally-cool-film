@@ -520,3 +520,17 @@ export function drawFrame(out, style, seed, W, H, x0, y0, w, h) {
     }
   }
 }
+
+/** The film frame over an RGB strip (rows y0.. of the export's canvas): its colour by its coverage (the whole border, the gate's
+ * edge). From app.js (4.45). */
+export function frameIntoStrip(strip, style, seed, w, h, mx, my, y0, rows) {
+  if (style === 'none') return;
+  const W = w + 2 * mx, f = new Uint8ClampedArray(W * rows * 4);
+  drawFrame(f, style, seed, w, h, 0, y0, W, rows);
+  for (let p = 0, j = 0; p < f.length; p += 4, j += 3) {
+    const a = f[p + 3];
+    if (!a) continue;
+    const t = a / 255;
+    strip[j] += (f[p] - strip[j]) * t; strip[j + 1] += (f[p + 1] - strip[j + 1]) * t; strip[j + 2] += (f[p + 2] - strip[j + 2]) * t;
+  }
+}

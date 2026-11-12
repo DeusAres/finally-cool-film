@@ -3,6 +3,7 @@ import { sleep, store, stripRows, PREVIEW_LONG_SIDE, PREVIEW_KPX, FRAME_UM, DESK
 import { drawHistogram as paintHistogram } from './lib/histogram.js';
 import { initViewport } from './lib/viewport.js';
 import { initPanel, PANEL_DEFAULT_VH } from './lib/panel.js';
+import { initCropUI } from './lib/cropui.js';
 import { JPEG_QUALITY_DEFAULT, jpegDistance, PROGRESSIVE_PIXEL_LIMIT, startEncoder, openEncoder, download } from './lib/encoder.js';
 import { DISPLAY_GAIN_LUT } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
@@ -16,8 +17,8 @@ import { INPUT_WGSL, INPUT_WGSL_V3, INPUT_WGSL_HT, inputUniform } from './lib/le
 import { dodgeBase, dodgeParams, dodgeArray, dodgeCPU } from './lib/dodge.js';
 import { LUMA, XYZ_TO_RGB } from './lib/color.js';
 import { igCanvas, fitInside } from './lib/igout.js';
-import { dustField, borderFields, drawDustFramed, compositeDust } from './lib/dust.js';
-import { FRAME_STYLES, FRAME_NAMES, frameMargins, drawFrame } from './lib/filmframe.js';
+import { dustField, borderFields, drawDustFramed, dustIntoStrip, releaseDustStrip } from './lib/dust.js';
+import { FRAME_STYLES, FRAME_NAMES, frameMargins, drawFrame, frameIntoStrip } from './lib/filmframe.js';
 import { OUTPUT_WGSL, packParams, toSpaceCPU } from './lib/output.js';
 import { frameMap, frameImage, cropPx, turnCrop, isFull, FULL } from './lib/tilt.js';
 import { tiltRuler } from './lib/ruler.js';
@@ -130,8 +131,9 @@ const sceneGain = (u) => 2 ** (u.ev - underEv() + baselineEv());
 let forceSRGB = false;   // IG export: sRGB output (P3 dulls saturated reds on Instagram)
 // Ritaglia (Trasforma; lib/tilt.js): the crop of the turned frame (fractions); while the Trasforma tab is open the whole frame
 // renders and the crop is drawn over it (cropEditing), elsewhere the crop is the output frame.
-let crop = FULL, cropEditing = false;
-const viewCrop = () => (cropEditing ? FULL : crop);
+const cropUI = initCropUI({ stage, view, active: () => !!photo, aspect: () => photo.preview.w / photo.preview.h,
+  onEdit: () => render(), onMove: () => histoSoon() });
+const viewCrop = () => (cropUI.editing() ? FULL : cropUI.crop());
 /** The output frame of a W×H source as rendered now: { ox, oy, w, h } (tilt.js cropPx). */
 const outFrame = (W, H) => cropPx(W, H, viewCrop());
 // Output space ('p3' | 'srgb'): v3, Display P3 for P3 photos (sRGB for IG and sRGB photos); v4, always sRGB (the photos end
@@ -521,7 +523,13 @@ async function renderDefault(key) {
 // ---------- histogram (overlay, top left; lib/histogram.js) ----------
 // While the crop is drawn (Trasforma), only the crop box's pixels.
 const histo = $('histo');
-const drawHistogram = (img) => paintHistogram(histo, img, cropEditing ? cropPx(img.width, img.height, crop) : null);
+const drawHistogram = (img) => paintHistogram(histo, img, cropUI.editing() ? cropPx(img.width, img.height, cropUI.crop()) : null);
+/** The histogram of the crop box, once per frame however many pointer moves arrive (iPhone: up to 120 a second; a pass reads
+ * ~0.75 M pixels of the preview). */
+let histoFrame = 0;
+function histoSoon() {
+  if (!histoFrame) histoFrame = requestAnimationFrame(() => { histoFrame = 0; if (photo?.after && !showingBefore) drawHistogram(photo.after); });
+}
 
 // ---------- dust & scratches (separate layer, dust.js) and the film frame (Cornice, filmframe.js) ----------
 // Drawn over the preview by the compositor and into the export strips; never
@@ -579,29 +587,6 @@ const newDustSeed = () => (Math.random() * 2 ** 32) >>> 0;
 // and every export (FNV-1a of name, size, date).
 const fileSeed = (f) => { let h = 2166136261; for (const ch of `${f.name}|${f.size}|${f.lastModified}`) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return h >>> 0; };
 
-/** Composite dust marks at amount `a` into an RGB strip: rows y0.. of the export's canvas (the w×h image with its mx / my frame). */
-function dustIntoStrip(strip, w, h, mx, my, y0, rows, a, dust) {
-  if (!a) return;
-  const W = w + 2 * mx, c = dustStripCanvas || (dustStripCanvas = document.createElement('canvas'));
-  if (c.width !== W || c.height !== rows) { c.width = W; c.height = rows; }   // resizing clears
-  const x = c.getContext('2d', { willReadFrequently: true });
-  x.clearRect(0, 0, W, rows);
-  drawDustFramed(x, dust.marks, dust.around, a, w, h, mx, my, 0, y0);
-  compositeDust(strip, x.getImageData(0, 0, W, rows).data);
-}
-/** The film frame over an RGB strip (rows y0.. of the canvas): its colour by its coverage (the whole border, the gate's edge). */
-function frameIntoStrip(strip, style, seed, w, h, mx, my, y0, rows) {
-  if (style === 'none') return;
-  const W = w + 2 * mx, f = new Uint8ClampedArray(W * rows * 4);
-  drawFrame(f, style, seed, w, h, 0, y0, W, rows);
-  for (let p = 0, j = 0; p < f.length; p += 4, j += 3) {
-    const a = f[p + 3];
-    if (!a) continue;
-    const t = a / 255;
-    strip[j] += (f[p] - strip[j]) * t; strip[j + 1] += (f[p + 1] - strip[j + 1]) * t; strip[j + 2] += (f[p + 2] - strip[j + 2]) * t;
-  }
-}
-let dustStripCanvas = null;
 
 let showingBefore = false;
 /** The 'before' view (A/B, a fresh preview): the source as decoded, turned and cropped like the render (Raddrizza, Ritaglia). */
@@ -632,7 +617,7 @@ compare.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ---------- zoom & pan (lib/viewport.js) ----------
 const viewport = initViewport({ stage, view, layers: [view, dustLayer, frameLayer, matLayer], label: $('zoomLabel'),
-  margins: () => frameM, active: () => !!photo, onChange: () => placeCrop() });
+  margins: () => frameM, active: () => !!photo, onChange: () => cropUI.place() });
 const fitToScreen = viewport.fit;
 $('fit').addEventListener('click', fitToScreen);
 
@@ -660,7 +645,7 @@ if (V4) {
     tabBtns.forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === t)));
     panes.forEach((p) => { p.hidden = p.dataset.pane !== t; });
     controls.scrollTop = 0;
-    setCropEditing(t === 'transform');   // Ritaglia: the whole frame with the crop box while Trasforma is open
+    cropUI.setEditing(t === 'transform');   // Ritaglia: the whole frame with the crop box while Trasforma is open
   };
   const savedTab = store.get('fcf_tab');
   if (tabBtns.some((b) => b.dataset.tab === savedTab)) showTab(savedTab);
@@ -793,7 +778,7 @@ async function rotate(quarters) {
         uploadRaw(sf, preview.raw);
       } else if (gpu) uploadFrame(preview.data, preview.w, preview.h);
       Object.assign(photo, { rot, preview, dodge: null, hyper: null, hyperBase: null });   // dodging base, Hyper Tone map: rebuilt from the turned thumb
-      for (let i = 0; i < Math.abs(q); i++) crop = turnCrop(crop, Math.sign(q));   // the same part of the photo stays cropped
+      for (let i = 0; i < Math.abs(q); i++) cropUI.turn((c) => turnCrop(c, Math.sign(q)));   // the same part of the photo stays cropped
       log(`rotate ${rot * 90}°, preview ${preview.w}x${preview.h}`);
       showPreview();
     }
@@ -809,13 +794,6 @@ async function rotate(quarters) {
 // The 90° turns (their buttons sit in Raddrizza's header since 4.36): when one lands, UI 2 commits it to undo / redo.
 const turn = (q) => rotate(q).then(() => ui2?.edited?.());
 $('rotL').addEventListener('click', () => turn(-1));
-// Export JPEG quality (File tab): only read by exportFull, never re-renders. Double tap the label: back to the default.
-{
-  const q = $('quality'), out = () => { q.nextElementSibling.textContent = `${q.value}%`; };
-  q.addEventListener('input', out);
-  q.previousElementSibling.addEventListener('dblclick', () => { q.value = JPEG_QUALITY_DEFAULT; out(); });
-  out();
-}
 $('rotR').addEventListener('click', () => turn(1));
 
 // ---------- transform: Raddrizza (tilt) ----------
@@ -826,125 +804,8 @@ const tiltDial = tiltRuler($('tiltRuler'), $('tilt'), $('tiltOut'), { onDrag: (o
 $('tilt').addEventListener('input', () => { if (photo) render(); });
 $('tiltLabel').addEventListener('dblclick', () => tiltDial.set(0));
 /** Back to no tilt and the whole frame without a render (new photo: its own first render follows). */
-function resetTransform() { $('tilt').value = 0; tiltDial.sync(); crop = FULL; setCropFormat('free'); }
+function resetTransform() { $('tilt').value = 0; tiltDial.sync(); cropUI.reset(); }
 
-// ---------- transform: Ritaglia (crop) ----------
-// While the Trasforma tab is open (cropEditing) the whole turned frame renders and #cropUI lies on the canvas: the crop box
-// (thirds grid), the cut-away part darkened, not removed (user). A corner resizes it (the opposite corner stays put), the box
-// drags. A format (Libero, Originale, the usual print / screen ratios, user) or the lock (the box's own ratio) keeps its
-// proportions; ⟲ turns the format (portrait <-> landscape). Moving it only moves the box (no render); leaving the tab renders
-// the crop as the output frame (lib/tilt.js). Azzera impostazioni and a new photo: the whole frame, Libero; a quarter turn turns
-// the box with the photo.
-const CROP_MIN_PX = 48;   // the smallest box side on screen (CSS px): the corner marks still fit inside (a choice)
-// Libero, Originale (the frame's ratio), then [short, long] sides, shown short:long in portrait and long:short in landscape
-// (the usual prints and screens: a choice)
-const CROP_FORMATS = ['free', 'orig', [1, 1], [4, 5], [3, 4], [2, 3], [9, 16]];
-const formatName = (f) => (f === 'free' ? 'Libero' : f === 'orig' ? 'Originale' : cropPortrait ? `${f[0]}:${f[1]}` : `${f[1]}:${f[0]}`);
-let cropFormat = 'free', cropPortrait = false;   // 'free' | 'orig' | 'lock' (the box's ratio) | [short, long]; its orientation
-const cropLocked = () => cropFormat !== 'free';
-const frameAspect = () => (photo ? photo.preview.w / photo.preview.h : 1);   // the turned frame's W / H (Raddrizza keeps it); no photo: shapes only
-const clamp01 = (v, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
-function placeCrop() {
-  const ui = $('cropUI'), on = cropEditing && !!photo;
-  ui.hidden = !on;
-  if (!on) return;
-  const s = stage.getBoundingClientRect(), v = view.getBoundingClientRect();
-  Object.assign(ui.style, { left: `${v.left - s.left}px`, top: `${v.top - s.top}px`, width: `${v.width}px`, height: `${v.height}px` });
-  Object.assign($('cropBox').style, { left: `${crop.x * 100}%`, top: `${crop.y * 100}%`, width: `${crop.w * 100}%`, height: `${crop.h * 100}%` });
-}
-/** Trasforma tab shown (`on`) or left: the whole frame with the box over it, or the crop rendered as the frame. */
-function setCropEditing(on) {
-  if (on === cropEditing) return;
-  cropEditing = on;
-  placeCrop();
-  if (photo) render();   // the output frame changes size: render resizes the canvas (sizeView)
-}
-/** The histogram of the crop box, once per frame however many pointer moves arrive (iPhone: up to 120 a second; a pass reads
- * ~0.75 M pixels of the preview). */
-let histoFrame = 0;
-function histoSoon() {
-  if (!histoFrame) histoFrame = requestAnimationFrame(() => { histoFrame = 0; if (photo?.after && !showingBefore) drawHistogram(photo.after); });
-}
-/** `c` resized from corner `h` ('nw' | 'ne' | 'sw' | 'se') by (dx, dy) (fractions of the frame), the opposite corner fixed. In
- * frame-height units (x × A, A = the frame's aspect) so that a locked box keeps its shape on screen. `min`: the smallest side. */
-function resizedCrop(c, h, dx, dy, A, min, locked) {
-  const west = h[1] === 'w', north = h[0] === 'n';
-  const ax = (west ? c.x + c.w : c.x) * A, ay = north ? c.y + c.h : c.y;          // the fixed corner
-  const roomW = west ? ax : A - ax, roomH = north ? ay : 1 - ay;                  // up to the frame's edge
-  let w = Math.min(roomW, Math.max(min, (west ? -1 : 1) * dx * A + c.w * A));
-  let hh = Math.min(roomH, Math.max(min, (north ? -1 : 1) * dy + c.h));
-  if (locked) {
-    const r = (c.w * A) / c.h;
-    if (w / hh > r) hh = w / r; else w = hh * r;                                  // follow the larger pull
-    const k = Math.min(1, roomW / w, roomH / hh);                                 // then back inside the frame
-    w *= k; hh *= k;
-  }
-  return { x: (west ? ax - w : ax) / A, y: north ? ay - hh : ay, w: w / A, h: hh };
-}
-$('cropBox').addEventListener('pointerdown', (e) => {
-  if (!photo) return;
-  e.preventDefault(); e.stopPropagation();
-  const box = e.currentTarget, h = e.target.dataset.h, v = view.getBoundingClientRect(), start = { ...crop }, x0 = e.clientX, y0 = e.clientY;
-  box.setPointerCapture(e.pointerId);
-  const move = (m) => {
-    const dx = (m.clientX - x0) / v.width, dy = (m.clientY - y0) / v.height;
-    crop = h ? resizedCrop(start, h, dx, dy, v.width / v.height, CROP_MIN_PX / v.height, cropLocked())
-      : { ...start, x: clamp01(start.x + dx, 0, 1 - start.w), y: clamp01(start.y + dy, 0, 1 - start.h) };
-    placeCrop();
-    histoSoon();   // the histogram follows the box
-  };
-  const end = () => { box.removeEventListener('pointermove', move); box.removeEventListener('pointerup', end); box.removeEventListener('pointercancel', end); };
-  box.addEventListener('pointermove', move); box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
-});
-/** The box re-fitted to the ratio `r` (W / H in px): as large as the frame allows, centred where the box was. */
-function fitCrop(r) {
-  const A = frameAspect(), cx = (crop.x + crop.w / 2) * A, cy = crop.y + crop.h / 2;   // frame-height units, as resizedCrop
-  const h = Math.min(1, A / r), w = h * r;
-  crop = { x: clamp01(cx - w / 2, 0, A - w) / A, y: clamp01(cy - h / 2, 0, 1 - h), w: w / A, h };
-}
-/** W / H of the format `f` in the current orientation (null: free). */
-function formatRatio(f) {
-  if (f === 'free') return null;
-  if (f === 'lock') return (crop.w * frameAspect()) / crop.h;
-  const r = f === 'orig' ? Math.min(frameAspect(), 1 / frameAspect()) : f[0] / f[1];   // short / long
-  return cropPortrait ? r : 1 / r;
-}
-/** Choose a format (`f` as in CROP_FORMATS, or 'lock'): the box takes its ratio (in the box's own orientation), the chips and
- * the lock show it. */
-function setCropFormat(f) {
-  cropFormat = f;
-  if (photo) cropPortrait = crop.h > crop.w * frameAspect();
-  if (photo && f !== 'free' && f !== 'lock') fitCrop(formatRatio(f));
-  for (const b of document.querySelectorAll('[data-crop-format]')) drawFormat(b, CROP_FORMATS[+b.dataset.cropFormat], f);
-  $('cropLock').setAttribute('aria-pressed', String(cropLocked()));
-  $('cropOut').textContent = f === 'lock' ? 'Bloccato' : formatName(f);
-  $('cropTurn').disabled = Array.isArray(f) && f[0] === f[1];   // a square has nothing to turn
-  placeCrop();
-  histoSoon();
-}
-/** A format's button: its shape (CROP_SHAPE_PX on the long side, in the current orientation; Libero a dashed square) and name. */
-const CROP_SHAPE_PX = 30;
-function drawFormat(b, g, chosen) {
-  const r = g === 'free' ? 1 : formatRatio(g) ?? 1, s = CROP_SHAPE_PX;
-  b.setAttribute('aria-checked', String(g === chosen));
-  b.innerHTML = `<i style="width:${Math.round(r >= 1 ? s : s * r)}px;height:${Math.round(r >= 1 ? s / r : s)}px"></i>${formatName(g)}`;
-}
-CROP_FORMATS.forEach((f, i) => {
-  const b = Object.assign(document.createElement('button'), { type: 'button' });
-  b.setAttribute('role', 'radio'); b.dataset.cropFormat = i;
-  b.addEventListener('click', () => { setCropFormat(f); b.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' }); });
-  $('cropFormats').append(b);
-});
-$('cropLock').addEventListener('click', () => setCropFormat(cropLocked() ? 'free' : 'lock'));
-$('cropTurn').addEventListener('click', () => {   // the box's proportions turned (portrait <-> landscape) about its centre
-  if (!photo) return;
-  fitCrop(crop.h / (crop.w * frameAspect()));
-  setCropFormat(cropFormat);
-});
-const cropWhole = () => { crop = FULL; setCropFormat('free'); };
-$('cropReset').addEventListener('click', cropWhole);
-$('cropLabel').addEventListener('dblclick', cropWhole);   // as Raddrizza's label: back to the start
-setCropFormat('free');
 
 async function runAuto() {
   // render() returns early while another render / export is in flight: wait first (the engine is shared).
@@ -1015,6 +876,13 @@ if (V4) {
 // Each tile keeps the frame's physical pixel size (film_format_mm scaled to the
 // tile) and the same engine parameters as the preview, with an overlap margin cropped away.
 startEncoder();
+// Export JPEG quality (File tab): only read by exportFull, never re-renders. Double tap the label: back to the default.
+{
+  const q = $('quality'), out = () => { q.nextElementSibling.textContent = `${q.value}%`; };
+  q.addEventListener('input', out);
+  q.previousElementSibling.addEventListener('dblclick', () => { q.value = JPEG_QUALITY_DEFAULT; out(); });
+  out();
+}
 
 // The mat (Bordo bianco, IG canvas) is pure white (user, v4.10): it was the scanner's own paper white, ~244 / 244 / 246 on the
 // Frontier, which read as a grey-blue border; the photo's brightest whites may now look a touch less white beside it.
@@ -1166,7 +1034,7 @@ async function exportFull(ig = false) {
     startEncoder();   // a fresh worker: the old one's wasm heap kept this export's peak
     setBusy(null);
     exporting = false;
-    if (dustStripCanvas) { dustStripCanvas.width = dustStripCanvas.height = 0; dustStripCanvas = null; }   // release the backing store
+    releaseDustStrip();
     $('export').disabled = $('exportIG').disabled = $('auto').disabled = $('newPhoto').disabled = $('pick').disabled = $('indoor').disabled = $('rotL').disabled = $('rotR').disabled = false;
     try {
       if (gpu) {   // back to the preview frame
@@ -1325,7 +1193,7 @@ if (V4) {
 if (UI2) {
   ui2 = initUI2({
     baseOf: sliderBase, renderDefault,
-    snapshot: () => ({ v: Object.fromEntries(UI2_IDS().map((id) => [id, $(id).value])), tilt: $('tilt').value, crop: { ...crop }, cropFormat, cropPortrait, scanner, rot: photo?.rot ?? 0 }),
+    snapshot: () => ({ v: Object.fromEntries(UI2_IDS().map((id) => [id, $(id).value])), tilt: $('tilt').value, ...cropUI.state(), scanner, rot: photo?.rot ?? 0 }),
     restore: async (st) => {
       // the 90° turn first (it turns the crop with it), then the crop as it was in that turn
       const q = photo ? (st.rot - photo.rot + 4) & 3 : 0;
@@ -1333,10 +1201,7 @@ if (UI2) {
       for (const [id, v] of Object.entries(st.v)) $(id).value = v;
       syncOutputs();
       $('tilt').value = st.tilt; tiltDial.sync();
-      crop = { ...st.crop }; cropPortrait = st.cropPortrait; cropFormat = st.cropFormat;
-      for (const b of document.querySelectorAll('[data-crop-format]')) drawFormat(b, CROP_FORMATS[+b.dataset.cropFormat], cropFormat);
-      $('cropOut').textContent = cropFormat === 'lock' ? 'Bloccato' : formatName(cropFormat);
-      placeCrop(); histoSoon();
+      cropUI.restore(st);
       if (st.scanner !== scanner) setScanner(st.scanner); else if (photo) { drawOverlays(); render(); }
     },
     openTab: (t) => document.querySelector(`#tabs [data-tab="${t}"]`)?.click(),

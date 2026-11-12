@@ -245,3 +245,18 @@ export function compositeDust(rgb, overlay) {
     rgb[j + 2] += (overlay[p + 2] - rgb[j + 2]) * t;
   }
 }
+
+// The export's dust (from app.js, 4.45): drawn per strip on one reused canvas, released after the export.
+let dustStripCanvas = null;
+/** Composite dust marks at amount `a` into an RGB strip: rows y0.. of the export's canvas (the w×h image with its mx / my frame). */
+export function dustIntoStrip(strip, w, h, mx, my, y0, rows, a, dust) {
+  if (!a) return;
+  const W = w + 2 * mx, c = dustStripCanvas || (dustStripCanvas = document.createElement('canvas'));
+  if (c.width !== W || c.height !== rows) { c.width = W; c.height = rows; }   // resizing clears
+  const x = c.getContext('2d', { willReadFrequently: true });
+  x.clearRect(0, 0, W, rows);
+  drawDustFramed(x, dust.marks, dust.around, a, w, h, mx, my, 0, y0);
+  compositeDust(strip, x.getImageData(0, 0, W, rows).data);
+}
+/** Release the strip canvas's backing store (after an export). */
+export function releaseDustStrip() { if (dustStripCanvas) { dustStripCanvas.width = dustStripCanvas.height = 0; dustStripCanvas = null; } }
