@@ -4,6 +4,7 @@ import { drawHistogram as paintHistogram } from './lib/histogram.js';
 import { initViewport } from './lib/viewport.js';
 import { initPanel, PANEL_DEFAULT_VH } from './lib/panel.js';
 import { initCropUI } from './lib/cropui.js';
+import { FORMAT, signPct, onThumbDoubleTap } from './lib/sliders.js';
 import { JPEG_QUALITY_DEFAULT, jpegDistance, PROGRESSIVE_PIXEL_LIMIT, startEncoder, openEncoder, download } from './lib/encoder.js';
 import { DISPLAY_GAIN_LUT } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
@@ -15,17 +16,17 @@ import { iccSegment } from './lib/icc.js';
 import { extractLens, lensGeometry, lensActive } from './lib/lens.js';
 import { INPUT_WGSL, INPUT_WGSL_V3, INPUT_WGSL_HT, inputUniform } from './lib/lens-gpu.js';
 import { dodgeBase, dodgeParams, dodgeArray, dodgeCPU } from './lib/dodge.js';
-import { LUMA, XYZ_TO_RGB } from './lib/color.js';
+import { LUMA, lightGains } from './lib/color.js';
 import { igCanvas, fitInside } from './lib/igout.js';
 import { dustField, borderFields, drawDustFramed, dustIntoStrip, releaseDustStrip } from './lib/dust.js';
-import { FRAME_STYLES, FRAME_NAMES, frameMargins, drawFrame, frameIntoStrip } from './lib/filmframe.js';
+import { FRAME_STYLES, frameMargins, drawFrame, frameIntoStrip } from './lib/filmframe.js';
 import { OUTPUT_WGSL, packParams, toSpaceCPU } from './lib/output.js';
 import { frameMap, frameImage, cropPx, turnCrop, isFull, FULL } from './lib/tilt.js';
 import { tiltRuler } from './lib/ruler.js';
 import { hyperToneMap, hyperArray, hyperGainCPU } from './lib/hypertone.js';
 import { attachTips } from './lib/tips.js';
 import { initUI2 } from './lib/ui2.js';
-import { GRAD_NAMES, GRAIN_BLUR, GRAIN_UNIT, HS_MAX, HS_T0, HS_T1, HS_UM, HYPER_NAMES, HYPER_THUMB_PX, LAB_D_EV, NARROWBAND, SCATTER_SCALE, TONE_NAMES, V4_AUTO, V4_DIR, V4_FILM, V4_FRONTIER, V4_GRAIN, V4_GRAIN_SCALE, V4_NEUTRAL_SIGMA, V4_NORITSU, V4_NORITSU_AUTO, V4_STOCK, V4_TOE_SLOPE, frontierCmy, hyperLevel, labKeys, labModel } from './lib/look.js';
+import { GRAIN_BLUR, GRAIN_UNIT, HS_MAX, HS_T0, HS_T1, HS_UM, HYPER_THUMB_PX, LAB_D_EV, NARROWBAND, SCATTER_SCALE, V4_AUTO, V4_DIR, V4_FILM, V4_FRONTIER, V4_GRAIN, V4_GRAIN_SCALE, V4_NEUTRAL_SIGMA, V4_NORITSU, V4_NORITSU_AUTO, V4_STOCK, V4_TOE_SLOPE, frontierCmy, hyperLevel, labKeys, labModel } from './lib/look.js';
 
 // Engine default; sets the physical pixel size of the engine's own effects (grain, halation, DIR diffusion) as the frame's
 // long side in mm. Not util.js FRAME_UM (36 mm, the 24×36 frame, for the JS effects): the engine's look was tuned at 35,
@@ -97,25 +98,6 @@ const lensOf = (u) => ({ ca: u.ca * u.ca, vignette: u.vignette, falloff: u.fallo
 /** Interno (lib/interno.js, one source of truth): a pure function of the checkbox (or of `on`); null when off. */
 const interno = (on = $('indoor')?.checked) => (photo && on ? internoParams() : null);
 const underEv = (on) => interno(on)?.under ?? 0;
-// Temperatura luce: colour of the light on the scene, before the film (Gold 200 is daylight film). Slider v (K): the light is
-// LIGHT_REF - v kelvin (right = warmer light); gains = Planckian white at that temperature / at LIGHT_REF, in the engine input
-// space, normalised to luma 1 (no exposure change). v = 0 -> exactly [1, 1, 1] (identical to before).
-const LIGHT_REF = 5500;
-function planckRgb(T, space) {   // Kim et al. 2002 cubic fit of the Planckian locus (1667-25000 K), Y = 1
-  const t = 1e3 / T, x = T < 4000 ? -0.2661239 * t ** 3 - 0.2343589 * t ** 2 + 0.8776956 * t + 0.179910
-    : -3.0258469 * t ** 3 + 2.1070379 * t ** 2 + 0.2226347 * t + 0.240390;
-  const y = T < 2222 ? -1.1063814 * x ** 3 - 1.34811020 * x ** 2 + 2.18555832 * x - 0.20219683
-    : T < 4000 ? -0.9549476 * x ** 3 - 1.37418593 * x ** 2 + 2.09137015 * x - 0.16748867
-      : 3.0817580 * x ** 3 - 5.87338670 * x ** 2 + 3.75112997 * x - 0.37001483;
-  const XYZ = [x / y, 1, (1 - x - y) / y];
-  return XYZ_TO_RGB[space].map((r) => r[0] * XYZ[0] + r[1] * XYZ[1] + r[2] * XYZ[2]);
-}
-function lightGains(v, space) {
-  if (!v) return [1, 1, 1];
-  const a = planckRgb(LIGHT_REF - v, space), b = planckRgb(LIGHT_REF, space), g = a.map((c, i) => c / b[i]);
-  const L = LUMA[space], n = L[0] * g[0] + L[1] * g[1] + L[2] * g[2];
-  return g.map((c) => c / n);
-}
 const sceneWb = (on, space, temp) => {
   const g = interno(on)?.gains ?? [1, 1, 1], t = lightGains(temp, space);
   return [g[0] * t[0], g[1] * t[1], g[2] * t[2]];
@@ -1069,43 +1051,8 @@ $('logCopy').addEventListener('click', async () => {
 
 function status(msg, action = '') { const el = $('status'); el.textContent = msg; el.dataset.action = action; }
 
-const sign = (v) => (v > 0 ? '+' : '');
-const pct = (v) => `${Math.round(v * 100)}`;
-const mult = (v) => (v === 0 ? 'off' : `${v.toFixed(1)}×`);
-const mult2 = (v) => (v === 0 ? 'off' : `${v.toFixed(2)}×`);
-const pctOff = (v) => (v === 0 ? 'off' : pct(v));
-const signPct = (v) => `${sign(v)}${pct(v)}`;
-const FORMAT = {
-  ev: (v) => `${sign(v)}${v.toFixed(1)}`,
-  contrast: signPct, highlight: signPct, whites: signPct,
-  mshift: (v) => `${sign(v)}${v}`, yshift: (v) => `${sign(v)}${v}`, vibrance: (v) => (v === 0 ? 'off' : `${v}`), temp: (v) => `${LIGHT_REF - v} K`,
-  grain: mult2, halation: mult,
-  ca: pctOff, vignette: pctOff,
-  falloff: pct,
-  texture: signPct, clarity: signPct, sharp: signPct, dust: pctOff, frame: (v) => FRAME_NAMES[FRAME_STYLES[v]], black: pctOff, htHi: (v) => HYPER_NAMES[v], htLo: (v) => HYPER_NAMES[v], hypersharp: pctOff,
-  labD: (v) => `${sign(v)}${v}`, labGrad: (v) => GRAD_NAMES[v + 3], labHi: (v) => TONE_NAMES[v + 1], labLo: (v) => TONE_NAMES[v + 1],
-  labSat: (v) => `${sign(v)}${v}`, labBright: (v) => `${sign(v)}${v}`, nbBright: (v) => `${sign(v)}${v}`,
-};
 const DUST_RESEED = 0.27;   // Rimescola with Polvere off turns it on at this amount (the default before v3.33)
 const AUTO_EV_MIN = -2, AUTO_EV_MAX = 2.5;   // Auto's exposure range, see autoSetup
-// Double tap on a slider's thumb (or its label): back to 0 / off, whatever its default (like Azzera impostazioni for one slider).
-// A tap is a short press that barely moves; the two taps must both land on the thumb, so a double tap on the track never resets.
-function onThumbDoubleTap(input, fn) {
-  let down = null, last = null;
-  const nearThumb = (x) => {
-    const r = input.getBoundingClientRect(), t = 20;   // native thumb ~16-20 px
-    const f = (+input.value - +input.min) / (+input.max - +input.min);
-    return Math.abs(x - (r.left + t / 2 + f * (r.width - t))) <= 22;
-  };
-  input.addEventListener('pointerdown', (e) => { down = nearThumb(e.clientX) ? { x: e.clientX, y: e.clientY, t: e.timeStamp } : null; });
-  input.addEventListener('pointerup', (e) => {
-    const tap = down && e.timeStamp - down.t < 300 && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 8;
-    down = null;
-    if (!tap) { last = null; return; }
-    if (last && e.timeStamp - last < 400) { last = null; fn(); } else last = e.timeStamp;
-  });
-  input.addEventListener('pointercancel', () => { down = null; last = null; });
-}
 /** The v4 grain for the chosen scanner: Scanner 'Nessuno' (a neutral read, no lab machine) has no lab scanner noise. Checked on
  * the gold200 dataset (eval/gold200: the real negatives' narrowband raw scans at full resolution, 11.6 um/px, inverted as
  * invert.js does, vs the app's export of the same scenes' digital frames, flat patches by tone): grain std 2.3 / 7.9 / 7.7 /

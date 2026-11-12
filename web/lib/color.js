@@ -90,3 +90,23 @@ fn displayGain(m: f32) -> f32 {
   if (i >= ${SQRT_N}u) { return ${arr}[${SQRT_N}u]; }
   return mix(${arr}[i], ${arr}[i + 1u], f - f32(i));
 }`;
+
+// Temperatura luce: colour of the light on the scene, before the film (Gold 200 is daylight film). Slider v (K): the light is
+// LIGHT_REF - v kelvin (right = warmer light); gains = Planckian white at that temperature / at LIGHT_REF, in the engine input
+// space, normalised to luma 1 (no exposure change). v = 0 -> exactly [1, 1, 1] (identical to before).
+export const LIGHT_REF = 5500;
+export function planckRgb(T, space) {   // Kim et al. 2002 cubic fit of the Planckian locus (1667-25000 K), Y = 1
+  const t = 1e3 / T, x = T < 4000 ? -0.2661239 * t ** 3 - 0.2343589 * t ** 2 + 0.8776956 * t + 0.179910
+    : -3.0258469 * t ** 3 + 2.1070379 * t ** 2 + 0.2226347 * t + 0.240390;
+  const y = T < 2222 ? -1.1063814 * x ** 3 - 1.34811020 * x ** 2 + 2.18555832 * x - 0.20219683
+    : T < 4000 ? -0.9549476 * x ** 3 - 1.37418593 * x ** 2 + 2.09137015 * x - 0.16748867
+      : 3.0817580 * x ** 3 - 5.87338670 * x ** 2 + 3.75112997 * x - 0.37001483;
+  const XYZ = [x / y, 1, (1 - x - y) / y];
+  return XYZ_TO_RGB[space].map((r) => r[0] * XYZ[0] + r[1] * XYZ[1] + r[2] * XYZ[2]);
+}
+export function lightGains(v, space) {
+  if (!v) return [1, 1, 1];
+  const a = planckRgb(LIGHT_REF - v, space), b = planckRgb(LIGHT_REF, space), g = a.map((c, i) => c / b[i]);
+  const L = LUMA[space], n = L[0] * g[0] + L[1] * g[1] + L[2] * g[2];
+  return g.map((c) => c / n);
+}
