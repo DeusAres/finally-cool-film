@@ -14,6 +14,12 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.44**: **Slider più veloci**: mentre trascini uno slider che ricalcola la pellicola (Esposizione, Temperatura, Grana,
+  Halation, Hyper Tone, gli effetti di obiettivo) l'anteprima si fa a metà lato (~4x meno pixel; GPU software: 2,8 s invece di
+  13-15) e torna a piena risoluzione 250 ms dopo che lo slider si ferma (stessi pixel di un render normale; istogramma,
+  mascotte ed export solo sui render pieni). Gli slider dello scanner restano pieni: riusano la pellicola già sviluppata.
+  **Densità con Hyper Tone acceso** ricalcolava la pellicola a ogni passo (sul PC dell'utente ~270 ms invece di ~20-80): ora la
+  mappa di Hyper Tone resta ferma durante il trascinamento e si rifà una volta a slider fermo.
 - **v4.43**: **Modalità Movie** (desktop): il pulsante a schermo accanto alla cartella sposta foto e pannello a destra e lascia
   libero il 46 % sinistro della finestra, per un video in Picture-in-Picture mentre si modifica; resta ricordata. Motore: il
   test GPU/CPU della grana per strato ora lavora alla scala dell'anteprima (prima passava comunque) e conferma la GPU;
