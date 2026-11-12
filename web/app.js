@@ -1,5 +1,8 @@
 import { sf, bootEngine, FILM, PAPER, BASE_PARAMS, deepMerge, inputParams, decodeRGBA, turnRGBA, forEachStrip, extractLinear, jpegThumb, THUMB_PX, PACK_LUT } from './lib/common.js';
-import { sleep, store, stripRows, PREVIEW_LONG_SIDE, PREVIEW_KPX, FRAME_UM } from './lib/util.js';
+import { sleep, store, stripRows, PREVIEW_LONG_SIDE, PREVIEW_KPX, FRAME_UM, DESK } from './lib/util.js';
+import { drawHistogram as paintHistogram } from './lib/histogram.js';
+import { initViewport } from './lib/viewport.js';
+import { initPanel, PANEL_DEFAULT_VH } from './lib/panel.js';
 import { DISPLAY_GAIN_LUT } from './lib/color.js';
 import { log, logText, prevLogText, setBusy, takeCrashMarker } from './lib/debuglog.js';
 import { MARKER, exportExif, xmpSegment, patchExif, insertExif } from './lib/exif.js';
@@ -518,43 +521,10 @@ async function renderDefault(key) {
   }
 }
 
-// ---------- histogram (overlay, top left) ----------
-// RGB + luminance of what is on screen, from the 8-bit display pixels (every
-// other pixel in both directions is plenty). Square-root scale against the
-// tallest bin that is not a clipped end: a dark or sky-heavy frame keeps a
-// readable shape instead of one spike and a flat line. While the crop is drawn (Trasforma), only the crop box's pixels.
-const histo = $('histo'), hctx = histo.getContext('2d');
-const HBINS = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
-function drawHistogram(img) {
-  const bins = HBINS;
-  for (const b of bins) b.fill(0);
-  const { data, width } = img, r = cropEditing ? cropPx(img.width, img.height, crop) : { ox: 0, oy: 0, w: img.width, h: img.height };
-  for (let y = r.oy; y < r.oy + r.h; y += 2) {
-    for (let i = (y * width + r.ox) * 4, end = i + r.w * 4; i < end; i += 8) {
-      const r = data[i], g = data[i + 1], b = data[i + 2];
-      bins[0][r]++; bins[1][g]++; bins[2][b]++;
-      bins[3][(r * 54 + g * 183 + b * 19) >> 8]++;
-    }
-  }
-  let max = 1;
-  for (const h of bins) for (let v = 1; v < 255; v++) max = Math.max(max, h[v]);
-  max = Math.sqrt(max);
-  const W = histo.width, H = histo.height;
-  hctx.clearRect(0, 0, W, H);
-  const area = (h, style, op) => {
-    hctx.globalCompositeOperation = op;
-    hctx.fillStyle = style;
-    hctx.beginPath(); hctx.moveTo(0, H);
-    for (let v = 0; v < 256; v++) hctx.lineTo(v * W / 255, H - Math.min(1, Math.sqrt(h[v]) / max) * (H - 2));
-    hctx.lineTo(W, H); hctx.closePath(); hctx.fill();
-  };
-  area(bins[3], 'rgba(200,200,200,0.35)', 'source-over');
-  area(bins[0], 'rgba(255,60,60,0.55)', 'lighter');
-  area(bins[1], 'rgba(60,255,60,0.55)', 'lighter');
-  area(bins[2], 'rgba(70,110,255,0.6)', 'lighter');
-  hctx.globalCompositeOperation = 'source-over';
-  histo.style.display = 'block';
-}
+// ---------- histogram (overlay, top left; lib/histogram.js) ----------
+// While the crop is drawn (Trasforma), only the crop box's pixels.
+const histo = $('histo');
+const drawHistogram = (img) => paintHistogram(histo, img, cropEditing ? cropPx(img.width, img.height, crop) : null);
 
 // ---------- dust & scratches (separate layer, dust.js) and the film frame (Cornice, filmframe.js) ----------
 // Drawn over the preview by the compositor and into the export strips; never
@@ -663,115 +633,15 @@ compare.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropa
 for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) compare.addEventListener(ev, () => showBefore(false));
 compare.addEventListener('contextmenu', (e) => e.preventDefault());
 
-// ---------- zoom & pan (CSS transform; canvas stays centred in the stage) ----------
-
-const MIN_ZOOM = 0.05, MAX_ZOOM = 6;
-let zoom = 1, panX = 0, panY = 0, fitted = true;
-
-function applyTransform() {
-  view.style.transform = dustLayer.style.transform = frameLayer.style.transform = matLayer.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
-  placeCrop();
-  // 100% = one image pixel per device pixel.
-  $('zoomLabel').textContent = photo ? `${Math.round(zoom * devicePixelRatio * 100)}%` : '';
-}
-
-function fitToScreen() {
-  if (!photo) return;
-  const r = stage.getBoundingClientRect(), pad = 8;
-  const fw = view.width + 2 * frameM.mx, fh = view.height + 2 * frameM.my;   // the image with its film frame
-  zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min((r.width - pad * 2) / fw, (r.height - pad * 2) / fh)));
-  panX = panY = 0; fitted = true;
-  applyTransform();
-}
-
-// Zoom keeping the viewport point (clientX, clientY) fixed; default: stage centre.
-function setZoom(z, clientX, clientY) {
-  if (!photo) return;
-  z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
-  const r = stage.getBoundingClientRect();
-  const cx = (clientX ?? r.left + r.width / 2) - r.left - r.width / 2;
-  const cy = (clientY ?? r.top + r.height / 2) - r.top - r.height / 2;
-  const px = (cx - panX) / zoom, py = (cy - panY) / zoom;
-  zoom = z; panX = cx - px * zoom; panY = cy - py * zoom; fitted = false;
-  applyTransform();
-}
-
-stage.addEventListener('wheel', (e) => { if (!photo) return; e.preventDefault(); setZoom(zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15), e.clientX, e.clientY); }, { passive: false });
-
-let dragging = false, lastX = 0, lastY = 0, pinchDist = 0, pinchZoom = 1, lastTap = 0;
-const dist = (a, b) => Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
-stage.addEventListener('touchstart', (e) => {
-  if (!photo || e.target.closest('.overlay')) return;
-  if (e.touches.length === 1) {
-    dragging = true; lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
-    // Double tap: toggle fit ↔ 100% at the tapped point.
-    const now = performance.now();
-    if (now - lastTap < 300) { fitted ? setZoom(1 / devicePixelRatio, lastX, lastY) : fitToScreen(); lastTap = 0; }
-    else lastTap = now;
-  } else if (e.touches.length === 2) {
-    dragging = false; pinchDist = dist(e.touches[0], e.touches[1]); pinchZoom = zoom;
-  }
-}, { passive: true });
-stage.addEventListener('touchmove', (e) => {
-  if (!photo) return;
-  if (e.touches.length === 1 && dragging) {
-    e.preventDefault();
-    const t = e.touches[0];
-    panX += t.clientX - lastX; panY += t.clientY - lastY; lastX = t.clientX; lastY = t.clientY; fitted = false;
-    applyTransform();
-  } else if (e.touches.length === 2) {
-    e.preventDefault();
-    const [a, b] = e.touches;
-    setZoom(pinchZoom * dist(a, b) / pinchDist, (a.clientX + b.clientX) / 2, (a.clientY + b.clientY) / 2);
-  }
-}, { passive: false });
-stage.addEventListener('touchend', (e) => { if (e.touches.length === 0) dragging = false; });
-stage.addEventListener('mousedown', (e) => { if (!photo || e.target.closest('.overlay')) return; dragging = true; lastX = e.clientX; lastY = e.clientY; });
-window.addEventListener('mousemove', (e) => {
-  if (!dragging || e.buttons === 0) return;
-  panX += e.clientX - lastX; panY += e.clientY - lastY; lastX = e.clientX; lastY = e.clientY; fitted = false;
-  applyTransform();
-});
-window.addEventListener('mouseup', () => { dragging = false; });
-stage.addEventListener('dblclick', (e) => { if (photo) fitted ? setZoom(1 / devicePixelRatio, e.clientX, e.clientY) : fitToScreen(); });
+// ---------- zoom & pan (lib/viewport.js) ----------
+const viewport = initViewport({ stage, view, layers: [view, dustLayer, frameLayer, matLayer], label: $('zoomLabel'),
+  margins: () => frameM, active: () => !!photo, onChange: () => placeCrop() });
+const fitToScreen = viewport.fit;
 $('fit').addEventListener('click', fitToScreen);
-// The stage also changes size when the slider panel is resized.
-new ResizeObserver(() => { if (fitted) fitToScreen(); }).observe(stage);
 
-// ---------- resizable slider panel ----------
-// Drag the grip to trade photo area for sliders; the height is remembered.
-const controls = $('controls'), grip = $('grip');
-const PANEL_MIN = 0, PANEL_MAX_VH = 0.6;
-const setPanel = (px) => {
-  const h = Math.round(Math.max(PANEL_MIN, Math.min(innerHeight * PANEL_MAX_VH, px)));
-  controls.style.height = h + 'px';
-  return h;
-};
-const applySavedPanel = () => { const saved = +store.get('fcf_panel'); if (saved > 0) setPanel(saved); };
-applySavedPanel();
-// Desktop / tablet landscape (same query as the CSS): sidebar layout, no grip, the CSS ignores the inline height.
-// Back to the bottom sheet: re-apply the saved height, clamped to the current window.
-const desk = matchMedia('(orientation: landscape) and (min-width: 900px) and (min-height: 500px)');
-desk.addEventListener('change', () => { if (!desk.matches) applySavedPanel(); });
-let gripY = 0, gripH = 0;
-grip.addEventListener('pointerdown', (e) => {
-  gripY = e.clientY; gripH = controls.getBoundingClientRect().height;
-  grip.setPointerCapture(e.pointerId); grip.classList.add('drag');
-});
-grip.addEventListener('pointermove', (e) => { if (grip.hasPointerCapture(e.pointerId)) setPanel(gripH + gripY - e.clientY); });
-const endGrip = (e) => {
-  if (!grip.hasPointerCapture?.(e.pointerId)) return;
-  grip.releasePointerCapture(e.pointerId); grip.classList.remove('drag');
-  store.set('fcf_panel', String(Math.max(1, Math.round(controls.getBoundingClientRect().height))));   // never '0': a collapsed panel must read back as saved
-};
-grip.addEventListener('pointerup', endGrip);
-grip.addEventListener('pointercancel', endGrip);
-// Double tap the grip: collapse ↔ default.
-grip.addEventListener('dblclick', () => {
-  const h = controls.getBoundingClientRect().height;
-  const next = h > 8 ? setPanel(0) : setPanel(innerHeight * 0.18);
-  store.set('fcf_panel', String(next || 1));
-});
+// ---------- resizable slider panel (lib/panel.js) ----------
+const controls = $('controls');
+const setPanel = initPanel(controls, $('grip'));
 
 // Bottom tab bar: one section of sliders at a time; tapping while collapsed expands the sheet.
 /** v4: a slider's default, what Azzera gives it (UI 2): the photo's Auto exposure, the film's grain / halation, else 0. */
@@ -799,7 +669,7 @@ if (V4) {
   if (tabBtns.some((b) => b.dataset.tab === savedTab)) showTab(savedTab);
   tabBtns.forEach((b) => b.addEventListener('click', () => {
     showTab(b.dataset.tab); store.set('fcf_tab', b.dataset.tab);
-    if (!desk.matches && controls.getBoundingClientRect().height <= 8) store.set('fcf_panel', String(setPanel(innerHeight * 0.18) || 1));
+    if (!DESK.matches && controls.getBoundingClientRect().height <= 8) store.set('fcf_panel', String(setPanel(innerHeight * PANEL_DEFAULT_VH) || 1));
   }));
 }
 
@@ -1441,14 +1311,14 @@ for (const id of Object.keys(FORMAT)) {
     syncOutputs();
     if (!OVERLAY_ONLY.has(id)) { render(); return; }
     drawOverlays();
-    if (id === 'frame' && fitted) fitToScreen();   // the frame changes the fitted size
+    if (id === 'frame' && viewport.isFitted()) fitToScreen();   // the frame changes the fitted size
   };
   $(id).addEventListener('input', () => { if (!OVERLAY_ONLY.has(id)) sliderInput(id); update(); });
   const zero = () => { $(id).value = 0; update(); };
   $(id).previousElementSibling.addEventListener('dblclick', zero);
   onThumbDoubleTap($(id), zero);
 }
-for (const id of ['borderPct', 'borderColor']) $(id).addEventListener('input', () => { drawOverlays(); if (fitted) fitToScreen(); });
+for (const id of ['borderPct', 'borderColor']) $(id).addEventListener('input', () => { drawOverlays(); if (viewport.isFitted()) fitToScreen(); });
 $('reseed').addEventListener('click', () => {
   if (!photo) return;
   photo.dustSeed = newDustSeed();

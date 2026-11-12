@@ -47,3 +47,6 @@ export function turnRows(src, w, h, q, y0, n, out) {
 // WGSL literals for shaders assembled in JS: a float always has its point.
 export const wf = (n) => (Number.isInteger(n) ? n.toFixed(1) : String(n));
 export const wv3 = (a) => `vec3<f32>(${a.map(wf).join(', ')})`;
+
+/** Desktop / tablet landscape: the sidebar layout (index.html's CSS, the same query; ui2.js its panel column). */
+export const DESK = matchMedia('(orientation: landscape) and (min-width: 900px) and (min-height: 500px)');

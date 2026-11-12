@@ -1,11 +1,11 @@
 // UI 2 (the default since 4.25; the classic UI: its menu, or ?ui1): one big slider at a time, the tools of a group in a strip, four groups
 // (Base, Scanner, Trasforma, Effetti), undo / redo and Esporta in the header, the export options in a sheet.
-// Desktop (DESK, the same query as `desk` in app.js; user, 2026-11-11: "più friendly nella disposizione"): a right-hand column
+// Desktop (DESK, util.js: the CSS's query; user, 2026-11-11: "più friendly nella disposizione"): a right-hand column
 // with the histogram on top, the groups as tabs and every tool of the group listed at once (Lightroom-style); the status
 // line at its foot. The strip and one-slider-at-a-time stay for phones and portrait tablets.
 // Built over the app's own controls: the classic panes stay in the page (hidden) and remain the one source of truth: UI 2
 // sets their values and dispatches their events, reads their labels and their formatted outputs. Prototype: user, 2026-11-03.
-import { store } from './util.js';
+import { store, DESK } from './util.js';
 import { initMascot } from './mascot.js';
 import { tiltRuler } from './ruler.js';
 import { FRAME_STYLES, FRAME_NAMES } from './filmframe.js';
@@ -65,7 +65,6 @@ const svg = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
 // on the right the content goes left -> right, "si vede che si sposta"; -1 would be the carousel convention), by a share of
 // the panel's width (groups SLIDE_W, a tool's title + slider TOOL_W) with a blur (BLUR_PX, half for a tool), eased out;
 // "Riduci movimento" keeps only the fade. Choices.
-const DESK = matchMedia('(orientation: landscape) and (min-width: 900px) and (min-height: 500px)');
 const FLOW = 1, SLIDE_W = 0.35, TOOL_W = 0.25, BLUR_PX = 6, SLIDE_MS = 260, TOOL_MS = 200;
 const EASE = 'cubic-bezier(.2,.8,.2,1)';
 // Bordo (Trasforma since 4.35, user: a ruler with ticks and a preview; it was in the export sheet): 0..10 % of the long side
