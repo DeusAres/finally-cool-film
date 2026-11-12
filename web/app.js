@@ -270,11 +270,8 @@ function noiseAt(longSide) {
 async function renderRegion(frame, x0, y0, w, h, target, u) {
   const lens = lensOf(u), expo = sceneGain(u), c = viewCrop();
   if (gpu) {
-    const space = frame.raw ? 'rec2020' : frame.p3 ? 'p3' : 'srgb', wb = sceneWb(undefined, space === 'srgb' ? 'srgb' : 'rec2020', u.temp);
-    const ip = inputPass(u, space);
-    return engine.process_frame(ip.wgsl, inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lens, expo, u.clarity, u.texture, wb, u.sharp, u.vibrance / 100, !!interno(), u.tilt, c, frameNoise(frame)),
-      ip.arr, w, h, PACK_LUT,
-      OUTPUT_WGSL, packParams(packTo(), invUniform(u)), target);
+    const g = gpuInput(frame, x0, y0, w, h, u);
+    return engine.process_frame(g.wgsl, g.uniform, g.arr, w, h, PACK_LUT, OUTPUT_WGSL, packParams(packTo(), invUniform(u)), target);
   }
   const map = frameMap(frame.w, frame.h, u.tilt, c), o = cropPx(frame.w, frame.h, c);   // Raddrizza / Ritaglia (tilt.js); null when neither
   const rgb = lensActive(lens) || map
@@ -300,6 +297,13 @@ async function renderRegion(frame, x0, y0, w, h, target, u) {
     if (to) toSpaceCPU(px, to);   // Rec.2020 → output space, as the GPU output pass
     d32[p] = (q8(px[0]) | (q8(px[1]) << 8) | (q8(px[2]) << 16) | 0xff000000) >>> 0;
   }
+}
+/** The GPU input pass of a render of that region of `frame`: its WGSL, uniform and storage array. `frame` is sampled through
+ * normalised coordinates, so a frame smaller than the uploaded one (the reduced preview, render) reads the texture scaled. */
+function gpuInput(frame, x0, y0, w, h, u) {
+  const space = frame.raw ? 'rec2020' : frame.p3 ? 'p3' : 'srgb', wb = sceneWb(undefined, space === 'srgb' ? 'srgb' : 'rec2020', u.temp);
+  const ip = inputPass(u, space);
+  return { wgsl: ip.wgsl, arr: ip.arr, uniform: inputUniform(frame.w, frame.h, space, x0, y0, w, h, 1, lensOf(u), sceneGain(u), u.clarity, u.texture, wb, u.sharp, u.vibrance / 100, !!interno(), u.tilt, viewCrop(), frameNoise(frame)) };
 }
 /** A fresh copy of the photo's scene-linear thumb at `longSide`: the raw's own (decoded with it, raw.js previewThumb), or the
  * JPEG preview's. */
@@ -399,15 +403,6 @@ function hyperSharp(u, region) {
 }
 
 const htOn = (u) => V4 && scanner === 'frontier' && (u.htHi > 0 || u.htLo > 0);
-// Densità with Hyper Tone on: the slider counts as resting LABD_REST_MS after its last step (a choice: longer than the gap
-// between a drag's input events, short enough that the exact map follows at once); then one render with the rebuilt map.
-const LABD_REST_MS = 250;
-let labDMovedAt = 0, labDRest = 0;
-$('labD').addEventListener('input', () => {
-  labDMovedAt = performance.now();
-  clearTimeout(labDRest);
-  labDRest = setTimeout(() => { if (photo && htOn(ui())) render(); }, LABD_REST_MS);
-});
 /** photo.hyper: the Hyper Tone map of the output frame (lib/hypertone.js): built from the thumb at HYPER_THUMB_PX once per photo
  * and scanner density (photo.hyperBase, the guided filter: the costly part), then turned and cropped like the render, a cheap
  * resample of the smooth map, so a Raddrizza drag or a crop does not rebuild it. */
@@ -418,8 +413,8 @@ function syncHyperMap(u) {
   const key0 = scanEv() + baselineEv() + (photo.auto?.[0] ?? 0), gain = 2 ** (key0 + u.labD * LAB_D_EV);   // the operator's density key too
   // While Densità is being dragged the map is kept (only its density key moved): a new map changes the input pass, so the
   // developed film (cached on it, wgpu_backend film_key) was re-run on every step (the user's PC: ~270 ms a step instead of
-  // ~20-80). The render after the slider rests (labDRest) rebuilds it.
-  const dragD = performance.now() - labDMovedAt < LABD_REST_MS && photo.hyperBase?.key0 === key0;
+  // ~20-80). The render after the slider rests (sliderInput) rebuilds it.
+  const dragD = sliding('labD') && photo.hyperBase?.key0 === key0;
   if (photo.hyperBase?.gain !== gain && !dragD) {
     const { preview } = photo, { rgb, w, h } = thumbOf(preview, HYPER_THUMB_PX, true);   // a raw's mean thumb (raw.js rawMeanThumb)
     photo.hyperBase = { ...hyperToneMap(rgb, w, h, LUMA[preview.raw || preview.p3 ? 'rec2020' : 'srgb'], gain, noiseAt(Math.max(w, h))[0]), gain, key0 };   // a P3 JPEG's thumb is Rec.2020 (extractLinear)
@@ -468,6 +463,41 @@ const invUniform = (u) => (neutralScan() ? invertUniform(photo.inv, { mshift: u.
 
 // ---------- preview ----------
 
+// A slider counts as dragged until SLIDER_REST_MS after its last input event (a choice: longer than the gap between a drag's
+// input events, short enough that the exact render follows at once); then one render if the drag left a stand-in on screen:
+// a reduced preview (render), or Densità's kept Hyper Tone map (syncHyperMap).
+const SLIDER_REST_MS = 250;
+let sliderMovedAt = 0, sliderMoved = '', sliderRest = 0;
+const sliding = (id = sliderMoved) => sliderMoved === id && performance.now() - sliderMovedAt < SLIDER_REST_MS;
+function sliderInput(id) {
+  sliderMovedAt = performance.now(); sliderMoved = id;
+  clearTimeout(sliderRest);
+  sliderRest = setTimeout(() => { if (photo && (photo.reduced || (id === 'labD' && htOn(ui())))) render(); }, SLIDER_REST_MS);
+}
+// While a slider that re-runs the film is dragged, the preview renders at LOW_SCALE of its side (a choice, user: half the long
+// side, ~4x fewer pixels; the user's PC (integrated GPU) took ~270-340 ms a film step at 1500x2000; measured on SwiftShader,
+// an Esposizione step on the IDG 1500x2000 preview: 2.8 s at 750x1000 vs 13-15 s full) and is drawn scaled up;
+// the engine works in physical units (pixel = film_format_mm / long side), so grain and halation keep their size, softer. A
+// slider whose render hits the developed film (the GPU film cache: the scanner, the lab, the output pass) stays at full size: a
+// reduced render would re-run the film at its own size, and so would the full one after it.
+const LOW_SCALE = 0.5;
+let lowCtx = null;   // the reduced render's canvas, drawn scaled onto the view
+/** Draw `img` (a reduced render) over the whole view canvas, scaled up. */
+function drawReduced(img) {
+  const cs = img.colorSpace;
+  if (lowCtx?.getContextAttributes().colorSpace !== cs) lowCtx = document.createElement('canvas').getContext('2d', { colorSpace: cs });
+  lowCtx.canvas.width = img.width; lowCtx.canvas.height = img.height;
+  lowCtx.putImageData(img, 0, 0);
+  ctx.drawImage(lowCtx.canvas, 0, 0, view.width, view.height);
+}
+/** What the developed film of a full-frame w×h preview render depends on (the engine's film_key, wgpu_backend.rs): the film's
+ * params (all but the scanner) and the input pass. */
+function filmOf(u, w, h) {
+  const { scanner: _, ...film } = renderParams(u, { region: { x0: 0, y0: 0, fw: w, fh: h, W: w, H: h } }), g = gpuInput(photo.preview, 0, 0, w, h, u);
+  return { key: JSON.stringify(film) + g.uniform.join(), wgsl: g.wgsl, arr: g.arr };
+}
+const sameFilm = (a, b) => a.key === b.key && a.wgsl === b.wgsl && (a.arr === b.arr || (a.arr.length === b.arr.length && a.arr.every((v, i) => v === b.arr[i])));
+
 async function render() {
   if (!photo) return;
   if (rendering || exporting) { dirty = true; return; }   // export: re-rendered when it ends
@@ -478,17 +508,24 @@ async function render() {
       const u = ui(), look = UI2 ? { key: defaultKey(), atDefault: atDefault(u) } : null;   // the mascot's, as this frame is rendered
       if (V4 && !loadingPhoto) prepareScanner();   // the scanner re-reads the negative when Esposizione / Interno moved (cached)
       const pv = photo.preview, { w, h } = outFrame(pv.w, pv.h), t0 = performance.now(), n = ++renderCount;
+      // the reduced preview (LOW_SCALE): the same frame texture read as a smaller frame (gpuInput); GPU only (the CPU path reads pixels)
+      const film = gpu ? filmOf(u, w, h) : null, low = film && sliding() && !(photo.film && sameFilm(film, photo.film));
+      const frame = low ? { ...pv, w: Math.round(pv.w * LOW_SCALE), h: Math.round(pv.h * LOW_SCALE) } : pv, r = outFrame(frame.w, frame.h);
+      photo.reduced = low;   // from the start: a rest timer during this render must still ask for the full one
       // Breadcrumb: if iOS kills the tab mid-render, the next load says so.
-      setBusy(`anteprima #${n} ${w}x${h} ${JSON.stringify(u)}`);
-      syncEngine(u, { region: { x0: 0, y0: 0, fw: w, fh: h, W: w, H: h } });
+      setBusy(`anteprima #${n} ${r.w}x${r.h} ${JSON.stringify(u)}`);
+      syncEngine(u, { region: { x0: 0, y0: 0, fw: r.w, fh: r.h, W: r.w, H: r.h } });
       const cs = outSpace() === 'p3' ? 'display-p3' : 'srgb';
-      if (photo.after?.width !== w || photo.after?.height !== h || photo.after.colorSpace !== cs) photo.after = new ImageData(w, h, { colorSpace: cs });
-      await renderRegion(pv, 0, 0, w, h, new Uint8Array(photo.after.data.buffer), u);
+      // the histogram, the mascot and the 'after' image (photo.after) are full renders only
+      const img = low ? new ImageData(r.w, r.h, { colorSpace: cs }) : photo.after?.width === w && photo.after.height === h && photo.after.colorSpace === cs ? photo.after : (photo.after = new ImageData(w, h, { colorSpace: cs }));
+      await renderRegion(frame, 0, 0, r.w, r.h, new Uint8Array(img.data.buffer), u);
+      if (!low) photo.film = film;
       const t1 = performance.now();
       if (view.width !== w || view.height !== h) sizeView();   // the crop changed the output frame
-      if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); ui2?.rendered(photo.after, look); }
+      if (!showingBefore && low) drawReduced(img);
+      else if (!showingBefore) { ctx.putImageData(photo.after, 0, 0); drawHistogram(photo.after); ui2?.rendered(photo.after, look); }
       const t2 = performance.now(), ms = (v) => Math.round(v);
-      status(`${w}×${h} · ${ms(t2 - t0)} ms (render ${ms(t1 - t0)} · display ${ms(t2 - t1)})${gpu ? '' : ' CPU'}`);
+      status(`${r.w}×${r.h} · ${ms(t2 - t0)} ms (render ${ms(t1 - t0)} · display ${ms(t2 - t1)})${gpu ? '' : ' CPU'}`);
       log(`render #${n} ${ms(t1 - t0)}+${ms(t2 - t1)} ms`);
     } while (dirty && !exporting);
     renderErrors = 0;
@@ -1631,7 +1668,7 @@ for (const id of Object.keys(FORMAT)) {
     drawOverlays();
     if (id === 'frame' && fitted) fitToScreen();   // the frame changes the fitted size
   };
-  $(id).addEventListener('input', update);
+  $(id).addEventListener('input', () => { if (!OVERLAY_ONLY.has(id)) sliderInput(id); update(); });
   const zero = () => { $(id).value = 0; update(); };
   $(id).previousElementSibling.addEventListener('dblclick', zero);
   onThumbDoubleTap($(id), zero);
