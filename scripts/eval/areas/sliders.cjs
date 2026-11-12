@@ -64,15 +64,30 @@ const METRICS = () => {
   await page.setInputFiles('#pick', photo);
   await page.waitForFunction(() => !document.querySelector('#export')?.disabled, null, { timeout: 900000 });
   let seen = await page.evaluate(() => window.__n);
-  // settle: renders until none for 1.5 s (a drag's rest render included)
-  const settle = async () => { for (;;) { await page.waitForTimeout(1500); const n = await page.evaluate(() => window.__n); if (n === seen && !(await page.evaluate(() => document.getElementById('status').textContent.startsWith('anteprima')))) break; seen = n; } };
+  // the full preview's size (the status line reads `${w}×${h} · ...`): a reduced render while a slider moves (app.js LOW_SCALE)
+  // shows a smaller size, and its rest render (full) follows; the metrics are read only once a full-size render is the last one
+  const full = await page.evaluate(() => document.getElementById('status').textContent.split(' ')[0]);
+  const settle = async () => {
+    for (;;) {
+      await page.waitForTimeout(1500);
+      const [n, st] = await page.evaluate(() => [window.__n, document.getElementById('status').textContent]);
+      if (n === seen && st.startsWith(full + ' ')) break;
+      seen = n;
+    }
+  };
   const set = async (id, v) => { await page.evaluate(([id, v]) => { const e = document.getElementById(id); e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); }, [id, v]); await page.waitForFunction((s) => window.__n > s, seen, { timeout: 900000 }).catch(() => {}); await settle(); };
+  // the canvas read only once it stops changing: two reads 2 s apart equal (a late render, e.g. a rest render after a
+  // reduced one or the scanner's own re-read, otherwise lands between the 'before' and the move: runs differed by 4 L*)
+  const stable = async () => {
+    let m = await page.evaluate(METRICS);
+    for (;;) { await page.waitForTimeout(2000); const n = await page.evaluate(METRICS); if (JSON.stringify(n) === JSON.stringify(m)) return n; m = n; }
+  };
   const scan = async (s) => { await page.evaluate((b) => document.getElementById(b).click(), s === 'none' ? 'scanNone' : 'scanFrontier'); await page.waitForTimeout(500); await settle(); };
   const got = {}; let cur = null;
   for (const [id, v, s, m] of DIRECTION) {
     if (s !== cur) { await scan(s); cur = s; }
     const def = await page.evaluate((id) => document.getElementById(id).value, id);
-    const a = await page.evaluate(METRICS); await set(id, v); const b = await page.evaluate(METRICS); await set(id, def);
+    const a = await stable(); await set(id, v); const b = await stable(); await set(id, def);
     got[`${id}@${s}`] = Object.fromEntries(Object.keys(a).map((k) => [k, +(b[k] - a[k]).toFixed(4)]));
   }
   await browser.close();

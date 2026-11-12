@@ -14,6 +14,11 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.45**: **Codice diviso per aree, check per area** (nessun cambio visibile: render ed export identici al byte).
+  `app.js` 1846 -> ~1250 righe: costanti tarate in `lib/look.js`, zoom (`viewport.js`), ritaglio (`cropui.js`), encoder JPEG
+  (`encoder.js`), istogramma, pannello, slider, luce in `color.js`. `check.py --auto` lancia i check delle aree toccate:
+  geometria (<1 s, sempre), grana (~1 min), slider (~3 min: ogni slider sposta l'immagine nel suo verso e della stessa
+  quantità); il set completo di foto (~14 min) solo per la resa.
 - **v4.44**: **Slider più veloci**: mentre trascini uno slider che ricalcola la pellicola (Esposizione, Temperatura, Grana,
   Halation, Hyper Tone, gli effetti di obiettivo) l'anteprima si fa a metà lato (~4x meno pixel; GPU software: 2,8 s invece di
   13-15) e torna a piena risoluzione 250 ms dopo che lo slider si ferma (stessi pixel di un render normale; istogramma,
