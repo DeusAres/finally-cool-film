@@ -14,6 +14,12 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.49**: **Sottoesposizione più vera col Frontier**: un negativo sottile veniva riportato del tutto alla luminosità
+  normale e senza correzione colore, quindi -2 / -3 EV uscivano come 0 EV ma più gialli e saturi. Su un bracketing vero di
+  Gold 200 su Frontier il laboratorio compensa solo in parte: -1 / -2 / -3 EV stampano 2,0 / 3,7 / 7,9 L* più scuri, con
+  meno colore e meno giallo. Nuovo parametro del motore (thin_lift: si recupera l'85 % oltre 0,8 EV) e correzione colore
+  anche sui negativi sottili: ora -0,6 / -3,6 / -6,6 L*, croma 0,0 / -1,3 / -4,6 (vero -1,3 / -2,7 / -5,4). Resta
+  il contrasto dei negativi molto sottili (vero -12,7 a -3 EV, nostro -3,9). Solo Frontier; nessun caso del check cambia.
 - **v4.48**: **Niente più cieli rosa nei raw bruciati**: dove il sensore satura due canali su tre (verde e blu in un cielo
   coperto, il rosso no) il colore vero non si può sapere, e il recupero delle luci lo prendeva dai pixel non saturi più
   vicini, a volte i muri caldi di una via: una chiazza rosa che Hyper Tone rendeva visibile (DNG Olympus dell'utente, la
