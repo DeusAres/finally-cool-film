@@ -14,6 +14,12 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.47**: **Grana nelle luci come la pellicola vera**: a schermo le luci (L* 65-85) avevano 1,6x la grana delle scansioni
+  Gold 200 vere a parità di mezzitoni (2,16 contro 1,36). Non era la curva né la divisione dei cristalli: il modello del
+  negativo dava troppa grana nelle zone dense. Nuovo parametro del motore (GPU = CPU) che la dimezza da metà delle luci in
+  su: luci 1,34, mezzitoni 2,68 (vero 2,67), ombre invariate; cieli e nuvole più puliti. **Tono luci Soft rifatto**
+  (Frontier / Noritsu): prima abbassava il bianco dopo la curva (luci grigie e piatte, "sbiadite"), ora comprime il
+  negativo prima della curva, le luci scendono tenendo la separazione.
 - **v4.46**: **Grana più pellicola, meno sabbia**: a schermo la nostra grana era rumore quasi al pixel (grumi r50 0,51 px a
   29,6 µm/px contro 0,74 delle scansioni Gold 200 vere) e troppo colorata. Ora pochi cristalli grossi fanno i grumi
   (blur_fast 0,35 -> 1,2, fast_count_frac 0,02 -> 0,0023), meno rumore colorato dello scanner (0,0098 -> 0,004), forza nei
