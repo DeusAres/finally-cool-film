@@ -14,6 +14,12 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.46**: **Grana più pellicola, meno sabbia**: a schermo la nostra grana era rumore quasi al pixel (grumi r50 0,51 px a
+  29,6 µm/px contro 0,74 delle scansioni Gold 200 vere) e troppo colorata. Ora pochi cristalli grossi fanno i grumi
+  (blur_fast 0,35 -> 1,2, fast_count_frac 0,02 -> 0,0023), meno rumore colorato dello scanner (0,0098 -> 0,004), forza nei
+  mezzitoni invariata: mezzitoni r50 0,87 px, quota fine 0,67 (vero 0,75), colore 0,87 (vero 0,71). Restano: luci ~1,5x il
+  vero (la divisione dei cristalli per densità è fissa nel motore: prossimo passo) e grumi un po' grossi nelle ombre
+  all'export al 100 %. Baseline dei check aggiornate (bordi creati e texture delle luci seguono la grana).
 - **v4.45**: **Codice diviso per aree, check per area** (nessun cambio visibile: render ed export identici al byte).
   `app.js` 1846 -> ~1250 righe: costanti tarate in `lib/look.js`, zoom (`viewport.js`), ritaglio (`cropui.js`), encoder JPEG
   (`encoder.js`), istogramma, pannello, slider, luce in `color.js`. `check.py --auto` lancia i check delle aree toccate:
