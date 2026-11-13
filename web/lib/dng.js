@@ -549,12 +549,30 @@ function satLift(v, o1, o2, hi, q) {
   return v + u * u * (3 - 2 * u) * (e - v);
 }
 
+// One pixel's camera RGB near sensor white, into sat.v: each channel pulled toward its estimate (satLift, from the
+// ORIGINAL values of the others). With TWO channels at their sensor white only one is a measurement: the colour is unknown
+// and the estimates come from wherever the grid found unclipped bright pixels, which in a large blown area is far away (on
+// the user's P5282720, an Olympus DNG with a blown overcast sky over a street: green and blue clipped, red at 0.79 of its
+// white; the grid filled the sky from the street's warm walls and printed a pink haze, a* p95 +9.6, that Hyper Tone brought
+// into view). There the pixel goes neutral at its brightest channel, by the second-largest of the three channels' clip
+// weights (the same smoothstep over 0.92..1 of white): one clipped channel keeps the lift (a sky with only green blown stays
+// blue), two make it white, as LibRaw's clip / blend modes do (its sky without clipping: a* up to +111).
+function liftPixel(sat, r, g, b, qq) {
+  const r0 = r, g0 = g, b0 = b;
+  r = satLift(r, g, b, sat[0], qq && qq[0]); g = satLift(g, r0, b, sat[1], qq && qq[1]); b = satLift(b, r0, g0, sat[2], qq && qq[2]);
+  const w = (v, c) => { const lo = 0.92 * sat[c]; if (v <= lo) return 0; const u = v >= sat[c] ? 1 : (v - lo) / (sat[c] - lo); return u * u * (3 - 2 * u); };
+  const wr = w(r0, 0), wg = w(g0, 1), wb = w(b0, 2);
+  const two = wr + wg + wb - Math.max(wr, wg, wb) - Math.min(wr, wg, wb);   // the middle weight
+  if (two > 0) { const m = Math.max(r, g, b); r += two * (m - r); g += two * (m - g); b += two * (m - b); }
+  sat.v[0] = r; sat.v[1] = g; sat.v[2] = b;
+}
+
 const SAT_CELL = 16;
 const qClamp = q => (q < 0.1 ? 0.1 : q > 10 ? 10 : q);
 
 // Fills sat.grid ({gw, gh, q}) from a strided 2x2-superpixel pass over the CFA; sat.grid = null if no reference.
 function satStats(cfa, PW, PAD, cx, cy, cw, ch, colorAt, sat) {
-  sat.grid = null; sat.q = new Float32Array(3); sat.y = 0;
+  sat.grid = null; sat.q = new Float32Array(3); sat.y = 0; sat.v = new Float64Array(3);
   sat.lo0 = 0.92 * sat[0]; sat.lo1 = 0.92 * sat[1]; sat.lo2 = 0.92 * sat[2];
   const pos = [[0, 0], [0, 1], [1, 0], [1, 1]].map(([dy, dx]) => ({ c: colorAt(cy + dy, cx + dx), o: dy * PW + dx }));
   const oR = pos.find(q => q.c === 0).o, oB = pos.find(q => q.c === 2).o;
@@ -639,10 +657,9 @@ function mhcGreen(a, w, rgb, i, ob, x0, n, swap, gR, gG, gB, M, sat) {
     let r = swap ? vv : hv, b = swap ? hv : vv;
     r *= gR[x]; b *= gB[x];
     let g = C0 * gG[x];
-    const r0 = r, g0 = g;
     if (r > sat.lo0 || g > sat.lo1 || b > sat.lo2) {
-      const qq = satQ(sat, x, sat.y) ? sat.q : null;
-      r = satLift(r, g, b, sat[0], qq && qq[0]); g = satLift(g, r0, b, sat[1], qq && qq[1]); b = satLift(b, r0, g0, sat[2], qq && qq[2]);
+      liftPixel(sat, r, g, b, satQ(sat, x, sat.y) ? sat.q : null);
+      r = sat.v[0]; g = sat.v[1]; b = sat.v[2];
     }
     const R = m0 * r + m1 * g + m2 * b, G = m3 * r + m4 * g + m5 * b, B = m6 * r + m7 * g + m8 * b;
     const o = ob + x * 3;
@@ -660,10 +677,9 @@ function mhcRB(a, w, rgb, i, ob, x0, n, swap, gR, gG, gB, M, sat) {
     let oo = (6 * C0 + 2 * (a[i - w - 1] + a[i - w + 1] + a[i + w - 1] + a[i + w + 1]) - 1.5 * ax2) * 0.125;
     g *= gG[x];
     let r = (swap ? oo : C0) * gR[x], b = (swap ? C0 : oo) * gB[x];
-    const r0 = r, g0 = g;
     if (r > sat.lo0 || g > sat.lo1 || b > sat.lo2) {
-      const qq = satQ(sat, x, sat.y) ? sat.q : null;
-      r = satLift(r, g, b, sat[0], qq && qq[0]); g = satLift(g, r0, b, sat[1], qq && qq[1]); b = satLift(b, r0, g0, sat[2], qq && qq[2]);
+      liftPixel(sat, r, g, b, satQ(sat, x, sat.y) ? sat.q : null);
+      r = sat.v[0]; g = sat.v[1]; b = sat.v[2];
     }
     const R = m0 * r + m1 * g + m2 * b, G = m3 * r + m4 * g + m5 * b, B = m6 * r + m7 * g + m8 * b;
     const o = ob + x * 3;
@@ -855,10 +871,9 @@ export function developCFA({ cfa, PW, PH, aW, aH, cx, cy, cw, ch, colorAt, wb, M
       let i = (cy + 2 * y + PAD) * PW + cx + PAD, o = y * outW * 3;
       for (let x = 0; x < outW; x++, i += 2, o += 3) {
         let r = cfa[i + oR] * gR[x], g = (cfa[i + oG1] + cfa[i + oG2]) * 0.5 * gG[x], b = cfa[i + oB] * gB[x];
-        const r0 = r, g0 = g;
         if (r > sat.lo0 || g > sat.lo1 || b > sat.lo2) {
-          const qq = satQ(sat, 2 * x, 2 * y) ? sat.q : null;
-          r = satLift(r, g, b, sat[0], qq && qq[0]); g = satLift(g, r0, b, sat[1], qq && qq[1]); b = satLift(b, r0, g0, sat[2], qq && qq[2]);
+          liftPixel(sat, r, g, b, satQ(sat, 2 * x, 2 * y) ? sat.q : null);
+          r = sat.v[0]; g = sat.v[1]; b = sat.v[2];
         }
         const R = m0 * r + m1 * g + m2 * b, G = m3 * r + m4 * g + m5 * b, B = m6 * r + m7 * g + m8 * b;
         rgb[o] = R; rgb[o + 1] = G; rgb[o + 2] = B;
