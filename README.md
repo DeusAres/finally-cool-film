@@ -14,6 +14,11 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.48**: **Niente più cieli rosa nei raw bruciati**: dove il sensore satura due canali su tre (verde e blu in un cielo
+  coperto, il rosso no) il colore vero non si può sapere, e il recupero delle luci lo prendeva dai pixel non saturi più
+  vicini, a volte i muri caldi di una via: una chiazza rosa che Hyper Tone rendeva visibile (DNG Olympus dell'utente, la
+  torre). Ora quei pixel vanno a bianco neutro, come fanno LibRaw e gli altri decodificatori; con un solo canale saturo il
+  recupero resta (il cielo resta azzurro). DNG e ORF; nessun cambio sui casi del check.
 - **v4.47**: **Grana nelle luci come la pellicola vera**: a schermo le luci (L* 65-85) avevano 1,6x la grana delle scansioni
   Gold 200 vere a parità di mezzitoni (2,16 contro 1,36). Non era la curva né la divisione dei cristalli: il modello del
   negativo dava troppa grana nelle zone dense. Nuovo parametro del motore (GPU = CPU) che la dimezza da metà delle luci in
