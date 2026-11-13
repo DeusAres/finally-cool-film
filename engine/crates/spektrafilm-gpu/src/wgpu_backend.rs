@@ -5902,7 +5902,10 @@ fn build_grain_state(
             scan_noise: [f32; 3],
             fast_k: f32,
             fast_od_share: f32,
-            _pad: [f32; 2],   // the WGSL struct's size rounds up to 16 bytes
+            grain_gain_dense: f32,
+            grain_gain_from: f32,
+            grain_gain_to: f32,
+            _pad: [f32; 3],   // the WGSL struct's size rounds up to 16 bytes
         }
         let v4 = |a: [f32; 3]| [a[0], a[1], a[2], 0.0];
         let params = HashParams {
@@ -5926,7 +5929,10 @@ fn build_grain_state(
             scan_noise: h.scan_noise,
             fast_k: h.fast_k,
             fast_od_share: h.fast_od_share,
-            _pad: [0.0; 2],
+            grain_gain_dense: h.grain_gain_dense,
+            grain_gain_from: h.grain_gain_from,
+            grain_gain_to: h.grain_gain_to,
+            _pad: [0.0; 3],
         };
         let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some("grain_hash_params"),

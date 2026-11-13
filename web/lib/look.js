@@ -241,9 +241,19 @@ export const GRAIN_BLUR = 0.45;
 // The price is the native pitch (export at 100 %): slightly coarse and soft (fine share at the low edge, shadows coarse) and
 // the mids at the low edge of the real strength; the screen (29.6 um) look was preferred: it is what the user sees. CPU (sf-eval) vs the app
 // at 29.6: r50 0.84 / 0.87, unverified beyond this wedge. Nessuno follows (29.6 um mids r50 0.53 -> 0.95, C/L 1.28 -> 1.09).
+// 4.47, the lights: on screen (29.6 um) our grain at L* 65-85 was 2.16 Lstd vs the kg200 median 1.36 with the mids matched
+// (lights / mids 0.73 vs 0.51). Not the tone curve (the Kodak grey scale's L* step at L* 65-85 is the real one, 4.2-6.7 vs
+// 4.3-6.5), not the fast / slow split (engine fast_k / fast_od_share: 12 settings, best 0.71), both populations alike (0.69
+// without the slow ones, 0.81 without the fast ones): the model's grain deviation is too strong in the dense part of the
+// negative. grain_gain_dense (engine, 4.47): the deviation x 0.5 from the layer's developed fraction 0.57 up, ramped from
+// 0.43 (below: untouched); the ramp's place measured (0.3-0.45 took the mids down to 1.70, 0.45-0.6 left the lights at 1.48).
+// App wedge, Frontier, 29.6 um, before -> after (kg200 median [p25-p75]): shadows 2.16 -> 2.16 (1.78 [1.49-3.01]), L* 25-45
+// 3.28 -> 3.28 (2.85 [2.12-4.56]), mids 2.97 -> 2.68 (2.67), lights 2.16 -> 1.34 (1.36 [0.96-1.69]), whites 0.90 -> 0.59
+// (0.66); lights r50 0.74 -> 0.66 px (0.60).
 export const V4_GRAIN = {
   blur: 0.2, blur_fast: 1.2, fast_count_frac: 0.0023, layer_blur_fast: [1, 1, 2.5], scan_sharpen_um: HS_UM, scan_sharpen: 0.85,
   scan_noise: 0.004, scan_noise_slope: 0.6, scan_noise_chroma: 0.35,   // scan_noise per 10 um pixel
+  grain_gain_dense: 0.5, grain_gain_from: 0.43, grain_gain_to: 0.57,
 };
 
 export const V4_GRAIN_SCALE = 2.24;   // Grana's slider unit for this grain: the fitted amount (4.51) at the default Grana (V4_FILM)

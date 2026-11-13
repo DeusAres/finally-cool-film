@@ -506,6 +506,17 @@ pub struct GrainParams {
     /// Share of the layer's max density carried by the fast crystals (<= 1 / `fast_k`; grain_hash `FAST_OD_SHARE` was fixed).
     #[serde(default = "default_fast_od_share")]
     pub fast_od_share: f32,
+    /// Gain on the film grain's deviation (both crystal populations; not the scanner's noise) in the dense part of the
+    /// negative (the positive's lights): 1 at the layer's developed fraction `grain_gain_from` and below, `grain_gain_dense`
+    /// from `grain_gain_to` up, smooth in between. The model's grain is stronger in the lights, relative to the mids, than real
+    /// scans show (4.47: lights / mids 0.73 vs the kg200 median 0.51 at a 29.6 um pitch; both populations take part: 0.69
+    /// without the slow ones, 0.81 without the fast ones; no fast / slow split fixes it). 1 = off (the model as it was).
+    #[serde(default = "default_one")]
+    pub grain_gain_dense: f32,
+    #[serde(default = "default_half")]
+    pub grain_gain_from: f32,
+    #[serde(default = "default_one")]
+    pub grain_gain_to: f32,
     /// Per-layer multiplier on the FAST crystals' dye-cloud blur sigma (`blur_fast`; hash grain, colour films), R, G, B
     /// channel = cyan, magenta, yellow dye layer. In a real colour negative the layers have different big crystals (the
     /// blue-sensitive yellow layer the biggest), so their clumps do not coincide: colour mottle at clump scale instead of
@@ -624,6 +635,9 @@ impl Default for GrainParams {
             fast_count_frac: spektrafilm_model::grain_hash::FAST_COUNT_FRAC,
             fast_k: spektrafilm_model::grain_hash::FAST_K,
             fast_od_share: spektrafilm_model::grain_hash::FAST_OD_SHARE,
+            grain_gain_dense: 1.0,
+            grain_gain_from: 0.5,
+            grain_gain_to: 1.0,
             layer_blur_fast: default_layer_blur(),
             scan_noise: 0.0,
             scan_noise_slope: 1.0,

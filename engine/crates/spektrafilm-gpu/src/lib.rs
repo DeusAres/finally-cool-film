@@ -361,6 +361,10 @@ pub struct GrainHashGpu {
     /// The fast crystals' saturation exponent and density share (`HashGrain::fast_k` / `fast_od_share`).
     pub fast_k: f32,
     pub fast_od_share: f32,
+    /// The slow crystals' deviation gain in the dense part (`HashGrain::grain_gain_dense` / `grain_gain_from`).
+    pub grain_gain_dense: f32,
+    pub grain_gain_from: f32,
+    pub grain_gain_to: f32,
     /// Per-layer dye-cloud sigma (px) per channel (R, G, B = cyan, magenta, yellow layer), filled by core
     /// (filming.rs `hash_grain_setup`): `[0]` the soft population (`grain_blur` on all three), `[1]` the fast crystals'
     /// (`fast_blur` times GrainParams `layer_blur_fast`). The scan sharpening radius is not scaled per layer.

@@ -562,6 +562,9 @@ pub fn hash_grain_setup(
         fast_k: g.fast_k.max(1.0),
         // the fast share carries at most 1 / k of the density (p_slow stays a fraction at full development)
         fast_od_share: g.fast_od_share.clamp(0.0, 0.999 / g.fast_k.max(1.0)),
+        grain_gain_dense: g.grain_gain_dense.max(0.0),
+        grain_gain_from: g.grain_gain_from.clamp(0.0, 0.99),
+        grain_gain_to: g.grain_gain_to.clamp(g.grain_gain_from.clamp(0.0, 0.99) + 0.01, 1.0),
         // per pixel: the sigma over SCAN_NOISE_REF_UM pixels, averaged over this pixel's area (1 / pitch)
         scan_noise: (g.scan_noise as f64 * SCAN_NOISE_REF_UM / pix_um) as f32,
         scan_noise_slope: g.scan_noise_slope,
@@ -870,7 +873,8 @@ mod tests {
         assert!(mean < 5e-3 && max < 5e-2, "GPU vs CPU: mean {mean}, max {max}");
     }
 
-    /// GrainParams `fast_k` / `fast_od_share` (4.47; the fast crystals' split by density, fixed constants until then) reach the
+    /// GrainParams `fast_k` / `fast_od_share` / `grain_gain_dense` (4.47; the fast crystals' split by density, fixed constants
+    /// until then, and the slow grain's gain in the dense part) reach the
     /// GPU-resident chain as on the CPU stage: non-default values, same budget and frame as the test above, halation off. Also
     /// checks they move the frame (a field the GPU ignored would pass the parity at the defaults).
     #[test]
@@ -880,7 +884,7 @@ mod tests {
             return;
         };
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().join("data");
-        let pipeline = |fast_k: f32, fast_od_share: f32| {
+        let pipeline = |fast_k: f32, fast_od_share: f32, grain_gain_dense: f32| {
             let film = crate::profile::load_profile_by_name(&dir, "kodak_gold_200").unwrap();
             let print = crate::profile::load_profile_by_name(&dir, "kodak_portra_endura").unwrap();
             let mut params = RuntimeParams::default();
@@ -890,7 +894,7 @@ mod tests {
             params.io.output_gamut_compress.algorithm = "off".into();
             let g = &mut params.film_render.grain;
             (g.blur, g.blur_fast, g.fast_count_frac, g.amount) = (0.2, 1.2, 0.0023, 4.5);
-            (g.fast_k, g.fast_od_share) = (fast_k, fast_od_share);
+            (g.fast_k, g.fast_od_share, g.grain_gain_dense) = (fast_k, fast_od_share, grain_gain_dense);
             crate::pipeline::Pipeline::new_with_spectral(film, print, params, &dir).unwrap()
         };
         let (w, h) = (64u32, 64u32);
@@ -900,10 +904,10 @@ mod tests {
             let d: Vec<f64> = a.data.iter().zip(b.data.iter()).map(|(x, y)| (*x as f64 - *y as f64).abs()).collect();
             (d.iter().sum::<f64>() / d.len() as f64, d.iter().cloned().fold(0.0, f64::max))
         };
-        let p = pipeline(1.8, 0.45);
+        let p = pipeline(1.8, 0.45, 0.6);
         let out_cpu = p.process(img.clone(), &spektrafilm_gpu::cpu_backend::CpuBackend);
         let out_gpu = p.process(img.clone(), &gpu);
-        let plain = pipeline(spektrafilm_model::grain_hash::FAST_K, spektrafilm_model::grain_hash::FAST_OD_SHARE)
+        let plain = pipeline(spektrafilm_model::grain_hash::FAST_K, spektrafilm_model::grain_hash::FAST_OD_SHARE, 1.0)
             .process(img, &spektrafilm_gpu::cpu_backend::CpuBackend);
         let (mean, max) = diff(&out_gpu, &out_cpu);
         let (effect, _) = diff(&out_cpu, &plain);

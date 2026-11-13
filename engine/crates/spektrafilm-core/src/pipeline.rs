@@ -1256,6 +1256,9 @@ impl Pipeline {
                         fast_count_frac: hg.fast_count_frac,
                         fast_k: hg.fast_k,
                         fast_od_share: hg.fast_od_share,
+                        grain_gain_dense: hg.grain_gain_dense,
+                        grain_gain_from: hg.grain_gain_from,
+                        grain_gain_to: hg.grain_gain_to,
                         scan_noise: [hg.scan_noise, hg.scan_noise_slope, hg.scan_noise_chroma],
                     }),
                 })

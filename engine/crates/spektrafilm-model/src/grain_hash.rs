@@ -101,6 +101,10 @@ pub struct HashGrain {
     /// The fast crystals' saturation exponent and density share (GrainParams `fast_k` / `fast_od_share`).
     pub fast_k: f32,
     pub fast_od_share: f32,
+    /// Gain on the grain's deviation in the dense part (GrainParams `grain_gain_dense` / `grain_gain_from`; 1 = off).
+    pub grain_gain_dense: f32,
+    pub grain_gain_from: f32,
+    pub grain_gain_to: f32,
     /// The lab scanner's noise, in density at density 1 (`scan_noise_at`): 0 = none.
     pub scan_noise: f32,
     /// How it grows with density (`scan_noise_at`): 10^(slope (d - 1)).
@@ -113,6 +117,13 @@ pub struct HashGrain {
 }
 
 #[inline]
+/// The grain deviation's gain at the layer's developed fraction `p` (GrainParams `grain_gain_dense`): 1 up to `from`,
+/// `dense` from `to` up, smoothstep in between. Mirrored by `grain_hash.wgsl` (`dense_gain`).
+pub fn dense_gain(dense: f32, from: f32, to: f32, p: f32) -> f32 {
+    let t = ((p - from) / (to - from).max(1e-6)).clamp(0.0, 1.0);
+    1.0 + (dense - 1.0) * t * t * (3.0 - 2.0 * t)
+}
+
 pub fn pcg(x: u32) -> u32 {
     let s = x.wrapping_mul(747796405).wrapping_add(2891336453);
     let w = ((s >> ((s >> 28) + 4)) ^ s).wrapping_mul(277803737);
@@ -273,7 +284,7 @@ pub fn grain_density_pixel(g: &HashGrain, d: [f32; 3], gx: u32, gy: u32) -> [f32
             }
         }
         let grain = if g.n_sub_layers >= 2 { sum } else { sum / g.n_sub_layers as f32 } - dmin;
-        let mut dev = grain - d[ch];
+        let mut dev = (grain - d[ch]) * dense_gain(g.grain_gain_dense, g.grain_gain_from, g.grain_gain_to, p);
         d_ins[ch] = d_in;
         if g.micro_sigma > 0.0 {
             let mut st = pixel_state(stream_key(g.seed, 1000 + layer), gx, gy);
@@ -334,9 +345,10 @@ pub fn grain_dev_split(g: &HashGrain, d: [f32; 3], gx: u32, gy: u32) -> [[f32; 3
             let developed = binomial(seeds, ps, qs, &mut st);
             contrib[sl] = developed * (dmax * w / npp_s) * sat_s;
         }
-        let dev = contrib[0] + contrib[1] - dmin - d[ch];
+        let k = dense_gain(g.grain_gain_dense, g.grain_gain_from, g.grain_gain_to, p);
+        let dev = (contrib[0] + contrib[1] - dmin - d[ch]) * k;
         d_ins[ch] = d_in;
-        let fast = contrib[0] - p_fast * dmax * g.fast_od_share;
+        let fast = (contrib[0] - p_fast * dmax * g.fast_od_share) * k;
         let m = if g.micro_sigma > 0.0 {
             let mut st = pixel_state(stream_key(g.seed, 1000 + layer), gx, gy);
             let z = std_normal(&mut st);
@@ -570,7 +582,7 @@ mod tests {
                     sum /= p.n_sub_layers as f32;
                 }
                 let grain = sum - dmin;
-                let mut dev = grain - d[ch];
+                let mut dev = grain - d[ch];   // (the mirror runs at grain_gain_dense 1)
                 if p.micro_sigma > 0.0 {
                     let mut st = pixel_state(stream_key(p, 1000 + layer), gx, gy);
                     let z = std_normal(&mut st);
@@ -613,6 +625,9 @@ mod tests {
             fast_count_frac: 0.02,
             fast_k: FAST_K,
             fast_od_share: FAST_OD_SHARE,
+            grain_gain_dense: 1.0,
+            grain_gain_from: 0.5,
+            grain_gain_to: 1.0,
             scan_noise: 0.0,
             scan_noise_slope: 1.0,
             scan_noise_chroma: 1.0,

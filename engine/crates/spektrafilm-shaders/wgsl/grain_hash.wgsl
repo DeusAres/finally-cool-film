@@ -33,6 +33,14 @@ struct Params {
     scan_noise_chroma: f32,       // its colour share (1: channels independent, 0: one draw)
     fast_k: f32,                  // the fast crystals' saturation exponent (HashGrain fast_k)
     fast_od_share: f32,           // their share of the max density (HashGrain fast_od_share)
+    grain_gain_dense: f32,        // the grain deviation's gain at full development (HashGrain grain_gain_dense)
+    grain_gain_from: f32,         // the developed fraction where it starts (1 below)
+    grain_gain_to: f32,           // and where it reaches grain_gain_dense
+}
+
+fn dense_gain(p: f32) -> f32 {   // grain_hash.rs dense_gain
+    let t = clamp((p - params.grain_gain_from) / max(params.grain_gain_to - params.grain_gain_from, 1e-6), 0.0, 1.0);
+    return 1.0 + (params.grain_gain_dense - 1.0) * t * t * (3.0 - 2.0 * t);
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -191,7 +199,7 @@ fn grain_density(d: vec3<f32>, gx: u32, gy: u32) -> vec3<f32> {
             sum = sum / f32(params.n_sub_layers);
         }
         let grain = sum - dmin;
-        var dev = grain - d[ch];
+        var dev = (grain - d[ch]) * dense_gain(p);
         d_ins[ch] = d_in;
         if params.micro_sigma > 0.0 {
             var st = pixel_state(stream_key(1000u + layer), gx, gy);
@@ -262,9 +270,10 @@ fn grain_devs(d: vec3<f32>, gx: u32, gy: u32) -> array<vec3<f32>, 2> {
             let developed = binomial(seeds, ps, qs, &st);
             contrib[sl] = developed * (dmax * w / npp_s) * sat_s;
         }
-        let dev = contrib.x + contrib.y - dmin - d[ch];
+        let k = dense_gain(p);
+        let dev = (contrib.x + contrib.y - dmin - d[ch]) * k;
         d_ins[ch] = d_in;
-        let fast = contrib.x - p_fast * dmax * params.fast_od_share;
+        let fast = (contrib.x - p_fast * dmax * params.fast_od_share) * k;
         var m = 1.0;
         if params.micro_sigma > 0.0 {
             var st = pixel_state(stream_key(1000u + layer), gx, gy);
