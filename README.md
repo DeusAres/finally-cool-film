@@ -14,6 +14,10 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.50**: **Esporta su iPhone: «Salva nelle Foto»**: dall'app sulla schermata Home il download finiva in File e non
+  in Foto. Ora sul telefono, a export finito, compare il bottone «Salva nelle Foto»: apre il foglio di condivisione di iOS,
+  da cui «Salva immagine» la mette nel rullino (serve un tocco nuovo: iOS non apre la condivisione alla fine di un export
+  lungo). Sul computer resta il download. Solo interfaccia; nessun caso del check cambia.
 - **v4.49**: **Sottoesposizione più vera col Frontier**: un negativo sottile veniva riportato del tutto alla luminosità
   normale e senza correzione colore, quindi -2 / -3 EV uscivano come 0 EV ma più gialli e saturi. Su un bracketing vero di
   Gold 200 su Frontier il laboratorio compensa solo in parte: -1 / -2 / -3 EV stampano 2,0 / 3,7 / 7,9 L* più scuri, con

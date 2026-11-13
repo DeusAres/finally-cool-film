@@ -6,6 +6,7 @@
 // Built over the app's own controls: the classic panes stay in the page (hidden) and remain the one source of truth: UI 2
 // sets their values and dispatches their events, reads their labels and their formatted outputs. Prototype: user, 2026-11-03.
 import { store, DESK } from './util.js';
+import { download } from './encoder.js';
 import { initMascot } from './mascot.js';
 import { tiltRuler } from './ruler.js';
 import { FRAME_STYLES, FRAME_NAMES } from './filmframe.js';
@@ -390,13 +391,35 @@ export function initUI2(api) {
           else if (/JPEG|ridimensiono/.test(t)) bar.style.width = '95%';
         });
         watch.observe(st, { childList: true, characterData: true, subtree: true });
-        Promise.resolve(api.exportFull(ig)).finally(() => { watch.disconnect(); bar.style.width = '100%'; haptic(); setTimeout(close, 700); });
+        let file = null;
+        const deliver = (blob, name) => {
+          const f = new File([blob], name, { type: 'image/jpeg' });
+          if (SHARE_SAVE && navigator.canShare?.({ files: [f] })) file = f; else download(blob, name);
+        };
+        Promise.resolve(api.exportFull(ig, deliver)).finally(() => {
+          watch.disconnect(); bar.style.width = '100%'; haptic();
+          if (file) offerShare(s, file); else setTimeout(close, 700);
+        });
       };
       s.querySelector('#u2full').onclick = () => run(false);
       s.querySelector('#u2ig').onclick = () => run(true);
       sync();
     });
   };
+
+  // Phone: the export goes to the share sheet ("Salva immagine" puts it in Photos; an iOS home-screen app cannot save to
+  // Photos any other way, a download lands in Files). navigator.share needs a fresh tap (WebKit's user activation lasts
+  // ~5 s, an export takes longer), so the export ends on a button and its onclick calls share with nothing awaited
+  // before. Files only: a title or text next to them makes iOS drop "Salva immagine". The promise is not awaited for
+  // the UI: after "Salva immagine" it may never settle. Desktop (fine pointer) keeps the plain download.
+  const SHARE_SAVE = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  function offerShare(s, file) {
+    const b = document.createElement('button');
+    b.className = 'u2go u2gopri';
+    b.innerHTML = `${svg('share')}<span><b>Salva nelle Foto</b><i>poi «Salva immagine»</i></span>`;
+    b.onclick = () => navigator.share({ files: [file] }).catch((e) => { if (e?.name !== 'AbortError') download(file, file.name); });
+    s.querySelector('#u2prog').after(b);
+  }
 
   // --- a bottom sheet over a scrim
   let open = null;

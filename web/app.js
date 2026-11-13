@@ -880,7 +880,7 @@ const matColour = () => {
 // `ig`: Instagram export (v3.27, any orientation): an IG_W × IG_H (3:4) sRGB canvas, the whole photo fitted inside it (mat colour
 // around, so Instagram never crops it), rendered at IG_SUPER × the posted size, then Lanczos-downscaled in linear light and
 // output-sharpened for screen (lib/igout.js), like Lightroom's Resize to fit + Sharpen for Screen.
-async function exportFull(ig = false) {
+async function exportFull(ig = false, deliver = download) {
   // not during a photo load: its decode and the export's would be in memory together
   if (!photo || exporting || loadingPhoto) return;
   while (internoBusy || rotBusy) await sleep(20);   // a pending Interno toggle / AutoSetup / turn must land before the snapshot
@@ -1006,7 +1006,7 @@ async function exportFull(ig = false) {
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
     log(`export done ${(blob.size / 1e6).toFixed(1)} MB in ${secs} s`);
     status(`Esportata: ${result.width}×${result.height}, ${(blob.size / 1e6).toFixed(1)} MB in ${secs} s`);
-    download(blob, `${base}_gold200${ig ? '_ig' : ''}${border || (ig && bFrac) ? '_bordo' : ''}.jpg`);
+    deliver(blob, `${base}_gold200${ig ? '_ig' : ''}${border || (ig && bFrac) ? '_bordo' : ''}.jpg`);
   } catch (e) {
     enc?.post({ cmd: 'abort' });
     log('export error: ' + (e?.stack || e));
@@ -1153,7 +1153,7 @@ if (UI2) {
     },
     openTab: (t) => document.querySelector(`#tabs [data-tab="${t}"]`)?.click(),
     rotate: (q) => rotate(q),
-    exportFull: (ig) => exportFull(ig),
+    exportFull: (ig, deliver) => exportFull(ig, deliver),
   });
 }
 $('exportIG').addEventListener('click', () => exportFull(true));
