@@ -499,6 +499,13 @@ pub struct GrainParams {
     /// Share of the crystals that are fast (two-population emulsions): how much of the grain is theirs.
     #[serde(default = "default_fast_count_frac")]
     pub fast_count_frac: f32,
+    /// The fast crystals' developed fraction `1 - (1 - p)^fast_k` (p: the layer's mean developed fraction): how quickly they
+    /// saturate along the density, i.e. at which tones the coarse grain is (grain_hash `FAST_K` was fixed until 4.47).
+    #[serde(default = "default_fast_k")]
+    pub fast_k: f32,
+    /// Share of the layer's max density carried by the fast crystals (<= 1 / `fast_k`; grain_hash `FAST_OD_SHARE` was fixed).
+    #[serde(default = "default_fast_od_share")]
+    pub fast_od_share: f32,
     /// Per-layer multiplier on the FAST crystals' dye-cloud blur sigma (`blur_fast`; hash grain, colour films), R, G, B
     /// channel = cyan, magenta, yellow dye layer. In a real colour negative the layers have different big crystals (the
     /// blue-sensitive yellow layer the biggest), so their clumps do not coincide: colour mottle at clump scale instead of
@@ -582,6 +589,12 @@ fn default_particle_scale_f64() -> [f64; 3] {
 fn default_fast_count_frac() -> f32 {
     spektrafilm_model::grain_hash::FAST_COUNT_FRAC
 }
+fn default_fast_k() -> f32 {
+    spektrafilm_model::grain_hash::FAST_K
+}
+fn default_fast_od_share() -> f32 {
+    spektrafilm_model::grain_hash::FAST_OD_SHARE
+}
 fn default_layer_blur() -> [f32; 3] {
     [1.0; 3]
 }
@@ -609,6 +622,8 @@ impl Default for GrainParams {
             blur_dye_clouds_um: 1.0,
             blur_fast: 0.0,
             fast_count_frac: spektrafilm_model::grain_hash::FAST_COUNT_FRAC,
+            fast_k: spektrafilm_model::grain_hash::FAST_K,
+            fast_od_share: spektrafilm_model::grain_hash::FAST_OD_SHARE,
             layer_blur_fast: default_layer_blur(),
             scan_noise: 0.0,
             scan_noise_slope: 1.0,

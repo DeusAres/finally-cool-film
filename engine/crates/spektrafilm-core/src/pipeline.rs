@@ -1254,6 +1254,8 @@ impl Pipeline {
                         layer_px: gb.layer_px,
                         layer_gain: gb.layer_gain,
                         fast_count_frac: hg.fast_count_frac,
+                        fast_k: hg.fast_k,
+                        fast_od_share: hg.fast_od_share,
                         scan_noise: [hg.scan_noise, hg.scan_noise_slope, hg.scan_noise_chroma],
                     }),
                 })

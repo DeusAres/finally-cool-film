@@ -559,6 +559,9 @@ pub fn hash_grain_setup(
         micro_sigma: g.micro_structure[0].max(0.0),
         amount: g.amount as f32,
         fast_count_frac: g.fast_count_frac,
+        fast_k: g.fast_k.max(1.0),
+        // the fast share carries at most 1 / k of the density (p_slow stays a fraction at full development)
+        fast_od_share: g.fast_od_share.clamp(0.0, 0.999 / g.fast_k.max(1.0)),
         // per pixel: the sigma over SCAN_NOISE_REF_UM pixels, averaged over this pixel's area (1 / pitch)
         scan_noise: (g.scan_noise as f64 * SCAN_NOISE_REF_UM / pix_um) as f32,
         scan_noise_slope: g.scan_noise_slope,
@@ -864,6 +867,48 @@ mod tests {
         let (effect, _) = diff(&out_cpu, &plain);
         eprintln!("GPU vs CPU: mean {mean}, max {max}; layer blur effect (CPU, mean) {effect}");
         assert!(effect > 4.0 * mean, "the GPU error is not small next to the per-layer blur: {mean} vs {effect}");
+        assert!(mean < 5e-3 && max < 5e-2, "GPU vs CPU: mean {mean}, max {max}");
+    }
+
+    /// GrainParams `fast_k` / `fast_od_share` (4.47; the fast crystals' split by density, fixed constants until then) reach the
+    /// GPU-resident chain as on the CPU stage: non-default values, same budget and frame as the test above, halation off. Also
+    /// checks they move the frame (a field the GPU ignored would pass the parity at the defaults).
+    #[test]
+    fn fast_split_gpu_resident_matches_cpu() {
+        let Some(gpu) = spektrafilm_gpu::wgpu_backend::WgpuBackend::new() else {
+            eprintln!("no GPU adapter available; skipping");
+            return;
+        };
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().join("data");
+        let pipeline = |fast_k: f32, fast_od_share: f32| {
+            let film = crate::profile::load_profile_by_name(&dir, "kodak_gold_200").unwrap();
+            let print = crate::profile::load_profile_by_name(&dir, "kodak_portra_endura").unwrap();
+            let mut params = RuntimeParams::default();
+            params.camera.auto_exposure = false;
+            params.camera.film_format_mm = 1.5;
+            params.film_render.halation.active = false;
+            params.io.output_gamut_compress.algorithm = "off".into();
+            let g = &mut params.film_render.grain;
+            (g.blur, g.blur_fast, g.fast_count_frac, g.amount) = (0.2, 1.2, 0.0023, 4.5);
+            (g.fast_k, g.fast_od_share) = (fast_k, fast_od_share);
+            crate::pipeline::Pipeline::new_with_spectral(film, print, params, &dir).unwrap()
+        };
+        let (w, h) = (64u32, 64u32);
+        let data: Vec<_> = (0..w * h * 3).map(|i| from_f64(0.05 + 0.6 * ((i / 3) % 9) as f64 / 9.0)).collect();
+        let img = ImageBuf::from_data(w, h, data);
+        let diff = |a: &ImageBuf, b: &ImageBuf| {
+            let d: Vec<f64> = a.data.iter().zip(b.data.iter()).map(|(x, y)| (*x as f64 - *y as f64).abs()).collect();
+            (d.iter().sum::<f64>() / d.len() as f64, d.iter().cloned().fold(0.0, f64::max))
+        };
+        let p = pipeline(1.8, 0.45);
+        let out_cpu = p.process(img.clone(), &spektrafilm_gpu::cpu_backend::CpuBackend);
+        let out_gpu = p.process(img.clone(), &gpu);
+        let plain = pipeline(spektrafilm_model::grain_hash::FAST_K, spektrafilm_model::grain_hash::FAST_OD_SHARE)
+            .process(img, &spektrafilm_gpu::cpu_backend::CpuBackend);
+        let (mean, max) = diff(&out_gpu, &out_cpu);
+        let (effect, _) = diff(&out_cpu, &plain);
+        eprintln!("GPU vs CPU: mean {mean}, max {max}; fast split effect (CPU, mean) {effect}");
+        assert!(effect > 4.0 * mean, "the GPU error is not small next to the fast split's effect: {mean} vs {effect}");
         assert!(mean < 5e-3 && max < 5e-2, "GPU vs CPU: mean {mean}, max {max}");
     }
 

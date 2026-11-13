@@ -31,6 +31,8 @@ struct Params {
     scan_noise: f32,              // the scanner's noise (scan_noise_rgb in grain_hash.rs): sigma at density 1,
     scan_noise_slope: f32,        // its growth 10^(slope (d - 1)),
     scan_noise_chroma: f32,       // its colour share (1: channels independent, 0: one draw)
+    fast_k: f32,                  // the fast crystals' saturation exponent (HashGrain fast_k)
+    fast_od_share: f32,           // their share of the max density (HashGrain fast_od_share)
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -128,8 +130,6 @@ fn binomial(n: f32, p: f32, q: f32, st: ptr<function, u32>) -> f32 {
     return clamp(floor(np + sqrt(np * q) * z + 0.5), 0.0, n);
 }
 
-const FAST_OD_SHARE: f32 = 0.3;
-const FAST_K: f32 = 3.3;
 const LAYER_COUPLING: f32 = 0.97;
 // coupling rises to LAYER_COUPLING_HI between mean developed fraction COUPLING_P0 and COUPLING_P1
 // (lights: less coloured grain where the shoulder squeezes luma only); see grain_hash.rs
@@ -165,14 +165,14 @@ fn grain_density(d: vec3<f32>, gx: u32, gy: u32) -> vec3<f32> {
         var sum = 0.0;
         if params.n_sub_layers >= 2u {
             let npp_tot = npp * f32(params.n_sub_layers);
-            let qk = pow(q, FAST_K);
+            let qk = pow(q, params.fast_k);
             let p_fast = clamp(1.0 - qk, 1e-6, 1.0 - 1e-6);
             let q_fast = clamp(qk, 1e-6, 1.0 - 1e-6);
-            let w_slow = 1.0 - FAST_OD_SHARE;
-            let p_slow = clamp((p - FAST_OD_SHARE * p_fast) / w_slow, 1e-6, 1.0 - 1e-6);
-            let q_slow = clamp((q - FAST_OD_SHARE * qk) / w_slow, 1e-6, 1.0 - 1e-6);
+            let w_slow = 1.0 - params.fast_od_share;
+            let p_slow = clamp((p - params.fast_od_share * p_fast) / w_slow, 1e-6, 1.0 - 1e-6);
+            let q_slow = clamp((q - params.fast_od_share * qk) / w_slow, 1e-6, 1.0 - 1e-6);
             for (var sl = 0u; sl < 2u; sl++) {
-                var ps = p_fast; var qs = q_fast; var w = FAST_OD_SHARE; var cf = params.fast_count_frac;
+                var ps = p_fast; var qs = q_fast; var w = params.fast_od_share; var cf = params.fast_count_frac;
                 if sl == 1u { ps = p_slow; qs = q_slow; w = w_slow; cf = 1.0 - params.fast_count_frac; }
                 let npp_s = npp_tot * cf;
                 let sat_s = 1.0 - ps * params.uniformity[ch] * (1.0 - 1e-6);
@@ -245,15 +245,15 @@ fn grain_devs(d: vec3<f32>, gx: u32, gy: u32) -> array<vec3<f32>, 2> {
         p_hi = max(p_hi, p);
         let q = clamp((dmax - d_in) / dmax, 1e-6, 1.0 - 1e-6);
         let npp_tot = params.n_particles[ch] * f32(params.n_sub_layers);
-        let qk = pow(q, FAST_K);
+        let qk = pow(q, params.fast_k);
         let p_fast = clamp(1.0 - qk, 1e-6, 1.0 - 1e-6);
         let q_fast = clamp(qk, 1e-6, 1.0 - 1e-6);
-        let w_slow = 1.0 - FAST_OD_SHARE;
-        let p_slow = clamp((p - FAST_OD_SHARE * p_fast) / w_slow, 1e-6, 1.0 - 1e-6);
-        let q_slow = clamp((q - FAST_OD_SHARE * qk) / w_slow, 1e-6, 1.0 - 1e-6);
+        let w_slow = 1.0 - params.fast_od_share;
+        let p_slow = clamp((p - params.fast_od_share * p_fast) / w_slow, 1e-6, 1.0 - 1e-6);
+        let q_slow = clamp((q - params.fast_od_share * qk) / w_slow, 1e-6, 1.0 - 1e-6);
         var contrib = vec2<f32>(0.0);
         for (var sl = 0u; sl < 2u; sl++) {
-            var ps = p_fast; var qs = q_fast; var w = FAST_OD_SHARE; var cf = params.fast_count_frac;
+            var ps = p_fast; var qs = q_fast; var w = params.fast_od_share; var cf = params.fast_count_frac;
             if sl == 1u { ps = p_slow; qs = q_slow; w = w_slow; cf = 1.0 - params.fast_count_frac; }
             let npp_s = npp_tot * cf;
             let sat_s = 1.0 - ps * params.uniformity[ch] * (1.0 - 1e-6);
@@ -264,7 +264,7 @@ fn grain_devs(d: vec3<f32>, gx: u32, gy: u32) -> array<vec3<f32>, 2> {
         }
         let dev = contrib.x + contrib.y - dmin - d[ch];
         d_ins[ch] = d_in;
-        let fast = contrib.x - p_fast * dmax * FAST_OD_SHARE;
+        let fast = contrib.x - p_fast * dmax * params.fast_od_share;
         var m = 1.0;
         if params.micro_sigma > 0.0 {
             var st = pixel_state(stream_key(1000u + layer), gx, gy);

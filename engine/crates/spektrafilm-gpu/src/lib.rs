@@ -358,6 +358,9 @@ pub struct GrainHashGpu {
     pub fast_blur: f32,
     /// Share of the crystals that are fast (`spektrafilm_model::grain_hash::HashGrain::fast_count_frac`).
     pub fast_count_frac: f32,
+    /// The fast crystals' saturation exponent and density share (`HashGrain::fast_k` / `fast_od_share`).
+    pub fast_k: f32,
+    pub fast_od_share: f32,
     /// Per-layer dye-cloud sigma (px) per channel (R, G, B = cyan, magenta, yellow layer), filled by core
     /// (filming.rs `hash_grain_setup`): `[0]` the soft population (`grain_blur` on all three), `[1]` the fast crystals'
     /// (`fast_blur` times GrainParams `layer_blur_fast`). The scan sharpening radius is not scaled per layer.

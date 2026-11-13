@@ -5900,6 +5900,9 @@ fn build_grain_state(
             split: f32,
             fast_count_frac: f32,
             scan_noise: [f32; 3],
+            fast_k: f32,
+            fast_od_share: f32,
+            _pad: [f32; 2],   // the WGSL struct's size rounds up to 16 bytes
         }
         let v4 = |a: [f32; 3]| [a[0], a[1], a[2], 0.0];
         let params = HashParams {
@@ -5921,6 +5924,9 @@ fn build_grain_state(
             split: if split { 1.0 } else { 0.0 },
             fast_count_frac: h.fast_count_frac,
             scan_noise: h.scan_noise,
+            fast_k: h.fast_k,
+            fast_od_share: h.fast_od_share,
+            _pad: [0.0; 2],
         };
         let params_buf = device.create_buffer_init_t(&wgpu::util::BufferInitDescriptor {
             label: Some("grain_hash_params"),
