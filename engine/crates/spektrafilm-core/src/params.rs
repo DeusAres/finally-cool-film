@@ -434,6 +434,11 @@ pub struct FrontierAutoParams {
     pub thin_k_col: f64,
     pub thin_ev_lo: f64,
     pub thin_ev_hi: f64,
+    /// Thin negatives: the share of the density key's lift beyond `thin_ev_lo` EV that is applied (1 = all, as before 4.49).
+    /// A lab compensates an underexposed frame in part: a real Gold 200 Frontier bracket printed -1 / -2 / -3 EV 2.0 / 3.7 /
+    /// 7.9 L* darker than its 0 EV frame, where a full lift (up to `clamp_density`) printed them at the same level.
+    #[serde(default = "default_one_f64")]
+    pub thin_lift: f64,
     /// Colour reading robust to one-colour subjects (the Frontier's "subject failure": a lawn, the sea, a red wall pulled
     /// towards grey): each thumb pixel's weight in the colour mean is 1 / (1 + (chroma / neutral_sigma)^2), chroma = the
     /// largest |D_c - D_G| in setup density (0 on a neutral). Large saturated areas then barely count; a real cast moves
@@ -464,6 +469,7 @@ impl Default for FrontierAutoParams {
             thin_k_col: 0.0,
             thin_ev_lo: 0.8,
             thin_ev_hi: 1.6,
+            thin_lift: 1.0,
             neutral_sigma: 0.0,
         }
     }

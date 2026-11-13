@@ -116,7 +116,16 @@ export const V4_NEUTRAL_SIGMA = 0.06;
 // 4.28: dense frames: the real Frontier compensates the bracket in full up to +5 EV (mean L* within 3 of 0 EV); the inherited clamp
 // (0.45 density, ~3 EV, no source) stopped ours at ~3 EV. clamp_density_dense 1.0 (~7 EV) leaves the darkening to the key; the
 // lift of a thin frame keeps 0.45 (the real -3 EV frame is printed darker than ours already, a wider lift would add to that).
-export const V4_AUTO = { strength: 1.0, k_col: 0.68, highlight_weight: 0.6, target_offset: -0.07, highlight_max_channel: true, clamp_density_dense: 1.0 };
+// 4.49, the thin side (user: Esposizione as the negative's exposure): a real Gold 200 Frontier bracket (ikigai, tripod, overcast)
+// prints -1 / -2 / -3 EV 2.0 / 3.7 / 7.9 L* darker than its 0 EV frame, chroma -1.3 / -2.7 / -5.4, mid b* -1.7 / -4.2 / -11.7
+// (less yellow); ours lifted them in full up to the 0.45 clamp (-0.8 / +0.2 / -2.0 L*) and left their colour alone (engine
+// thin_k_col 0: mid b* +5.8 / +7.2 / +0.2, chroma +2.8 / +2.9 / -1.1). Engine thin_lift (4.49): the lift beyond thin_ev_lo
+// (0.8 EV) applied at 0.85 (0.7: -2 EV 7.2 L* dark; 0.55: -3 EV 19.6), and the colour corrected as on a normal frame
+// (thin_k_col = k_col; the old protection was for the Noritsu's dark sunset, V4_NORITSU_AUTO keeps it). Now -0.6 / -3.6 /
+// -6.6 L*, chroma 0.0 / -1.3 / -4.6, mid b* +1.0 / +0.4 / -6.1. Left: the thin frame's flatness (contrast -12.7 at -3 EV,
+// ours -3.9: the film's toe, not the lab). One scene.
+export const V4_AUTO = { strength: 1.0, k_col: 0.68, highlight_weight: 0.6, target_offset: -0.07, highlight_max_channel: true, clamp_density_dense: 1.0,
+  thin_lift: 0.85, thin_k_col: 0.68 };
 // v4 Frontier tone and colour, fitted to a real Frontier (eval/frontier_cp, eval/V4.md): the Color Precision film comparison tool's
 // Gold 200 chart frames (ColorChecker SG + Kodak grey scale, -1..+2 EV; the same negatives also on a Noritsu), our v4 Frontier
 // rendering the same patches on CPU with the operator's density / C M Y keys as free nuisances. Tone: grey L* rms 2.6 -> 1.2;

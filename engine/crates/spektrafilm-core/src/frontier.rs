@@ -1347,6 +1347,11 @@ pub fn auto_setup(base: &FrontierBase, cmy: &[f32], width: usize, height: usize)
         let cap = knee + p.highlight_margin - hi;
         d_den = d_den.min(p.strength * cap);
     }
+    // thin frames: the lift beyond thin_ev_lo applied in part (thin_lift), before the clamp
+    let lo = p.thin_ev_lo * base.d_per_ev;
+    if d_den > lo {
+        d_den = lo + p.thin_lift * (d_den - lo);
+    }
     let dense = if p.clamp_density_dense > 0.0 { p.clamp_density_dense } else { p.clamp_density };
     let d_den = d_den.clamp(-dense, p.clamp_density);
     let k_col = thin_k_col(p, d_den / base.d_per_ev, k_col0);
