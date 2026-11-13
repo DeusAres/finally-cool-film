@@ -48,16 +48,30 @@ use crate::params::{FrontierAutoParams, FrontierModelParams, FrontierParams};
 use crate::profile::Profile;
 
 /// Highlights key, as functions of the output level above mid grey (u: 0 = mid grey, 1 = white).
-/// Down (h = -1): bump (amplitude, rise width, fall start, fall width) subtracted from the output.
 /// Up (h = +1): (gain, rise width): the remaining distance to white shrinks by `gain * smoothstep`.
 /// Both are linear in the key.
-const HIGHLIGHT_DOWN: (f64, f64, f64, f64) = (0.22, 0.7, 0.7, 0.8);
 /// Up gain 0.85 -> 0.5 (4.31, user: Tono luci Hard "alza troppo le luci e le brucia"): at Hard (key 0.5, app.js TONE_HI) the
 /// distance to white shrank by up to 42 %, so the tones above u 0.6 kept 57 % of their separation and white fur / clouds went
 /// flat. Now 25 %: they keep 75 %, the lights still rise (+0.12 of the upper range at u 0.5, was +0.20). Any lift with a fixed
 /// white compresses somewhere; a bump that returns to zero at white was tried and compresses its falling part harder (slope
 /// 0.16-0.38). Brightness itself is Densità's.
 const HIGHLIGHT_UP: (f64, f64) = (0.5, 0.6);
+/// Highlights key down (Tono luci Soft, 4.47): until then a bump subtracted from the output above mid grey (HIGHLIGHT_DOWN). It
+/// acted after the curve, where everything past the shoulder is already one white: the lights came out grey and flat, nothing
+/// came back (user's DNG P5282720, a tower in a bright sky ~5 EV over a shaded alley: sky L* 94.8 -> 87.8, local detail 1.46 ->
+/// 1.65, while Densità -6 brought the detail to 3.8 but sank the alley from L* 37.6 to 15.9). Now it acts on the negative before
+/// the curve, as a lab's highlight compression: above the normalized density where the curve reaches SOFT_FROM (encoded), the
+/// pixel's mean density is compressed (u -> u / (1 + k u), C1 at the start) so that SOFT_RANGE more of the negative (x units of
+/// range_density; 0.6 ~ 5.8 EV) fits under the level SOFT_TO at the full key: the Frontier's steep curve reaches its white well
+/// before the end of the range (a sky 5 EV over the subject sits on that flat top, not past the range: compressing only what
+/// is past x = 1 moved it from L* 94.8 to 93.7). Mids and shadows untouched, hue kept (one shift for the three channels, as the
+/// whites key). SOFT_FROM / SOFT_TO / SOFT_RANGE: choices, measured on that DNG: Soft alone, sky L* 94.8 -> 91.2 / 89.4 / 88.2
+/// (range 0.3 / 0.6 / 1.0), the brightest 80-97 % 80.6 -> 78.5 / 77.7 / 77.1 (the old bump: 72.4, flat), the alley unchanged
+/// (37.6); with Hyper Tone luci 5: sky 82.3 / 81.0 / 80.2, b* -2.8 / -3.1 / -3.2. The sky's own texture does not come back:
+/// it is compressed in the film's shoulder, before the scanner (Hyper Tone, which dodges the scene light, is what reaches it).
+const SOFT_FROM: f64 = 0.6;
+const SOFT_TO: f64 = 0.93;
+const SOFT_RANGE: f64 = 0.6;
 /// Contrast key: mid-grey slope factor `1 + SLOPE_UP c` (c > 0) / `1 + SLOPE_DOWN c` (c < 0).
 const SLOPE_UP: f64 = 1.9;
 const SLOPE_DOWN: f64 = 0.85;
@@ -417,11 +431,15 @@ impl FrontierBase {
         // output fading in above mid grey, so mid grey and shadows keep the model curve. Exactly the model curve at 0.
         let h = (keys.highlight as f64).clamp(-1.0, 1.0);
         let sh = m.shoulder_sharpness;
+        let g0 = Gradation::solve(m.gradation_a, sh, m);
         Stage {
             d_ref: self.d_ref,
             range: m.range_density.max(1e-6),
             shift,
-            curve: Gradation::solve(m.gradation_a, sh, m).with_highlight(h),
+            curve: Gradation::solve(m.gradation_a, sh, m).with_highlight(h.max(0.0)),
+            soft: (-h).max(0.0) * SOFT_RANGE,
+            soft_x0: g0.x_at(SOFT_FROM),
+            soft_x1: g0.x_at(SOFT_TO),
             tone: Tone::new(a / m.gradation_a, m, keys.debug_contrast_mode),
             lift: keys.black_lift.clamp(-1.0, 1.0) as f64 * m.black_lift_max,
             mid_slope: {
@@ -582,9 +600,8 @@ impl Gradation {
         ys + (1.0 - ys) * f
     }
 
-    /// Highlights key (`HIGHLIGHT_DOWN` / `HIGHLIGHT_UP`) applied to the shouldered
-    /// output above mid grey; h < 0 pulls the highlights down, h > 0 opens them towards paper white
-    /// without a clip. Mid grey, shadows and h = 0 are untouched.
+    /// Highlights key up (`HIGHLIGHT_UP`) applied to the shouldered output above mid grey: h > 0 opens them towards paper
+    /// white without a clip (the key down acts on the density: `soft_shift`). Mid grey, shadows and h = 0 are untouched.
     fn with_highlight(mut self, h: f64) -> Self {
         if h == 0.0 {
             return self;
@@ -603,6 +620,16 @@ impl Gradation {
             y = self.remap(y);
         }
         y
+    }
+
+    /// x at which the (key-free) curve reaches the encoded level `y`.
+    fn x_at(&self, y: f64) -> f64 {
+        let (mut lo, mut hi) = (0.0f64, 1.0f64);
+        for _ in 0..50 {
+            let mid = 0.5 * (lo + hi);
+            if self.curve(mid) < y { lo = mid } else { hi = mid }
+        }
+        0.5 * (lo + hi)
     }
 
     /// x at which the sigmoid reaches the shoulder knee (`shoulder_start`).
@@ -627,14 +654,9 @@ impl Gradation {
             };
             let o0 = self.ya / self.shoulder_one;
             let u = ((o - o0) / (1.0 - o0)).clamp(0.0, 1.0);
-            if self.hl < 0.0 {
-                let (amp, rise, fall_at, fall_w) = HIGHLIGHT_DOWN;
-                o += self.hl * amp * sm(u / rise) * (1.0 - sm((u - fall_at) / fall_w));
-            } else {
-                // the remaining distance to white shrinks by g: smooth approach, never past white
-                let (gain, rise) = HIGHLIGHT_UP;
-                o = 1.0 - (1.0 - o) * (1.0 - self.hl * gain * sm(u / rise));
-            }
+            // the remaining distance to white shrinks by g: smooth approach, never past white
+            let (gain, rise) = HIGHLIGHT_UP;
+            o = 1.0 - (1.0 - o) * (1.0 - self.hl * gain * sm(u / rise));
         }
         self.bp + (self.wp - self.bp) * o
     }
@@ -678,6 +700,22 @@ pub struct Stage {
     /// Whites key and the normalized density where it starts.
     whites: f64,
     whites_x0: f64,
+    /// Highlights key down: the extra normalized density brought under white (`SOFT_RANGE` x key) and where it starts.
+    soft: f64,
+    soft_x0: f64,
+    soft_x1: f64,
+}
+
+/// Highlights key down: normalized density shift for a pixel of (unclamped) mean density `xm`: 0 below `x0`, above it
+/// u -> u / (1 + k u) (u = xm - x0) with k such that x = `x1` + `extra` lands on `x1`.
+fn soft_shift(extra: f64, x0: f64, x1: f64, xm: f64) -> f64 {
+    let u = xm - x0;
+    if extra <= 0.0 || u <= 0.0 {
+        return 0.0;
+    }
+    let u0 = (x1 - x0).max(1e-6);
+    let k = 1.0 / u0 - 1.0 / (u0 + extra);
+    u / (1.0 + k * u) - u
 }
 
 /// Whites key: normalized density shift for a pixel of mean density `xm`, 0 below `x0`.
@@ -774,8 +812,15 @@ impl Stage {
         let mut x = [0.0f64; 3];
         let mut y = [0.0f64; 3];
         for c in 0..3 {
-            x[c] = (0.5 + (d[c] + self.shift[c] - self.d_ref) / self.range).clamp(0.0, 1.0);
+            x[c] = 0.5 + (d[c] + self.shift[c] - self.d_ref) / self.range;
         }
+        if self.soft > 0.0 {
+            // before the clamp: the densities past the range are what it brings back. One shift for the three channels (hue
+            // kept); its slope is within (-1, 0], so every channel stays increasing in its own density (>= 2/3)
+            let s = soft_shift(self.soft, self.soft_x0, self.soft_x1, (x[0] + x[1] + x[2]) / 3.0);
+            x = x.map(|v| v + s);
+        }
+        x = x.map(|v| v.clamp(0.0, 1.0));
         if let Some(tone) = &self.tone {
             let xm = (x[0] + x[1] + x[2]) / 3.0;
             let (xt, gap) = tone.at(xm);
@@ -1380,7 +1425,7 @@ mod tests {
             let x = i as f64 / 100.0;
             assert_eq!(base.curve(x).to_bits(), super::Gradation::solve(p.gradation_a, p.shoulder_sharpness, &p).curve(x).to_bits());
         }
-        for h in [-1.0f64, -0.5, 0.5, 1.0] {
+        for h in [0.5f64, 1.0] {
             let g = mk(h);
             let mut prev = -1.0;
             for i in 0..=2000 {
@@ -1394,11 +1439,33 @@ mod tests {
                 let d = g.curve(x) - base.curve(x);
                 assert!(d * h > 0.0, "wrong direction at h={h} x={x} d={d}");
             }
-            if h.abs() == 1.0 {
-                // strong key: the biggest highlight move is >= 0.15 (down) / 0.10 (up) in encoded level
-                let big = (0..=100).map(|i| (g.curve(i as f64 / 100.0) - base.curve(i as f64 / 100.0)) * h.signum()).fold(0.0f64, f64::max);
-                let need = if h < 0.0 { 0.15 } else { 0.10 };
-                assert!(big >= need, "highlight key too weak at h={h}: {big}");
+            if h == 1.0 {
+                // strong key: the biggest highlight move is >= 0.10 in encoded level
+                let big = (0..=100).map(|i| g.curve(i as f64 / 100.0) - base.curve(i as f64 / 100.0)).fold(0.0f64, f64::max);
+                assert!(big >= 0.10, "highlight key too weak at h={h}: {big}");
+            }
+        }
+    }
+
+    /// Highlights key down (density compression before the curve): nothing below its start, continuous with slope 1 there,
+    /// increasing, `extra` past `x1` lands on `x1`, and every channel stays increasing in its own density.
+    #[test]
+    fn soft_highlights_bring_the_density_past_white_back_and_keep_the_rest() {
+        for (extra, x0, x1) in [(0.3, 0.62, 0.75), (0.15, 0.55, 0.7), (0.3, 0.7, 1.0)] {
+            assert_eq!(super::soft_shift(extra, x0, x1, x0 - 0.1), 0.0);
+            assert_eq!(super::soft_shift(0.0, x0, x1, 0.9), 0.0);
+            assert!((super::soft_shift(extra, x0, x1, x1 + extra) - (-extra)).abs() < 1e-12, "x1 + extra must land on x1");
+            assert!(super::soft_shift(extra, x0, x1, x0 + 1e-6).abs() < 1e-9, "not C0 at the start");
+            let mut prev = f64::NEG_INFINITY;
+            for i in 0..=2000 {
+                let xm = x0 - 0.1 + (1.2 + extra) * i as f64 / 2000.0;
+                let y = xm + super::soft_shift(extra, x0, x1, xm);
+                assert!(y > prev, "mean not increasing at {xm}");
+                prev = y;
+                // one channel moving alone moves the mean by a third: its own output keeps increasing
+                let d = 1e-5;
+                let dy = (xm + d + super::soft_shift(extra, x0, x1, xm + d / 3.0)) - (xm + super::soft_shift(extra, x0, x1, xm));
+                assert!(dy > 0.0, "a channel decreases at {xm}");
             }
         }
     }
