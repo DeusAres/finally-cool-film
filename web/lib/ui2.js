@@ -436,6 +436,7 @@ export function initUI2(api) {
   function offerShare(s, file) {
     const b = document.createElement('button');
     b.className = 'u2go u2gopri'; b.id = 'u2share';
+    s.querySelector('#u2full').classList.remove('u2gopri');   // one primary button: saving is the next step now
     b.innerHTML = `${svg('share')}<span><b>Salva nelle Foto</b><i>poi «Salva immagine»</i></span>`;
     b.onclick = () => navigator.share({ files: [file] }).catch((e) => { if (e?.name !== 'AbortError') download(file, file.name); });
     s.querySelector('#u2prog').after(b);
