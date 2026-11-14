@@ -14,6 +14,9 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.54**: **Slider di nuovo visibili su iPhone**: dalla 4.52 il pallino degli slider aveva la grandezza in una variabile
+  CSS, che Safari su iPhone non applica al pallino: senza pallino lo slider (Qualità JPEG nell'Esporta) sembrava sparito.
+  Ora grandezze fisse (28 px, 16 px nella lista del desktop). Solo interfaccia; nessun caso del check cambia.
 - **v4.53**: **Grana: niente macchie né grappoli**: il colore della grana era quasi tutto blu/giallo (b/a 2,2-2,8 nei
   grigi contro 1,1-1,3 della pellicola vera), da qui le "macchie"; e i pochi cristalli grossi della 4.46 facevano grappoli di
   grani. Strato giallo meno grosso e ciano con i suoi grumi (layer_blur_fast [1, 1, 2,5] -> [1,3, 1, 1,6]), rumore dello

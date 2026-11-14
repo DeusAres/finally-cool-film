@@ -562,9 +562,10 @@ body.ui2:not(.u2desk) #u2mascot { bottom: calc(34px + var(--u2h, 0px)); }
   left: calc(var(--th) / 2 + var(--z) * (100% - var(--th))); }
 .u2track input, .u2sl input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 40px; background: transparent; margin: 0; position: relative; }
 .u2track input::-webkit-slider-runnable-track, .u2sl input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: #3a342e; }
-/* --th: the thumb's size (28 px: a finger; the desktop list's 16 px below), centred on the 4 px track */
-.u2track input::-webkit-slider-thumb, .u2sl input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: var(--th, 28px); height: var(--th, 28px);
-  margin-top: calc(2px - var(--th, 28px) / 2); border-radius: 50%; background: #fff; box-shadow: 0 1px 5px rgba(0,0,0,.5); }
+/* the thumb: 28 px (a finger; the desktop list's 16 px below), centred on the 4 px track. Plain px, not var(--th): iOS Safari
+   (4.52) dropped the thumb sized by a custom property (no thumb: the slider looked gone). Keep them equal to --th above. */
+.u2track input::-webkit-slider-thumb, .u2sl input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 28px; height: 28px;
+  margin-top: -12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 5px rgba(0,0,0,.5); }
 .u2none { color: var(--muted); font-size: 14px; display: grid; place-items: center; }
 .u2tools { display: flex; gap: 6px; overflow-x: auto; padding: 2px 12px 8px; scrollbar-width: none; -webkit-mask: linear-gradient(90deg, transparent, #000 12px, #000 88%, transparent); }
 .u2tools::-webkit-scrollbar { display: none; }
@@ -612,6 +613,7 @@ body.u2desk .u2list .u2tr { height: auto; overflow: visible; padding: 10px 16px 
 .u2list .u2tool:hover .u2reset:not(:disabled) { visibility: visible; }
 .u2list .u2track { height: 30px; --th: 16px; } .u2list .u2zero { top: 8px; height: 14px; }
 .u2list .u2track input { height: 30px; cursor: pointer; }
+.u2list .u2track input::-webkit-slider-thumb { width: 16px; height: 16px; margin-top: -6px; }
 .u2list .u2seg { margin: 8px 0 10px; }
 body.u2desk #status { position: static; flex: none; order: 2; max-width: none; border-radius: 0; margin: 0; padding: 6px 16px;
   border-top: 1px solid var(--line); background: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
