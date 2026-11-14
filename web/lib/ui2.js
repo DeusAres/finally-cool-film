@@ -10,6 +10,7 @@ import { download } from './encoder.js';
 import { initMascot } from './mascot.js';
 import { tiltRuler } from './ruler.js';
 import { FRAME_STYLES, FRAME_NAMES } from './filmframe.js';
+import { onThumbDoubleTap } from './sliders.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -171,11 +172,13 @@ export function initUI2(api) {
   function sliderPane(id) {
     if (id === 'scan') return `<div class="u2tool" data-id="scan"><div class="u2top"><span class="u2name">Scanner</span></div>
       <div class="u2seg">${SCANS.filter($).map((b) => `<button data-scan="${b}" class="${$(b).getAttribute('aria-checked') === 'true' ? 'on' : ''}">${$(b).textContent.trim()}</button>`).join('')}</div></div>`;
-    const el = $(id), min = +el.min, max = +el.max, base = api.baseOf(id), z = (base - min) / (max - min) * 100;
+    const el = $(id), min = +el.min, max = +el.max, base = api.baseOf(id), z = (base - min) / (max - min);
     const auto = id === 'ev' && $('auto') ? '<button class="u2auto">Auto</button>' : '';
-    return `<div class="u2tool" data-id="${id}"><div class="u2top"><span class="u2name">${labelOf(id)}</span><span class="u2val">${valueOf(id)}</span>${auto}
-      <button class="u2reset"${modified(id) ? '' : ' disabled'}>${svg('reset')}Azzera</button></div>
-      <div class="u2track"><span class="u2zero" style="left:${z}%"></span><input type="range" class="u2range" min="${min}" max="${max}" step="${el.step || 'any'}" value="${el.value}"></div></div>`;
+    // one row, name | slider | value (see .u2row); Auto and Azzera after it (a line of their own on the phone)
+    return `<div class="u2tool u2row" data-id="${id}"><span class="u2name" title="${labelOf(id)}">${labelOf(id)}</span>
+      <div class="u2track"><span class="u2zero" style="--z:${z}"></span><input type="range" class="u2range" min="${min}" max="${max}" step="${el.step || 'any'}" value="${el.value}" aria-label="${labelOf(id)}"></div>
+      <span class="u2val">${valueOf(id)}</span>
+      <div class="u2acts">${auto}<button class="u2reset" aria-label="Azzera"${modified(id) ? '' : ' disabled'}>${svg('reset')}<span>Azzera</span></button></div></div>`;
   }
   function body(g) {
     if (g === 'transform') {
@@ -234,13 +237,17 @@ export function initUI2(api) {
   function slide(old, nu, dir, w, blur, ms) {
     const dx = reduce.matches ? 0 : FLOW * dir * w * slot.clientWidth, b = reduce.matches ? 0 : blur;
     const opt = { duration: reduce.matches ? 120 : ms, easing: EASE, fill: 'forwards' };
-    old.animate([{ transform: 'none', filter: 'none', opacity: 1 }, { transform: `translateX(${dx}px)`, filter: `blur(${b}px)`, opacity: 0 }], opt);
+    // `old` leaves from where it is: a tap mid-slide takes the one still coming in out from its current offset, blur
+    // and opacity, without a jump back to the start (at rest these are none / none / 1, as before)
+    const { transform, filter, opacity } = getComputedStyle(old);
+    old.animate([{ transform, filter, opacity }, { transform: `translateX(${dx}px)`, filter: `blur(${b}px)`, opacity: 0 }], opt);
     return nu.animate([{ transform: `translateX(${-dx}px)`, filter: `blur(${b}px)`, opacity: 0 }, { transform: 'none', filter: 'none', opacity: 1 }], opt);
   }
   // within a group: the title and slider slide, the strip keeps its place and scroll
   function swapTool(pg, g, dir) {
     pg.querySelectorAll('.u2t').forEach((b) => b.classList.toggle('on', b.dataset.t === sel[g]));
     pg.querySelector(`.u2t[data-t="${sel[g]}"]`)?.scrollIntoView({ behavior: reduce.matches ? 'auto' : 'smooth', block: 'nearest', inline: 'nearest' });
+    pg.querySelectorAll('.u2tool.u2out').forEach((n) => n.remove());   // a tap mid-slide: see draw
     const old = pg.querySelector('.u2tool'), tmp = document.createElement('div');
     tmp.innerHTML = g === 'transform' ? '<div class="u2tool u2tr"></div>' : sliderPane(sel[g]);
     const nu = tmp.firstElementChild;
@@ -276,9 +283,13 @@ export function initUI2(api) {
       if (chip) { chip.classList.toggle('mod', modified(id)); chip.querySelector('.v').textContent = modified(id) ? valueOf(id) : ''; }
     };
     r.onchange = () => { el.dispatchEvent(new Event('change', { bubbles: true })); commit(); };
-    const reset = () => { r.value = base; r.oninput(); commit(); haptic(); };
+    // (once: a double click on the thumb is also a thumb double tap)
+    const reset = () => { if (!modified(id)) return; r.value = base; r.oninput(); commit(); haptic(); };
     q('.u2reset').onclick = reset;
-    r.ondblclick = reset;   // a double click on the slider resets it (desktop editors' convention)
+    // a double click on the slider or its name resets it (desktop editors' convention); a double tap on the thumb or the
+    // name too, as in the classic UI (app.js: onThumbDoubleTap and the label's dblclick)
+    r.ondblclick = reset; q('.u2name').ondblclick = reset;
+    onThumbDoubleTap(r, reset);
     t.classList.toggle('mod', modified(id));
     const a = q('.u2auto');
     if (a) a.onclick = async () => { $('auto').click(); haptic(); setTimeout(() => { draw(false); commit(); }, 400); };
@@ -289,10 +300,14 @@ export function initUI2(api) {
   function draw(anim = true, dir = 0, ms = SLIDE_MS) {
     const html = body(group);
     if (!anim) {
-      const y = slot.firstElementChild?.scrollTop || 0;
+      const y = slot.lastElementChild?.scrollTop || 0;   // the live page is the last (a leaving one may precede it)
       slot.innerHTML = `<div class="u2page">${html}</div>`; slot.firstElementChild.scrollTop = y;
       wire(group, slot.firstElementChild); syncNav(); return;
     }
+    // a tap while a slide runs: the page still leaving goes now, and the one still coming in is the one to slide out.
+    // Before, `old` was the first child, i.e. the leaving page, and the incoming one stayed for good: fast taps stacked
+    // pages. The Trasforma blocks are never in a leaving page (leaving Trasforma parks them first).
+    slot.querySelectorAll('.u2out').forEach((n) => n.remove());
     const old = slot.firstElementChild, nu = document.createElement('div');
     nu.className = 'u2page'; nu.innerHTML = html;
     slot.append(nu); wire(group, nu); syncNav();
@@ -527,11 +542,29 @@ body.ui2:not(.u2desk) #u2mascot { bottom: calc(34px + var(--u2h, 0px)); }
 .u2reset svg { width: 15px; height: 15px; }
 .u2reset:disabled { opacity: .35; }
 .u2auto { border: 1px solid #3a342e; background: #24211d; color: var(--fg); border-radius: 999px; padding: 3px 10px; font-size: 13px; font-weight: 600; }
-.u2track { position: relative; height: 40px; }
-.u2zero { position: absolute; top: 12px; width: 2px; height: 16px; margin-left: -1px; background: #6b635a; pointer-events: none; }
+/* a slider tool in one row (user 2026-11-14: "i label tipo Esposizione a sinistra, lo slider centrato, e a destra il valore"):
+   the name and value columns have fixed widths, so every tool's track starts and ends at the same x and a changing value never
+   moves it. Phone: Auto and Azzera on a line under the row (the pane's 102 px have room; beside the value they would take another
+   ~70 px off the track), Auto under the name, Azzera at the right edge where it was. The name also resets on a double tap. */
+.u2row { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; grid-template-areas: "name track val" "acts acts acts";
+  column-gap: 10px; align-items: center; align-content: center; }
+/* 92 px at 14 px: the longest word of a name, "Temperatura", measured 86.5 px (Chromium's system-ui; ~6 % spare for SF);
+   two-word names wrap (Temperatura / luce, Hyper Tone / ombre), a third line would end in … */
+.u2row .u2name { grid-area: name; font-size: 14px; line-height: 1.15; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; touch-action: manipulation; cursor: default; user-select: none; -webkit-user-select: none; }
+.u2row .u2track { grid-area: track; }
+/* 8ch of the value's monospace (tabular) font: the longest one-word value (Standard, TONE_NAMES); two-word ones wrap (molto basso) */
+.u2row .u2val { grid-area: val; width: 8ch; font-size: 14px; line-height: 1.15; text-align: right; }
+.u2acts { grid-area: acts; display: flex; align-items: center; gap: 8px; min-height: 28px; }
+.u2track { position: relative; height: 40px; --th: 28px; }
+/* the base value's tick: where the thumb's centre sits at the base (it travels th/2 .. width - th/2; --z: the base in 0..1) */
+.u2zero { position: absolute; top: 12px; width: 2px; height: 16px; margin-left: -1px; background: #6b635a; pointer-events: none;
+  left: calc(var(--th) / 2 + var(--z) * (100% - var(--th))); }
 .u2track input, .u2sl input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 40px; background: transparent; margin: 0; position: relative; }
 .u2track input::-webkit-slider-runnable-track, .u2sl input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: #3a342e; }
-.u2track input::-webkit-slider-thumb, .u2sl input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 28px; height: 28px; margin-top: -12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 5px rgba(0,0,0,.5); }
+/* --th: the thumb's size (28 px: a finger; the desktop list's 16 px below), centred on the 4 px track */
+.u2track input::-webkit-slider-thumb, .u2sl input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: var(--th, 28px); height: var(--th, 28px);
+  margin-top: calc(2px - var(--th, 28px) / 2); border-radius: 50%; background: #fff; box-shadow: 0 1px 5px rgba(0,0,0,.5); }
 .u2none { color: var(--muted); font-size: 14px; display: grid; place-items: center; }
 .u2tools { display: flex; gap: 6px; overflow-x: auto; padding: 2px 12px 8px; scrollbar-width: none; -webkit-mask: linear-gradient(90deg, transparent, #000 12px, #000 88%, transparent); }
 .u2tools::-webkit-scrollbar { display: none; }
@@ -569,11 +602,16 @@ body.u2desk .u2page { overflow-y: auto; padding: 0 0 12px; scrollbar-width: thin
 body.u2desk .u2list .u2tr { height: auto; overflow: visible; padding: 10px 16px 8px; }
 .u2list .u2tool { height: auto; padding: 10px 16px 2px; border-bottom: 1px solid #262320; }
 .u2list .u2name { font-size: 13.5px; font-weight: 500; color: #cfc6bb; } .u2list .u2tool.mod .u2name { color: var(--fg); }
-.u2list .u2val { font-size: 13px; order: 3; } .u2list .u2top { margin-bottom: 0; } .u2list .u2auto { order: 1; padding: 1px 9px; font-size: 12px; }
-.u2list .u2reset { visibility: hidden; order: 2; padding: 0 8px; } .u2list .u2tool:hover .u2reset:not(:disabled) { visibility: visible; }
-.u2list .u2track { height: 30px; } .u2list .u2zero { top: 8px; height: 14px; }
+.u2list .u2val { font-size: 13px; } .u2list .u2top { margin-bottom: 0; }
+/* desktop: the same row, tighter; Azzera an icon in a column of its own after the value (on hover, as before: the column is
+   narrow), Auto (Esposizione's) on a line under the name */
+.u2list .u2row { padding: 5px 16px; grid-template-columns: 92px minmax(0, 1fr) auto 16px; grid-template-areas: "name track val rst" "auto . . .";
+  column-gap: 8px; }
+.u2list .u2acts { display: contents; } .u2list .u2auto { grid-area: auto; justify-self: start; margin-bottom: 4px; padding: 1px 9px; font-size: 12px; }
+.u2list .u2reset { grid-area: rst; visibility: hidden; padding: 0; } .u2list .u2reset span { display: none; }
+.u2list .u2tool:hover .u2reset:not(:disabled) { visibility: visible; }
+.u2list .u2track { height: 30px; --th: 16px; } .u2list .u2zero { top: 8px; height: 14px; }
 .u2list .u2track input { height: 30px; cursor: pointer; }
-.u2list .u2track input::-webkit-slider-thumb { width: 16px; height: 16px; margin-top: -6px; }
 .u2list .u2seg { margin: 8px 0 10px; }
 body.u2desk #status { position: static; flex: none; order: 2; max-width: none; border-radius: 0; margin: 0; padding: 6px 16px;
   border-top: 1px solid var(--line); background: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
