@@ -14,6 +14,13 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.53**: **Grana: niente macchie né grappoli**: il colore della grana era quasi tutto blu/giallo (b/a 2,2-2,8 nei
+  grigi contro 1,1-1,3 della pellicola vera), da qui le "macchie"; e i pochi cristalli grossi della 4.46 facevano grappoli di
+  grani. Strato giallo meno grosso e ciano con i suoi grumi (layer_blur_fast [1, 1, 2,5] -> [1,3, 1, 1,6]), rumore dello
+  scanner quasi senza colore (0,35 -> 0,15), cristalli grossi più piccoli e più numerosi (blur_fast 1,2 -> 0,7,
+  fast_count_frac 0,0023 -> 0,0068: la via di mezzo scelta dall'utente fra tre). Frontier, grigi a schermo: colore C/L
+  ~0,9 -> ~0,6 (vero ~0,64), b/a 1,0-1,5, grumi mezzitoni 0,88 -> 0,65 px (vero 0,74, più fini per scelta), forza per tono
+  invariata; Nessuno: luci -10 %. Baseline dei check aggiornate (texture e bordi seguono la grana).
 - **v4.52**: **Interfaccia sul telefono**: il pannello degli slider è semitrasparente e sta sopra la foto (una foto
   verticale o zoomata continua sotto e si vede attraverso; un'orizzontale resta centrata sopra il pannello). **Slider a una
   riga**: nome a sinistra, slider al centro, valore a destra (telefono e desktop), colonne fisse; doppio tocco sul nome o
