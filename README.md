@@ -14,6 +14,10 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.55**: **Spessore del carrier limato**: in Trasforma → Cornice → Limato un righello regola il nero da 0,1 % a 1 % del
+  lato lungo (default 0,25 %, la scelta dell'8/11; doppio tocco: torna lì), ricordato tra le foto come il Bordo, uguale in
+  anteprima ed export. Si allarga la banda, la limatura resta della stessa irregolarità. I pulsanti della Cornice ora hanno
+  nomi brevi (Nessuna / Nero / Limato / Intera) per far stare il righello. Nessun caso del check cambia.
 - **v4.54**: **Slider di nuovo visibili su iPhone**: dalla 4.52 il pallino degli slider aveva la grandezza in una variabile
   CSS, che Safari su iPhone non applica al pallino: senza pallino lo slider (Qualità JPEG nell'Esporta) sembrava sparito.
   Ora grandezze fisse (28 px, 16 px nella lista del desktop). Solo interfaccia; nessun caso del check cambia.
