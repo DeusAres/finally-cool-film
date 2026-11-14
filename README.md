@@ -14,6 +14,12 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.52**: **Interfaccia sul telefono**: il pannello degli slider è semitrasparente e sta sopra la foto (una foto
+  verticale o zoomata continua sotto e si vede attraverso; un'orizzontale resta centrata sopra il pannello). **Slider a una
+  riga**: nome a sinistra, slider al centro, valore a destra (telefono e desktop), colonne fisse; doppio tocco sul nome o
+  sul pallino: torna al valore di partenza. **Tocchi veloci tra Base / Scanner / Trasforma**: le pagine non si sovrappongono
+  più (una transizione interrotta lasciava la pagina entrante per sempre). **Esporta**: a fine export la barra sparisce,
+  «Foto intera» e «Instagram» tornano attivi e il solo bottone giallo è «Salva nelle Foto». Nessun caso del check cambia.
 - **v4.51**: **Ritaglia: fuori dallo strumento si vede ritagliato**: il riquadro sulla foto intera restava per tutto
   Trasforma, così Raddrizza, Bordo e Cornice mostravano la foto non ritagliata (bordo e cornice attorno alla foto intera).
   Ora solo Ritaglia mostra la foto intera col riquadro; il resto mostra il ritaglio. Raddrizza ruota sempre attorno al
