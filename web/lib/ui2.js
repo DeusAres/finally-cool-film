@@ -9,7 +9,7 @@ import { store, DESK } from './util.js';
 import { download } from './encoder.js';
 import { initMascot } from './mascot.js';
 import { tiltRuler } from './ruler.js';
-import { FRAME_STYLES, FRAME_NAMES } from './filmframe.js';
+import { FRAME_STYLES, FRAME_NAMES, FILED_DEFAULT } from './filmframe.js';
 import { onThumbDoubleTap } from './sliders.js';
 
 const $ = (id) => document.getElementById(id);
@@ -72,6 +72,7 @@ const EASE = 'cubic-bezier(.2,.8,.2,1)';
 // Bordo (Trasforma since 4.35, user: a ruler with ticks and a preview; it was in the export sheet): 0..10 % of the long side
 // (#borderPct: its max and step), ticks every BORDER_TICK %, a number every 1 %, BORDER_PX px per 1 % (the tilt dial's 10 px per tick);
 // swatches; the app reads #borderPct / #borderColor (app.js). The Cornice (filmframe.js) sits next to it: #frame.
+const FILED_TICK = 0.05, FILED_BIG = 0.25, FILED_PX = 300;
 const BORDER_TICK = 0.25, BORDER_PX = 40, SWATCHES = ['#ffffff', '#f3ead8', '#d9d4cc', '#111111'];
 
 /** Haptic tick. Android: navigator.vibrate (also during a slider drag). iOS has no vibrate API, and a `switch` checkbox toggled
@@ -351,6 +352,14 @@ export function initUI2(api) {
     bp.value = store.get('fcf_borderPct') ?? (legacy === '0' ? 0 : 1);
     bc.value = store.get('fcf_borderColor') || SWATCHES[0];
     fr.value = Math.max(0, FRAME_STYLES.indexOf(store.get('fcf_frame')));
+    // Carrier limato's Spessore: the visible black, % of the long side (filmframe.js FILED_DEFAULT 0.25 %), a dial as Bordo's
+    // (FILED_TICK % a tick, a number every FILED_BIG %, FILED_PX px per 1 %: 0.1-1 % fits the panel's width); shown with limato
+    const fp = $('filedPct'), fpRow = $('filedRow');
+    fp.value = store.get('fcf_filedPct') ?? fp.value;
+    const filedFmt = (v) => `Spessore ${+(+v).toFixed(2)}%`;
+    tiltRuler($('filedRuler'), fp, $('frameOut'), { fmt: filedFmt, tickLabel: (d) => `${+d.toFixed(2)}`, tick: FILED_TICK, big: FILED_BIG, px: FILED_PX,
+      snap: FILED_TICK / 2, home: FILED_DEFAULT * 100 });
+    fp.addEventListener('input', () => { store.set('fcf_filedPct', fp.value); syncF(); });
     const pct = (v) => (v ? `${+v.toFixed(2)}%` : 'off');
     tiltRuler($('borderRuler'), bp, $('borderOut'), { fmt: pct, tickLabel: (d) => (d ? `${d}` : 'off'), tick: BORDER_TICK, big: 1, px: BORDER_PX, snap: BORDER_TICK / 2 });
     const sw = $('borderSwatches');
@@ -369,8 +378,15 @@ export function initUI2(api) {
     bp.addEventListener('input', () => { store.set('fcf_borderPct', bp.value); syncB(); });
     const fc = $('frameChips');
     fc.className = 'u2seg';
-    fc.innerHTML = FRAME_STYLES.map((st, i) => `<button role="radio" data-f="${i}">${FRAME_NAMES[st]}</button>`).join('');
-    const syncF = () => { fc.querySelectorAll('[data-f]').forEach((x) => { const on = +x.dataset.f === +fr.value; x.classList.toggle('on', on); x.setAttribute('aria-checked', String(on)); }); refreshTransformChips(); };
+    // one-word names on the buttons (one line: the Spessore dial fits under them in the tool's height); the full name is the chip's
+    const FRAME_SHORT = { none: 'Nessuna', nero: 'Nero', limato: 'Limato', intera: 'Intera' };
+    fc.innerHTML = FRAME_STYLES.map((st, i) => `<button role="radio" data-f="${i}" aria-label="${FRAME_NAMES[st]}">${FRAME_SHORT[st]}</button>`).join('');
+    const syncF = () => {
+      fc.querySelectorAll('[data-f]').forEach((x) => { const on = +x.dataset.f === +fr.value; x.classList.toggle('on', on); x.setAttribute('aria-checked', String(on)); });
+      fpRow.hidden = FRAME_STYLES[+fr.value] !== 'limato';
+      $('frameOut').textContent = fpRow.hidden ? '' : filedFmt(fp.value);
+      refreshTransformChips();
+    };
     fc.querySelectorAll('[data-f]').forEach((x) => x.onclick = () => {
       if (+fr.value === +x.dataset.f) return;
       fr.value = x.dataset.f; store.set('fcf_frame', FRAME_STYLES[+fr.value]); haptic();
@@ -581,7 +597,7 @@ body.ui2:not(.u2desk) #u2mascot { bottom: calc(34px + var(--u2h, 0px)); }
 .u2tr .crop { padding: 0; } .u2tr .tilthead { margin: 0; min-height: 34px; } .u2tr .iconbtn { width: 32px; height: 32px; }
 .u2tr #cropFormats { padding: 2px 40px 0; } .u2tr #cropFormats button { height: 58px; gap: 4px; }
 .u2tr .tilt, .u2tr .crop, .u2tr .bordo, .u2tr .cornice { margin: 0; }
-.u2tr #borderRuler { height: 40px; } .u2tr .bordo .u2sws { margin: 4px 0 0; padding: 4px 4px; gap: 8px; }
+.u2tr #borderRuler { height: 40px; } .u2tr #filedRuler { height: 34px; margin-top: 2px; } .u2tr .cornice .u2seg { margin-top: 2px; } .u2tr .cornice .u2seg button { padding: 6px 0; } .u2tr .bordo .u2sws { margin: 4px 0 0; padding: 4px 4px; gap: 8px; }
 .u2tr .bordo .u2sws button, .u2tr .bordo .u2pick { width: 26px; height: 26px; } .u2tr .bordo .u2sws button.on { outline-offset: 2px; } .u2tr .u2hex { font-size: 11px; color: var(--muted); }
 .u2nav { display: flex; border-top: 1px solid var(--line); padding: 2px 6px max(4px, calc(env(safe-area-inset-bottom) - 16px)); }
 body.ui2 #status { position: absolute; left: 8px; top: 8px; max-width: calc(100% - 150px); padding: 3px 8px; border-radius: 6px;

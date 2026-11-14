@@ -9,7 +9,7 @@
 //     emulsion), very slightly wavy, rounded at the corners, and eats a few px into the picture.
 // Styles (FRAME_STYLES):
 //   - nero: the rebate as a thin band (0.5 % of the long side, user's choice) on all sides, cut straight by the scan crop;
-//   - limato: the darkroom "filed carrier": a thinner band (0.25 % on average), its outer edge the carrier opening filed
+//   - limato: the darkroom "filed carrier": a thinner band (0.25 % on average by default, Spessore 0.1-1 %), its outer edge the carrier opening filed
 //     by hand (straight file strokes, rough corners). No white of its own: beyond the filed edge the frame is transparent,
 //     the app's mat shows (user, 2026-11-08: "la parte nera è troppo spessa e un po' troppo irregolare, senza bordo
 //     bianco, tipo 0.25 %");
@@ -51,7 +51,12 @@ const GATE_RADIUS = 0.3;               // mm, corner radius: "slightly rounded".
 
 // nero, limato: widths as fractions of the picture's long side (user's choice: "about 0.5 %").
 const BAND = 0.005;                    // nero: black rebate band
-const FILED_BAND = 0.0012;             // limato: the band's inner width. Measured (seed 7, 6000 px): + the file's mean reach (~0.1 %) + the gate's bite (~0.05 %) the visible black averages 0.25 % (user, 2026-11-08)
+// limato: the visible black's mean width (Spessore, a fraction of the long side) is the band's inner width + the file's mean
+// reach (~0.1 %) + the gate's bite (~0.05 %): measured (seed 7, 6000 px) 0.25 % for a 0.12 % band (user, 2026-11-08).
+export const FILED_DEFAULT = 0.0025;   // Spessore's default: the 0.25 % of 2026-11-08
+const FILED_OVER_BAND = 0.0013;        // visible mean minus the band (the file's reach + the gate's bite), measured as above
+const FILED_MIN_BAND = 0.0002;         // the thinnest band: the file still has film to cut (Spessore 0.1 % reaches it). Visual
+const filedBand = (filed) => Math.max(FILED_MIN_BAND, filed - FILED_OVER_BAND);
 const FILED_ROUGH = 0.0015;            // limato: the filed edge reaches up to this much further out, in places (a quarter of the former 0.6 %: user, 2026-11-08, "un po' troppo irregolare")
 const FILED_FACET = [0.6, 2.6];        // mm, length of one file cut (a straight facet). Visual
 const FILED_STEP = [0.3, 1.2];         // mm between the starts of successive cuts: < the cut's length, so they overlap
@@ -128,19 +133,20 @@ const rampPx = (mm, u) => Math.max(MIN_RAMP_PX, mm * u);
 
 // ---------- geometry ----------
 
-/** Film-space layout: picture L x S px (long x short), u px per mm, margins ML along the film and MS across it. */
-function layout(style, W, H) {
+/** Film-space layout: picture L x S px (long x short), u px per mm, margins ML along the film and MS across it. `filed`:
+ * limato's Spessore (visible black, fraction of the long side). */
+function layout(style, W, H, filed) {
   const L = Math.max(W, H), S = Math.min(W, H), u = L / FRAME_MM;
   const m = style === 'nero' ? [BAND * L, BAND * L]
-    : style === 'limato' ? [Math.ceil((FILED_BAND + FILED_ROUGH) * L), Math.ceil((FILED_BAND + FILED_ROUGH) * L)]   // the band's furthest reach
+    : style === 'limato' ? [Math.ceil((filedBand(filed) + FILED_ROUGH) * L), Math.ceil((filedBand(filed) + FILED_ROUGH) * L)]   // the band's furthest reach
     : style === 'intera' ? [(GAP + CARRIER_MM) * u, (RAIL + CARRIER_MM) * u] : [0, 0];
   const ML = Math.round(m[0]), MS = Math.round(m[1]);
-  return { portrait: H > W, L, S, u, ML, MS, FW: L + 2 * ML, FH: S + 2 * MS };
+  return { portrait: H > W, L, S, u, ML, MS, FW: L + 2 * ML, FH: S + 2 * MS, band: filedBand(filed) * L };
 }
 
 /** Integer px added on each side of a W x H picture: left = right = mx, top = bottom = my. */
-export function frameMargins(style, W, H) {
-  const g = layout(style, W, H);
+export function frameMargins(style, W, H, filed = FILED_DEFAULT) {
+  const g = layout(style, W, H, filed);
   return g.portrait ? { mx: g.MS, my: g.ML } : { mx: g.ML, my: g.MS };
 }
 
@@ -205,7 +211,7 @@ function pictureCover(F, x, y) {
  * bite. A fine burr of file teeth on top.
  */
 function filedOpening(R, g) {
-  const { u, ML, MS, L, S, FW, FH } = g, band = FILED_BAND * L, rough = FILED_ROUGH * L / u;
+  const { u, ML, MS, L, S, FW, FH, band } = g, rough = FILED_ROUGH * L / u;
   const side = (along) => {
     const len = along / u, a = new Float32Array(along), sd = (R() * 4294967296) >>> 0;
     // the side's own line: filed by hand, it leans and bows off the gate's (up to FILED_LEAN of the depth)
@@ -477,19 +483,19 @@ function shadeIntera(F, x, y, cx, cy, out, o) {
 
 const SHADE = { nero: shadeNero, limato: shadeLimato, intera: shadeIntera };
 
-/** Everything a style draws from (style, seed, W, H). The same fields for every style, so every scene has one shape. */
-function buildScene(style, seed, W, H) {
-  const g = layout(style, W, H), R = rng(seed), G = gate(R, g);
-  const filed = style === 'limato' ? filedOpening(R, g) : null;
+/** Everything a style draws from (style, seed, W, H, filed). The same fields for every style, so every scene has one shape. */
+function buildScene(style, seed, W, H, filed) {
+  const g = layout(style, W, H, filed), R = rng(seed), G = gate(R, g);
+  const opening = style === 'limato' ? filedOpening(R, g) : null;
   const P = palette(R() * 4294967296, g);
   const T = style === 'intera' ? strip(R, g) : null;
-  return { ...g, gate: G, safe: G.safe, filed, strip: T, P, c: new Float64Array(3) };
+  return { ...g, gate: G, safe: G.safe, filed: opening, strip: T, P, c: new Float64Array(3) };
 }
 
 let cached = null;                     // the last scene: an export draws the same frame strip after strip
-function scene(style, seed, W, H) {
-  const key = `${style}|${seed >>> 0}|${W}x${H}`;
-  if (cached?.key !== key) cached = { key, s: buildScene(style, seed >>> 0, W, H) };
+function scene(style, seed, W, H, filed) {
+  const key = `${style}|${seed >>> 0}|${W}x${H}|${filed}`;
+  if (cached?.key !== key) cached = { key, s: buildScene(style, seed >>> 0, W, H, filed) };
   return cached.s;
 }
 
@@ -498,10 +504,10 @@ function scene(style, seed, W, H) {
  * W x H picture at (mx, my) (frameMargins). Straight RGBA: the frame's colour, alpha its coverage (255 on the frame, 0 on
  * the picture away from the gate's edge, partial along it); the caller composites it over the picture.
  */
-export function drawFrame(out, style, seed, W, H, x0, y0, w, h) {
+export function drawFrame(out, style, seed, W, H, x0, y0, w, h, filed = FILED_DEFAULT) {
   const shade = SHADE[style];
   if (!shade) { out.fill(0, 0, w * h * 4); return; }
-  const F = scene(style, seed, W, H), { portrait, FH, safe } = F;
+  const F = scene(style, seed, W, H, filed), { portrait, FH, safe } = F;
   // the picture's untouched box on the canvas: rows (a, b), columns (lo, hi) (portrait: film y, reversed, along a row)
   const a = portrait ? safe[0] : safe[1], b = portrait ? safe[2] : safe[3];
   const lo = portrait ? FH - safe[3] : safe[0], hi = portrait ? FH - safe[1] : safe[2];
@@ -523,10 +529,10 @@ export function drawFrame(out, style, seed, W, H, x0, y0, w, h) {
 
 /** The film frame over an RGB strip (rows y0.. of the export's canvas): its colour by its coverage (the whole border, the gate's
  * edge). From app.js (4.45). */
-export function frameIntoStrip(strip, style, seed, w, h, mx, my, y0, rows) {
+export function frameIntoStrip(strip, style, seed, w, h, mx, my, y0, rows, filed = FILED_DEFAULT) {
   if (style === 'none') return;
   const W = w + 2 * mx, f = new Uint8ClampedArray(W * rows * 4);
-  drawFrame(f, style, seed, w, h, 0, y0, W, rows);
+  drawFrame(f, style, seed, w, h, 0, y0, W, rows, filed);
   for (let p = 0, j = 0; p < f.length; p += 4, j += 3) {
     const a = f[p + 3];
     if (!a) continue;

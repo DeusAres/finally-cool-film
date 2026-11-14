@@ -5,15 +5,17 @@
 // The value lives in a hidden <input type=range> (`input`): every change is written there and announced with an 'input' event, so the
 // app (and scripts/eval/render.cjs) treat it like any other slider; setting input.value from outside + 'input' redraws the dial.
 
-// The same dial serves the Bordo (4.35, user: "righello con tacche" in Trasforma, with a preview): its own units through `opts`.
+// The same dial serves the Bordo (4.35, user: "righello con tacche" in Trasforma, with a preview) and the Carrier limato's
+// Spessore (4.55): their own units through `opts`; `home` is the value a double tap returns to and a drag snaps to (Spessore:
+// its default, not 0, which is out of its range).
 const PX_PER_DEG = 10, BIG = 5, SNAP = 0.5;
 const fmtDeg = (v) => (v === 0 ? '0°' : `${v > 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}°`);
 const tickDeg = (d) => (d < 0 ? `−${-d}` : String(d));
 
 /** `el`: the dial element (gets a canvas); `input`: the hidden range input (min, max, step); `onDrag(active)`: drag start / end.
  * Units (defaults: Raddrizza's degrees): `fmt(v)` the output, `tickLabel(d)` a big tick's number, `tick` the small ticks' spacing,
- * `big` the big (numbered) ticks' spacing, `px` px per unit, `snap` the drag's snap distance to 0. */
-export function tiltRuler(el, input, out, { onDrag = () => {}, fmt = fmtDeg, tickLabel = tickDeg, tick = 1, big = BIG, px = PX_PER_DEG, snap: snapTo = SNAP } = {}) {
+ * `big` the big (numbered) ticks' spacing, `px` px per unit, `snap` the drag's snap distance to `home` (default 0). */
+export function tiltRuler(el, input, out, { onDrag = () => {}, fmt = fmtDeg, tickLabel = tickDeg, tick = 1, big = BIG, px = PX_PER_DEG, snap: snapTo = SNAP, home = 0 } = {}) {
   const min = +input.min, max = +input.max, step = +input.step || 0.1;
   const canvas = document.createElement('canvas'), g = canvas.getContext('2d');
   el.prepend(canvas);
@@ -30,11 +32,11 @@ export function tiltRuler(el, input, out, { onDrag = () => {}, fmt = fmtDeg, tic
     }
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, h);
-    const cx = w / 2, base = h - 6, lo = Math.min(0, value), hi = Math.max(0, value);
+    const cx = w / 2, base = h - 6, lo = Math.min(home, value), hi = Math.max(home, value);
     const first = Math.max(Math.ceil(min / tick), Math.ceil((value - cx / px) / tick) - 1), last = Math.min(Math.floor(max / tick), Math.floor((value + cx / px) / tick) + 1);
     g.font = '500 10px ui-monospace, Menlo, monospace'; g.textAlign = 'center'; g.textBaseline = 'alphabetic';
     for (let k = first; k <= last; k++) {
-      const d = +(k * tick).toFixed(6), isBig = Math.abs(d / big - Math.round(d / big)) < 1e-6, on = d !== 0 && d >= lo && d <= hi;
+      const d = +(k * tick).toFixed(6), isBig = Math.abs(d / big - Math.round(d / big)) < 1e-6, on = d !== home && d >= lo && d <= hi;
       const x = Math.round(cx + (d - value) * px) + 0.5;
       const len = isBig ? 14 : 7;
       g.strokeStyle = on ? C.accent : isBig ? C.fg : C.muted;
@@ -52,7 +54,7 @@ export function tiltRuler(el, input, out, { onDrag = () => {}, fmt = fmtDeg, tic
 
   function show() {
     out.textContent = fmt(value);
-    out.classList.toggle('on', value !== 0);
+    out.classList.toggle('on', value !== home);
     el.setAttribute('aria-valuenow', String(value));
     el.setAttribute('aria-valuetext', fmt(value).replace('−', '-'));
     draw();
@@ -63,9 +65,9 @@ export function tiltRuler(el, input, out, { onDrag = () => {}, fmt = fmtDeg, tic
     v = Math.min(max, Math.max(min, v));
     v = Math.round(v / step) * step;
     v = +v.toFixed(3) || 0;   // no -0, no float dust
-    if (snap && Math.abs(v) < snapTo) v = 0;
+    if (snap && Math.abs(v - home) < snapTo) v = home;
     if (v === value) return;
-    if (v === 0 && snap) navigator.vibrate?.(8);
+    if (v === home && snap) navigator.vibrate?.(8);
     value = v;
     input.value = String(v);
     show();
@@ -97,7 +99,7 @@ export function tiltRuler(el, input, out, { onDrag = () => {}, fmt = fmtDeg, tic
     if (drag.moved) { el.classList.remove('drag'); onDrag(false); }
     drag = null;
     if (!tap) { lastTap = 0; return; }
-    if (lastTap && e.timeStamp - lastTap < 400) { lastTap = 0; set(0); } else lastTap = e.timeStamp;
+    if (lastTap && e.timeStamp - lastTap < 400) { lastTap = 0; set(home); } else lastTap = e.timeStamp;
   };
   el.addEventListener('pointerup', end);
   el.addEventListener('pointercancel', end);

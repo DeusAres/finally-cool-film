@@ -524,6 +524,7 @@ const dustLayer = $('dustLayer'), dctx = dustLayer.getContext('2d');
 const frameLayer = $('frameLayer'), fctx = frameLayer.getContext('2d'), matLayer = $('matLayer');
 const dustAmount = () => +$('dust').value;
 const frameStyle = () => FRAME_STYLES[+$('frame').value] || 'none';
+const filedWidth = () => +$('filedPct').value / 100;   // Carrier limato's Spessore (Cornice, ui2.js), fraction of the long side
 let frameM = { mx: 0, my: 0 };   // the preview's frame + mat margins (fitToScreen fits the image with both)
 function dustMarks() {
   const { w, h } = outFrame(photo.preview.w, photo.preview.h), key = `${photo.dustSeed}|${w}x${h}`;
@@ -542,7 +543,7 @@ function sizeLayer(c, W, H) {
 function drawOverlays() {
   if (!photo) return;
   const { w, h } = outFrame(photo.preview.w, photo.preview.h), style = frameStyle();
-  const { mx, my } = frameMargins(style, w, h), W = w + 2 * mx, H = h + 2 * my;
+  const { mx, my } = frameMargins(style, w, h, filedWidth()), W = w + 2 * mx, H = h + 2 * my;
   const showFrame = style !== 'none' && !showingBefore;
   // the mat (Bordo, Trasforma) around the image and its frame, as the export adds it (matMargins)
   const mat = showingBefore ? { x: 0, y: 0 } : matMargins(W, H, borderFrac());
@@ -551,11 +552,11 @@ function drawOverlays() {
   matLayer.style.width = W + 2 * mat.x + 'px'; matLayer.style.height = H + 2 * mat.y + 'px';
   matLayer.style.background = `rgb(${matColour().join(',')})`;
   frameLayer.style.display = showFrame ? 'block' : 'none';
-  const fkey = `${style}|${photo.grainSeed}|${w}x${h}`;
+  const fkey = `${style}|${photo.grainSeed}|${w}x${h}|${filedWidth()}`;
   if (showFrame && frameLayer.dataset.key !== fkey) {
     sizeLayer(frameLayer, W, H);
     const img = fctx.createImageData(W, H);
-    drawFrame(img.data, style, photo.grainSeed, w, h, 0, 0, W, H);
+    drawFrame(img.data, style, photo.grainSeed, w, h, 0, 0, W, H, filedWidth());
     fctx.putImageData(img, 0, 0);
     frameLayer.dataset.key = fkey;
   }
@@ -894,7 +895,7 @@ async function exportFull(ig = false, deliver = download) {
   try {   // from `exporting = true` on: anything that throws must reach the finally (it re-enables the buttons)
     // A preview render in flight shares the engine and the GPU frame: let it finish first.
     while (rendering) await sleep(20);
-    const u = ui(), dust = dustAmount(), dustD = dustMarks(), style = frameStyle(), fseed = photo.grainSeed;   // fixed for every strip
+    const u = ui(), dust = dustAmount(), dustD = dustMarks(), style = frameStyle(), filed = filedWidth(), fseed = photo.grainSeed;   // fixed for every strip
     const t0 = performance.now();
     const rawPv = photo.preview.raw, size = photo.size;
     const rot = photo.rot || 0, turned = rot & 1;
@@ -902,7 +903,7 @@ async function exportFull(ig = false, deliver = download) {
     const c = viewCrop(), cw = fw * c.w, chh = fh * c.h;   // the output frame (Ritaglia) at full resolution
     const bFrac = borderFrac(), mat = matColour();
     // IG: the posted image (iw × ih) fits inside the canvas with a bFrac mat; the film renders at IG_SUPER × that.
-    const fm = frameMargins(style, cw, chh), ecw = cw + 2 * fm.mx, ech = chh + 2 * fm.my;   // with the film frame (Cornice)
+    const fm = frameMargins(style, cw, chh, filed), ecw = cw + 2 * fm.mx, ech = chh + 2 * fm.my;   // with the film frame (Cornice)
     const igFit = ig ? fitInside(ecw, ech, IG_W, IG_H, Math.round(bFrac * IG_H)) : null;
     const scale = ig ? Math.min(1, IG_SUPER * Math.max(igFit.iw, igFit.ih) / Math.max(ecw, ech))
       : Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (cw * chh)));
@@ -938,7 +939,7 @@ async function exportFull(ig = false, deliver = download) {
     // scaled by long / short across the short ones (portrait 2736x3648: 36 px left / right, 48 px top / bottom -> 2808x3744).
     // The base width moves by up to ±3 px to the value that makes the thick side a whole number (3:4 -> a multiple of 3: exact).
     // The film frame (Cornice) around the image: the canvas is W×H, the image at (mx, my); the mat goes around the canvas.
-    const { mx, my } = frameMargins(style, w, h), W = w + 2 * mx, H = h + 2 * my;
+    const { mx, my } = frameMargins(style, w, h, filed), W = w + 2 * mx, H = h + 2 * my;
     const { x: borderX, y: borderY } = ig ? { x: 0, y: 0 } : matMargins(W, H, bFrac), border = borderX;
     log(`export start ${w}x${h} p3=${p3} progressive=${progressive} frame=${style} ${mx}x${my} border=${borderX}x${borderY}`);
 
@@ -955,7 +956,7 @@ async function exportFull(ig = false, deliver = download) {
 
     // a strip of canvas rows from ey0: the frame over it, the dust, then to the encoder (IG: into the whole canvas)
     const emit = (strip, ey0, rows) => {
-      frameIntoStrip(strip, style, fseed, w, h, mx, my, ey0, rows);
+      frameIntoStrip(strip, style, fseed, w, h, mx, my, ey0, rows, filed);
       dustIntoStrip(strip, w, h, mx, my, ey0, rows, dust, dustD);
       if (ig) igFull.set(strip, ey0 * W * 3);
       else enc.post({ cmd: 'rows', rgb: strip.buffer }, [strip.buffer]);
@@ -1076,7 +1077,7 @@ for (const id of Object.keys(FORMAT)) {
   $(id).previousElementSibling.addEventListener('dblclick', zero);
   onThumbDoubleTap($(id), zero);
 }
-for (const id of ['borderPct', 'borderColor']) $(id).addEventListener('input', () => { drawOverlays(); if (viewport.isFitted()) fitToScreen(); });
+for (const id of ['borderPct', 'borderColor', 'filedPct']) $(id).addEventListener('input', () => { drawOverlays(); if (viewport.isFitted()) fitToScreen(); });
 $('reseed').addEventListener('click', () => {
   if (!photo) return;
   photo.dustSeed = newDustSeed();
