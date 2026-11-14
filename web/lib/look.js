@@ -259,7 +259,7 @@ export const GRAIN_BLUR = 0.45;
 // App wedge, Frontier, 29.6 um, before -> after (kg200 median [p25-p75]): shadows 2.16 -> 2.16 (1.78 [1.49-3.01]), L* 25-45
 // 3.28 -> 3.28 (2.85 [2.12-4.56]), mids 2.97 -> 2.68 (2.67), lights 2.16 -> 1.34 (1.36 [0.96-1.69]), whites 0.90 -> 0.59
 // (0.66); lights r50 0.74 -> 0.66 px (0.60).
-// 4.52, the grain's colour (user 2026-11-14: "sembrano più macchie che grana", less dirty colour as up to 4.45): with the
+// 4.53, the grain's colour (user 2026-11-14: "sembrano più macchie che grana", less dirty colour as up to 4.45): with the
 // clumps of 4.46 coarse already, the yellow layer's 2.5x (54 um) made the colour a yellow-blue blotch: on screen b* / a* 2.2-2.8
 // in the greys. Measured (scratch gba/: app wedge, greys + a sunset-warm and a blue-sky ramp, box-resampled to 29.6 um, Lab from
 // the canvas' P3; real: the 19 kg200 scans, flattest 10 % of the 32 px patches per band, chromagrain.py's way). Real b* / a*
@@ -276,11 +276,16 @@ export const GRAIN_BLUR = 0.45;
 // -> 0.9-1.0, C / L 1.23-1.36 -> 0.92-1.01, lights Lstd 0.84 -> 0.75 (grain_gain_dense). At the export pitch (10.9 um, then to
 // 29.6) the greys' colour falls more: C / L 0.74-0.88 -> 0.34-0.36, b / a 2.15-2.46 -> 1.23-1.60. The real chroma's clump size
 // (r50 a* / b* ~1.9 px) is mostly the labs' JPEG (q70 4:2:0): ours through it 1.2-2.0 from 0.6-0.9 px: not a target here.
+// 4.53, the clumps (user 2026-11-14: "sembrano cluster di grani"): the fast crystals of 4.46 (blur_fast 1.2) read as bunches of
+// grains, soft blobs under the fine grain. Shown 3 clump sizes at the same strength and colour (scratch gba/), the user chose
+// halfway: blur_fast 1.2 -> 0.7, fast_count_frac 0.0023 -> 0.0068 (count ~ 1 / blur^2 keeps their std: amount unchanged).
+// Frontier greys at 29.6 um, mids -> lights, before -> after (real): r50 0.88 -> 0.65 / 0.63 -> 0.55 px (0.74 / 0.60),
+// Lstd 2.81 -> 2.84 / 1.32 -> 1.32, C / L 0.59 -> 0.54 / 0.65 -> 0.65. Finer than the real in the mids: the user's choice.
 export const V4_GRAIN = {
-  blur: 0.2, blur_fast: 1.2, fast_count_frac: 0.0023, layer_blur_fast: [1.3, 1, 1.6], scan_sharpen_um: HS_UM, scan_sharpen: 0.85,
+  blur: 0.2, blur_fast: 0.7, fast_count_frac: 0.0068, layer_blur_fast: [1.3, 1, 1.6], scan_sharpen_um: HS_UM, scan_sharpen: 0.85,
   scan_noise: 0.005, scan_noise_slope: 0.6, scan_noise_chroma: 0.15,   // scan_noise per 10 um pixel
   grain_gain_dense: 0.45, grain_gain_from: 0.43, grain_gain_to: 0.57,
 };
 
-export const V4_GRAIN_SCALE = 2.18;   // Grana's slider unit for this grain: the fitted amount (4.52: 4.39) at the default Grana (V4_FILM)
+export const V4_GRAIN_SCALE = 2.18;   // Grana's slider unit for this grain: the fitted amount (4.53: 4.39) at the default Grana (V4_FILM)
 export const GRAIN_UNIT = 0.65;   // slider 1× -> engine amount (= old slider 0.25 / old default 0.4)
