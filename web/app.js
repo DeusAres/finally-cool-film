@@ -111,8 +111,9 @@ const sceneGain = (u) => 2 ** (u.ev - underEv() + baselineEv());
 // The film model and the Frontier scanner are the engine's (the positive comes out of it);
 // our input pass only conditions the light (display→scene, exposure, lens, Texture, Chiarezza, Nitidezza, Vividezza).
 let forceSRGB = false;   // IG export: sRGB output (P3 dulls saturated reds on Instagram)
-// Ritaglia (Trasforma; lib/tilt.js): the crop of the turned frame (fractions); while the Trasforma tab is open the whole frame
-// renders and the crop is drawn over it (cropEditing), elsewhere the crop is the output frame.
+// Ritaglia (Trasforma; lib/tilt.js): the crop of the turned frame (fractions); while it is edited (classic UI: the Trasforma tab;
+// UI 2: its Ritaglia tool, ui2.js syncCrop) the whole frame renders and the crop is drawn over it, elsewhere the crop is the
+// output frame.
 const cropUI = initCropUI({ stage, view, active: () => !!photo, aspect: () => photo.preview.w / photo.preview.h,
   onEdit: () => render(), onMove: () => histoSoon() });
 const viewCrop = () => (cropUI.editing() ? FULL : cropUI.crop());
@@ -627,7 +628,7 @@ if (V4) {
     tabBtns.forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === t)));
     panes.forEach((p) => { p.hidden = p.dataset.pane !== t; });
     controls.scrollTop = 0;
-    cropUI.setEditing(t === 'transform');   // Ritaglia: the whole frame with the crop box while Trasforma is open
+    if (!UI2) cropUI.setEditing(t === 'transform');   // Ritaglia: the whole frame with the crop box while Trasforma is open
   };
   const savedTab = store.get('fcf_tab');
   if (tabBtns.some((b) => b.dataset.tab === savedTab)) showTab(savedTab);
@@ -781,8 +782,8 @@ $('rotR').addEventListener('click', () => turn(1));
 // ---------- transform: Raddrizza (tilt) ----------
 // Tape-measure dial (lib/ruler.js) over the hidden #tilt range input: the angle goes into the input pass (lib/tilt.js) of the
 // preview and the export. It is relative to the displayed frame, so it stays across the quarter turns (rotations about the same
-// centre commute); a new photo and Azzera impostazioni set it to 0. While it is dragged, the crop box shows a ninths grid.
-const tiltDial = tiltRuler($('tiltRuler'), $('tilt'), $('tiltOut'), { onDrag: (on) => $('cropBox').classList.toggle('fine', on) });
+// centre commute); a new photo and Azzera impostazioni set it to 0. While it is dragged, a ninths grid lies over the frame.
+const tiltDial = tiltRuler($('tiltRuler'), $('tilt'), $('tiltOut'), { onDrag: (on) => cropUI.guide(on) });
 $('tilt').addEventListener('input', () => { if (photo) render(); });
 $('tiltLabel').addEventListener('dblclick', () => tiltDial.set(0));
 /** Back to no tilt and the whole frame without a render (new photo: its own first render follows). */
@@ -1152,6 +1153,7 @@ if (UI2) {
       if (st.scanner !== scanner) setScanner(st.scanner); else if (photo) { drawOverlays(); render(); }
     },
     openTab: (t) => document.querySelector(`#tabs [data-tab="${t}"]`)?.click(),
+    cropEditing: (on) => cropUI.setEditing(on),
     rotate: (q) => rotate(q),
     exportFull: (ig, deliver) => exportFull(ig, deliver),
   });

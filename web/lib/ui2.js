@@ -90,8 +90,9 @@ function tapTicks(root) {
 
 /**
  * Start UI 2. `api`: { baseOf(id): the value a tool resets to; snapshot(): the edit state; restore(s) (async: a 90° turn);
- * openTab(name): the classic tab whose side effects a group needs ('transform': the crop overlay, else 'film'); rotate(q):
- * a quarter turn (resolves when done); exportFull(ig) }.
+ * openTab(name): the classic tab whose side effects a group needs ('transform' or 'film'); cropEditing(on): the whole frame
+ * with the crop box (Ritaglia), or the crop as the frame; rotate(q): a quarter turn (resolves when done);
+ * exportFull(ig, deliver) }.
  */
 export function initUI2(api) {
   document.body.classList.add('ui2');
@@ -192,7 +193,9 @@ export function initUI2(api) {
   const TR = { tilt: '.tilt', crop: '.crop', border: '.bordo', frame: '.cornice' };
   const trBlocks = Object.fromEntries(Object.entries(TR).map(([t, q]) => [t, park.querySelector(q)]));
   const parkAll = () => park.append(...Object.values(trBlocks));
-  const cropOverlay = () => document.body.classList.toggle('u2nocrop', sel.transform === 'border' || sel.transform === 'frame');
+  // the crop is edited (whole frame + box) only in Ritaglia: Raddrizza, Bordo, Cornice and the other groups show the photo
+  // cropped (user: the border and the frame belong around the cropped photo, not the whole one)
+  const syncCrop = () => api.cropEditing(group === 'transform' && sel.transform === 'crop');
 
   function wire(g, pg) {
     const q = (sel) => pg.querySelector(sel);
@@ -203,19 +206,19 @@ export function initUI2(api) {
       sel[g] = t; haptic(); swapTool(pg, g, dir);
     });
     if (g === 'transform' && DESK.matches) {
-      // all four blocks at once; the one last touched decides the crop box (hidden while editing Bordo / Cornice)
+      // all four blocks at once; the one last touched decides (Ritaglia: the crop is edited)
       pg.querySelectorAll('.u2tr').forEach((h) => {
         h.append(trBlocks[h.dataset.tr]);
-        h.onpointerdown = () => { sel.transform = h.dataset.tr; cropOverlay(); };
+        h.onpointerdown = () => { sel.transform = h.dataset.tr; syncCrop(); };
       });
-      cropOverlay();
+      syncCrop();
       return;
     }
     if (g === 'transform') {
       const host = q('.u2tr');
       parkAll();   // all back first, then the selected one in
       host.append(trBlocks[sel.transform] || trBlocks.tilt);
-      cropOverlay();
+      syncCrop();
       return;
     }
     if (DESK.matches) pg.querySelectorAll('.u2tool[data-id]').forEach((t) => wireOne(t, t.dataset.id, null));
@@ -236,7 +239,7 @@ export function initUI2(api) {
     tmp.innerHTML = g === 'transform' ? '<div class="u2tool u2tr"></div>' : sliderPane(sel[g]);
     const nu = tmp.firstElementChild;
     old.after(nu); old.classList.add('u2out');
-    if (g === 'transform') { parkAll(); nu.append(trBlocks[sel.transform] || trBlocks.tilt); cropOverlay(); }
+    if (g === 'transform') { parkAll(); nu.append(trBlocks[sel.transform] || trBlocks.tilt); syncCrop(); }
     else wireTool(g, pg);
     slide(old, nu, dir, TOOL_W, BLUR_PX / 2, TOOL_MS).onfinish = () => old.remove();
   }
@@ -302,6 +305,7 @@ export function initUI2(api) {
     if (group === 'transform') parkAll();
     group = g; haptic();
     api.openTab(g === 'transform' ? 'transform' : 'film');
+    syncCrop();
     draw(true, dir);
   });
   // the scanner's own rows show / hide with the scanner: redraw (the classic code toggles their `hidden`)
@@ -453,7 +457,7 @@ export function initUI2(api) {
     if (g !== group) {
       const dir = Math.sign(GROUPS.findIndex((x) => x.id === g) - GROUPS.findIndex((x) => x.id === group));
       if (group === 'transform') parkAll();
-      group = g; sel[g] = id; api.openTab('film'); draw(true, dir);
+      group = g; sel[g] = id; api.openTab('film'); syncCrop(); draw(true, dir);
     } else if (sel[g] !== id) {
       sel[g] = id; draw(false);
     }
@@ -522,8 +526,6 @@ body.ui2 #histo { left: auto; right: 8px; }
 .u2tr .tilt, .u2tr .crop, .u2tr .bordo, .u2tr .cornice { margin: 0; }
 .u2tr #borderRuler { height: 40px; } .u2tr .bordo .u2sws { margin: 4px 0 0; padding: 4px 4px; gap: 8px; }
 .u2tr .bordo .u2sws button, .u2tr .bordo .u2pick { width: 26px; height: 26px; } .u2tr .bordo .u2sws button.on { outline-offset: 2px; } .u2tr .u2hex { font-size: 11px; color: var(--muted); }
-/* Bordo / Cornice: no crop box over the preview (it darkens what is outside it: the mat, the frame) */
-body.u2nocrop #cropUI { display: none !important; }
 .u2nav { display: flex; border-top: 1px solid var(--line); padding: 2px 6px max(4px, calc(env(safe-area-inset-bottom) - 16px)); }
 body.ui2 #status { position: absolute; left: 8px; top: 8px; max-width: calc(100% - 150px); padding: 3px 8px; border-radius: 6px;
   background: rgba(14,13,12,.55); color: var(--muted); font: 10.5px ui-monospace, Menlo, monospace; min-height: 0; z-index: 3; cursor: pointer; }

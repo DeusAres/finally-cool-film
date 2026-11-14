@@ -134,6 +134,7 @@
   #cropBox.fine { background-image: var(--thirds),
            repeating-linear-gradient(90deg, transparent 0 calc(11.111% - .5px), #fff3 calc(11.111% - .5px) 11.111%),
            repeating-linear-gradient(180deg, transparent 0 calc(11.111% - .5px), #fff3 calc(11.111% - .5px) 11.111%); }
+  #cropBox.guide { pointer-events: none; box-shadow: none; } #cropBox.guide i { display: none; }   /* Raddrizza over the cropped frame */
   #cropBox i { position: absolute; width: 44px; height: 44px; transform: translate(-50%, -50%); }   /* a finger-sized hit area on each corner */
   #cropBox i::after { content: ''; position: absolute; width: 18px; height: 18px; border: 0 solid #fff; }
   #cropBox i[data-h="nw"] { left: 0; top: 0; cursor: nwse-resize; }      #cropBox i[data-h="nw"]::after { left: 19px; top: 19px; border-width: 3px 0 0 3px; }

@@ -1,9 +1,11 @@
 // Ritaglia (Trasforma): the crop box over the preview, its formats and lock (from app.js, 4.45).
-// While the Trasforma tab is open (editing) the whole turned frame renders and #cropUI lies on the canvas: the crop box
+// While the crop is edited (classic UI: the Trasforma tab; UI 2: its Ritaglia tool) the whole turned frame renders and #cropUI lies on the canvas: the crop box
 // (thirds grid), the cut-away part darkened, not removed (user). A corner resizes it (the opposite corner stays put), the box
 // drags. A format (Libero, Originale, the usual print / screen ratios, user) or the lock (the box's own ratio) keeps its
-// proportions; ⟲ turns the format (portrait <-> landscape). Moving it only moves the box (no render); leaving the tab renders
-// the crop as the output frame (lib/tilt.js). Azzera impostazioni and a new photo: the whole frame, Libero; a quarter turn turns
+// proportions; ⟲ turns the format (portrait <-> landscape). Moving it only moves the box (no render); leaving the editing renders
+// the crop as the output frame (lib/tilt.js). Raddrizza turns about the whole frame's centre and the crop is a window of the
+// turned frame, so a tilt over a cropped preview brings in what lies outside the crop. While Raddrizza's dial moves, the box
+// is a grid over the whole shown frame (guide): over the crop box while editing, over the cropped frame otherwise. Azzera impostazioni and a new photo: the whole frame, Libero; a quarter turn turns
 // the box with the photo (app.js rotate). The crop is in fractions of the turned frame.
 import { FULL } from './tilt.js';
 
@@ -42,20 +44,21 @@ export function fitCrop(c, r, A) {
  * (the histogram follows it). */
 export function initCropUI({ stage, view, active, aspect, onEdit, onMove }) {
   const $ = (id) => document.getElementById(id);
-  let crop = FULL, editing = false, format = 'free', portrait = false;   // format: 'free' | 'orig' | 'lock' | [short, long]
+  let crop = FULL, editing = false, guiding = false, format = 'free', portrait = false;   // format: 'free' | 'orig' | 'lock' | [short, long]
   const locked = () => format !== 'free';
   const frameAspect = () => (active() ? aspect() : 1);   // no photo: shapes only
   const formatName = (f) => (f === 'free' ? 'Libero' : f === 'orig' ? 'Originale' : portrait ? `${f[0]}:${f[1]}` : `${f[1]}:${f[0]}`);
 
   function place() {
-    const ui = $('cropUI'), on = editing && active();
+    const ui = $('cropUI'), on = (editing || guiding) && active(), c = editing ? crop : FULL;
     ui.hidden = !on;
+    $('cropBox').classList.toggle('guide', !editing);   // the grid only: no handles, no darkening, no drag
     if (!on) return;
     const s = stage.getBoundingClientRect(), v = view.getBoundingClientRect();
     Object.assign(ui.style, { left: `${v.left - s.left}px`, top: `${v.top - s.top}px`, width: `${v.width}px`, height: `${v.height}px` });
-    Object.assign($('cropBox').style, { left: `${crop.x * 100}%`, top: `${crop.y * 100}%`, width: `${crop.w * 100}%`, height: `${crop.h * 100}%` });
+    Object.assign($('cropBox').style, { left: `${c.x * 100}%`, top: `${c.y * 100}%`, width: `${c.w * 100}%`, height: `${c.h * 100}%` });
   }
-  /** Trasforma tab shown (`on`) or left: the whole frame with the box over it, or the crop rendered as the frame. */
+  /** Crop editing on (`on`) or off: the whole frame with the box over it, or the crop rendered as the frame. */
   function setEditing(on) {
     if (on === editing) return;
     editing = on;
@@ -125,6 +128,8 @@ export function initCropUI({ stage, view, active, aspect, onEdit, onMove }) {
 
   return {
     crop: () => crop, editing: () => editing, setEditing, place, reset: whole,
+    /** Raddrizza's dial moving (`on`): the ninths grid over the shown frame. */
+    guide(on) { guiding = on; $('cropBox').classList.toggle('fine', on); place(); },
     /** Turn the box with the photo (a quarter turn, tilt.js turnCrop). */
     turn: (f) => { crop = f(crop); },
     /** UI 2's undo / redo: the box, its format and orientation. */

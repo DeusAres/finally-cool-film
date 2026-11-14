@@ -14,6 +14,11 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.51**: **Ritaglia: fuori dallo strumento si vede ritagliato**: il riquadro sulla foto intera restava per tutto
+  Trasforma, così Raddrizza, Bordo e Cornice mostravano la foto non ritagliata (bordo e cornice attorno alla foto intera).
+  Ora solo Ritaglia mostra la foto intera col riquadro; il resto mostra il ritaglio. Raddrizza ruota sempre attorno al
+  centro del fotogramma intero e il ritaglio è una finestra della foto ruotata, quindi ruotando entra anche quello che sta
+  fuori dal ritaglio; mentre si trascina, la griglia fine sta sulla foto ritagliata.
 - **v4.50**: **Esporta su iPhone: «Salva nelle Foto»**: dall'app sulla schermata Home il download finiva in File e non
   in Foto. Ora sul telefono, a export finito, compare il bottone «Salva nelle Foto»: apre il foglio di condivisione di iOS,
   da cui «Salva immagine» la mette nel rullino (serve un tocco nuovo: iOS non apre la condivisione alla fine di un export
