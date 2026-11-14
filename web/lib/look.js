@@ -31,8 +31,8 @@ export const LAB_D_EV = 0.25;
 export const GRAD_C = [-0.383, -0.271, -0.145, 0, 0.074, 0.157, 0.25, 0.34, 0.43],
   GRAD_NAMES = ['Soft3', 'Soft2', 'Soft1', 'Normal', 'Hard1', 'Hard2', 'Hard3', 'Hard4', 'Hard5'];
 // Tono luci / ombre (Tone Adjustment, one level each way): highlight key +-0.5 (Hard: opener, brighter lights, 4.31 gentler, see
-// frontier.rs HIGHLIGHT_UP; Soft: held down); the frame's brightness is Densità's (the negative as a whole, the shoulder keeps
-// the whites' detail);
+// frontier.rs HIGHLIGHT_UP; Soft, 4.56: a softer curve above mid grey, lights lower and more separation in the top stops, see
+// frontier.rs SOFT_FULL); the frame's brightness is Densità's (the negative as a whole, the shoulder keeps the whites' detail);
 // black lift +-0.15 of black_lift_max (Soft: lifted blacks; Hard: deeper, the darkest tones clip).
 export const TONE_HI = 0.5, TONE_LO = 0.15, TONE_NAMES = ['Soft', 'Standard', 'Hard'];
 // Saturazione: 5 % per step on the scanner's saturation. Bright (Fujifilm: "saturation of primary colors ... without affecting
@@ -165,7 +165,19 @@ export const V4_AUTO = { strength: 1.0, k_col: 0.68, highlight_weight: 0.6, targ
 // -3 EV left (6.96): the real lab prints a thin frame with ~1.5x the 0 EV tone contrast but no more chroma, which a fixed
 // per-channel curve cannot do (a film-toe question, eval/frontier_cp/README.md).
 export const V4_TOE_SLOPE = [1.0, 0.75];
-export const V4_FRONTIER = { gradation_a: 11.15, black_point: 0.023, white_point: 0.97, shoulder_start: 0.95, shoulder_sharpness: 0,
+// 4.56, the top (user 2026-11-14: a white cat's fur in sun "si impasta", whatever Esposizione / Hyper Tone / Tono luci):
+// the curve put +2.5..+5 EV over mid grey into L* 92.4-96.2 (L* per EV 4.2 / 2.5 / 1.0 at +2.5 / +3 / +4, neutral ramp, scratch
+// hl/ramp.py; Esposizione cannot move it: AutoSetup re-keys each exposure). white 0.97 was fitted on the chart, whose
+// brightest patch is L* 92.9 (SG white, 0 EV): above it the curve was the sigmoid's extrapolation, while the real Frontier
+// scans of samples/kg200 reach L* 98-100 (p99.9, median of 20 ~99). A plain white 1.0 refit (fit_tone.py) keeps a 11.14
+// but lifts every light: chart whites +2 L* over the real (Kodak step 1 at 0 EV 91.2 -> 93.3, real 91.1), chromatic dE00
+// -1 / 0 / +1 / +2 EV 3.53 / 3.97 / 3.48 / 3.67 -> 3.70 / 4.34 / 3.60 / 4.10: not taken. Instead white_top: above the encoded
+// level of that patch (0.92) the curve rises smoothly to 1.0 instead of 0.97 (frontier.rs Gradation::curve), nothing below
+// it moves: dE00 3.53 / 4.02 / 3.49 / 3.67, grey L* rms 2.01 / 1.88 / 1.61 / 1.61 (was 1.98 / 1.88 / 1.61 / 1.63; colour.py,
+// keys fitted on the greys). L* per EV by output band 88-91 / 91-93.5 / 93.5-96 / 96-99.5: 6.7 / 4.2 / 1.5 / 0.2 -> 6.9 / 5.6 /
+// 4.2 / 0.9 (real Kodak 7.7 / 7.1 / - / -); at +2.5 / +3 / +4 EV 4.2 / 2.5 / 1.0 -> 5.6 / 4.0 / 1.5. AutoSetup's highlight
+// cap reads the sigmoid's knee (shoulder_start), which does not move.
+export const V4_FRONTIER = { gradation_a: 11.15, black_point: 0.023, white_point: 0.97, white_top: 1.0, white_top_from: 0.92, shoulder_start: 0.95, shoulder_sharpness: 0,
   saturation: 0.92, saturation_blue: 0.05, blue_hue_shift: 18, green_hue_shift: 20, sensor_peak_nm: [650, 555, 450], warm_hue_shift: 6,
   hue_lightness: [0.91, 0.93, 0.57, 0.80, 0.95, 0.93], hue_saturation: [0.86, 1.08, 0.94, 1.07, 0.77, 0.76], hue_shift: [2.4, 1.3, 6.0, 4.1, -2.9, 15.3] };
 // v4 Noritsu (Scanner tab): the Frontier's scanner model with a Noritsu's tone, colour and AutoSetup, fitted as V4_FRONTIER on the

@@ -26,7 +26,8 @@
 //!    0..1, then a sigmoid `1/(1+exp(-a (x-m)))` rescaled to 0..1 (`m` solved so x = 0.5 gives
 //!    `mid_grey_out`; the contrast key remaps x on the pixel's mean density, highlights locked,
 //!    the channel gaps scaled with it, see `Tone`), a C1 soft
-//!    shoulder above `shoulder_start` (plus the highlights key: a smooth output bump above mid grey),
+//!    shoulder above `shoulder_start` (plus the highlights key: up, a smooth output bump above mid grey; down, a softer
+//!    sigmoid above mid grey),
 //!    black/white points, and `black_lift` (same for R, G, B). The output is
 //!    sRGB-encoded.
 //!    Above mid grey the dimmer channels are pulled towards their mid-slope level so
@@ -56,22 +57,26 @@ use crate::profile::Profile;
 /// white compresses somewhere; a bump that returns to zero at white was tried and compresses its falling part harder (slope
 /// 0.16-0.38). Brightness itself is Densità's.
 const HIGHLIGHT_UP: (f64, f64) = (0.5, 0.6);
-/// Highlights key down (Tono luci Soft, 4.47): until then a bump subtracted from the output above mid grey (HIGHLIGHT_DOWN). It
-/// acted after the curve, where everything past the shoulder is already one white: the lights came out grey and flat, nothing
-/// came back (user's DNG P5282720, a tower in a bright sky ~5 EV over a shaded alley: sky L* 94.8 -> 87.8, local detail 1.46 ->
-/// 1.65, while Densità -6 brought the detail to 3.8 but sank the alley from L* 37.6 to 15.9). Now it acts on the negative before
-/// the curve, as a lab's highlight compression: above the normalized density where the curve reaches SOFT_FROM (encoded), the
-/// pixel's mean density is compressed (u -> u / (1 + k u), C1 at the start) so that SOFT_RANGE more of the negative (x units of
-/// range_density; 0.6 ~ 5.8 EV) fits under the level SOFT_TO at the full key: the Frontier's steep curve reaches its white well
-/// before the end of the range (a sky 5 EV over the subject sits on that flat top, not past the range: compressing only what
-/// is past x = 1 moved it from L* 94.8 to 93.7). Mids and shadows untouched, hue kept (one shift for the three channels, as the
-/// whites key). SOFT_FROM / SOFT_TO / SOFT_RANGE: choices, measured on that DNG: Soft alone, sky L* 94.8 -> 91.2 / 89.4 / 88.2
-/// (range 0.3 / 0.6 / 1.0), the brightest 80-97 % 80.6 -> 78.5 / 77.7 / 77.1 (the old bump: 72.4, flat), the alley unchanged
-/// (37.6); with Hyper Tone luci 5: sky 82.3 / 81.0 / 80.2, b* -2.8 / -3.1 / -3.2. The sky's own texture does not come back:
-/// it is compressed in the film's shoulder, before the scanner (Hyper Tone, which dodges the scene light, is what reaches it).
-const SOFT_FROM: f64 = 0.6;
-const SOFT_TO: f64 = 0.93;
-const SOFT_RANGE: f64 = 0.6;
+/// Highlights key down (Tono luci Soft): the upper half of the curve (above mid grey) becomes a softer sigmoid, steepness
+/// `a * SOFT_FULL^s` (s = -key), C1 at mid grey and reaching the same white at the end of the range, so the lights come down
+/// and the top stops get more of the output (the Frontier's steep sigmoid packs +2.5..+5 EV into its last ~4 L*: a white cat's
+/// fur in sun or a cloud lose their local contrast there, user 2026-11-14). Mid grey and shadows untouched, hue kept (a curve,
+/// the same for R G B). The film is not what flattens the lights: its density per EV stays on the straight line up to +5 EV
+/// (gamma 0.43 at mid grey, 0.36-0.45 at +2..+5, the 4.28 shoulder); the scanner's curve is (dL*/dD 167 at mid grey, 44 / 21 / 8
+/// at +2 / +3 / +4 EV). History: until 4.46 a bump subtracted from the output above mid grey (grey, flat lights); 4.47-4.55 the
+/// negative's mean density compressed above the curve's level 0.6 (SOFT_FROM / SOFT_TO / SOFT_RANGE), which compressed the
+/// lights it meant to open: L* per EV at +2 / +3 / +4 EV over mid grey (neutral ramp, sf-eval, v4 Frontier at D+1 Hard1,
+/// AutoSetup of the chart frame; scratch hl/ramp.py) Standard 5.0 / 1.8 / 0.8, that Soft 4.0 / 1.6 / 1.3.
+/// SOFT_FULL: the upper half's steepness ratio at the full key (-1); the app's Soft (key -0.5, look.js TONE_HI) gets
+/// SOFT_FULL^0.5 = 0.54, a 11.15 -> 6.0 (a choice on the prototype, scratch hl/proto.py). Same ramp, with V4_FRONTIER's white
+/// top: Standard 5.4 / 3.6 / 1.0, Soft 6.3 / 4.1 / 3.9 (at +2.5 / +3.5: 5.1 / 2.2 -> 4.8 / 4.8); the price is the mid lights,
+/// +1 EV 11.2 -> 10.1 and L* 83.8 -> 79.2 (a white cat's fur at +1.3 EV, IDG_20261008_160856_907: detail Standard 11.4, Soft
+/// 10.4, the 4.47 Soft 9.3).
+const SOFT_FULL: f64 = 0.29;
+/// A softer half than this cannot leave mid grey with the curve's own slope and still end on white (the limit is an
+/// exponential approach, slope a / (1 - e^-a/2) at mid grey): the steepness stays this much above that limit (a margin for
+/// the solve, not a look choice; reached only by keys below about -0.6, past the app's Soft).
+const SOFT_FLOOR: f64 = 1.02;
 /// Contrast key: mid-grey slope factor `1 + SLOPE_UP c` (c > 0) / `1 + SLOPE_DOWN c` (c < 0).
 const SLOPE_UP: f64 = 1.9;
 const SLOPE_DOWN: f64 = 0.85;
@@ -427,19 +432,15 @@ impl FrontierBase {
         let c = keys.contrast as f64;
         // mid-slope factor: x(1 + SLOPE_UP c) up to ~2.8 at +1, down to 0.2 at -1
         let a = m.gradation_a * if c > 0.0 { 1.0 + SLOPE_UP * c } else { 1.0 + SLOPE_DOWN * c };
-        // Highlights key (-1..+1, + = brighter, more open): a smooth bump on the
-        // output fading in above mid grey, so mid grey and shadows keep the model curve. Exactly the model curve at 0.
+        // Highlights key (-1..+1, + = brighter, more open: a smooth bump on the output; - = a softer sigmoid), both above mid
+        // grey only, so mid grey and shadows keep the model curve. Exactly the model curve at 0.
         let h = (keys.highlight as f64).clamp(-1.0, 1.0);
         let sh = m.shoulder_sharpness;
-        let g0 = Gradation::solve(m.gradation_a, sh, m);
         Stage {
             d_ref: self.d_ref,
             range: m.range_density.max(1e-6),
             shift,
-            curve: Gradation::solve(m.gradation_a, sh, m).with_highlight(h.max(0.0)),
-            soft: (-h).max(0.0) * SOFT_RANGE,
-            soft_x0: g0.x_at(SOFT_FROM),
-            soft_x1: g0.x_at(SOFT_TO),
+            curve: Gradation::solve(m.gradation_a, sh, m).with_highlight(h.max(0.0)).with_soft((-h).max(0.0)),
             tone: Tone::new(a / m.gradation_a, m, keys.debug_contrast_mode),
             lift: keys.black_lift.clamp(-1.0, 1.0) as f64 * m.black_lift_max,
             mid_slope: {
@@ -485,6 +486,9 @@ pub struct Gradation {
     sh: f64,
     bp: f64,
     wp: f64,
+    /// `white_top` / `white_top_from` (FrontierModelParams); `top` <= `wp` = off.
+    top: f64,
+    top_from: f64,
     shoulder_one: f64,
     /// sigmoid at x = 0 and x = 1 (rescale to 0..1)
     s0: f64,
@@ -499,6 +503,53 @@ pub struct Gradation {
     /// above mid grey; `hl_on` is false at 0 (the curve is then untouched).
     hl_on: bool,
     hl: f64,
+    /// Highlights key down: the softer upper half (None at 0).
+    soft: Option<SoftHalf>,
+}
+
+/// Highlights key down (`SOFT_FULL`): above mid grey the level follows its own sigmoid (steepness `a`, midpoint `m`), from the
+/// level `o0` at mid grey to white at x = 1, with the curve's slope at mid grey.
+#[derive(Clone, Copy, Debug)]
+struct SoftHalf {
+    a: f64,
+    m: f64,
+    o0: f64,
+}
+
+impl SoftHalf {
+    /// sigmoid(x) - sigmoid(y), written so two values near 1 do not cancel.
+    fn diff(a: f64, m: f64, x: f64, y: f64) -> f64 {
+        let (ex, ey) = ((-a * (x - m)).exp(), (-a * (y - m)).exp());
+        (ey - ex) / ((1.0 + ex) * (1.0 + ey))
+    }
+
+    /// Slope at x = 0.5 of the sigmoid rescaled to 0..1 over x = 0.5..1; decreasing in `m`.
+    fn rel_slope(a: f64, m: f64) -> f64 {
+        let e = (-a * (0.5 - m)).exp();
+        a * e / ((1.0 + e) * (1.0 + e)) / Self::diff(a, m, 1.0, 0.5)
+    }
+
+    /// The half for a curve of steepness `a0` at level `o0` and slope `d0` at mid grey, key `s` (0..1).
+    fn new(a0: f64, o0: f64, d0: f64, s: f64) -> Self {
+        let rel = d0 / (1.0 - o0).max(1e-9);
+        // softest steepness that can still match: the exponential limit a / (1 - e^(-a/2)) = rel (it is 2 at a -> 0)
+        let (mut lo, mut hi) = (1e-6f64, a0.max(1.0) * 4.0);
+        for _ in 0..80 {
+            let mid = 0.5 * (lo + hi);
+            if mid / (1.0 - (-mid / 2.0).exp()) < rel { lo = mid } else { hi = mid }
+        }
+        let a = (a0 * SOFT_FULL.powf(s)).max(SOFT_FLOOR * hi);
+        let (mut lo, mut hi) = (-20.0f64, 20.0f64);
+        for _ in 0..80 {
+            let mid = 0.5 * (lo + hi);
+            if Self::rel_slope(a, mid) > rel { lo = mid } else { hi = mid }
+        }
+        Self { a, m: 0.5 * (lo + hi), o0 }
+    }
+
+    fn at(&self, x: f64) -> f64 {
+        self.o0 + (1.0 - self.o0) * Self::diff(self.a, self.m, x, 0.5) / Self::diff(self.a, self.m, 1.0, 0.5)
+    }
 }
 
 impl Gradation {
@@ -510,6 +561,8 @@ impl Gradation {
             sh,
             bp: p.black_point,
             wp: p.white_point,
+            top: p.white_top,
+            top_from: p.white_top_from.min(p.white_point - 1e-3),   // a ramp of some width (no division by zero)
             shoulder_one: 1.0,
             s0: 1.0 / (1.0 + (a * m_mid).exp()),
             s1: 1.0 / (1.0 + (-a * (1.0 - m_mid)).exp()),
@@ -518,6 +571,7 @@ impl Gradation {
             ya: 0.0,
             hl_on: false,
             hl: 0.0,
+            soft: None,
         };
         g.shoulder_one = g.shoulder(1.0);
         g
@@ -601,7 +655,7 @@ impl Gradation {
     }
 
     /// Highlights key up (`HIGHLIGHT_UP`) applied to the shouldered output above mid grey: h > 0 opens them towards paper
-    /// white without a clip (the key down acts on the density: `soft_shift`). Mid grey, shadows and h = 0 are untouched.
+    /// white without a clip (the key down is `with_soft`). Mid grey, shadows and h = 0 are untouched.
     fn with_highlight(mut self, h: f64) -> Self {
         if h == 0.0 {
             return self;
@@ -609,6 +663,18 @@ impl Gradation {
         self.hl_on = true;
         self.hl = h;
         self.ya = self.pre(0.5);
+        self
+    }
+
+    /// Highlights key down (`SOFT_FULL`), s = -key in 0..1: above mid grey a softer sigmoid to the same white, C1 at mid grey
+    /// (level and slope of this curve there). Mid grey, shadows and s = 0 are untouched.
+    fn with_soft(mut self, s: f64) -> Self {
+        if s <= 0.0 {
+            return self;
+        }
+        let h = 1e-5;
+        let d0 = (self.level(0.5 + h) - self.level(0.5 - h)) / (2.0 * h);
+        self.soft = Some(SoftHalf::new(self.a, self.level(0.5), d0, s.min(1.0)));
         self
     }
 
@@ -620,16 +686,6 @@ impl Gradation {
             y = self.remap(y);
         }
         y
-    }
-
-    /// x at which the (key-free) curve reaches the encoded level `y`.
-    fn x_at(&self, y: f64) -> f64 {
-        let (mut lo, mut hi) = (0.0f64, 1.0f64);
-        for _ in 0..50 {
-            let mid = 0.5 * (lo + hi);
-            if self.curve(mid) < y { lo = mid } else { hi = mid }
-        }
-        0.5 * (lo + hi)
     }
 
     /// x at which the sigmoid reaches the shoulder knee (`shoulder_start`).
@@ -644,7 +700,24 @@ impl Gradation {
     }
 
     pub fn curve(&self, x: f64) -> f64 {
+        let y = self.bp + (self.wp - self.bp) * self.level(x);
+        if self.top > self.wp && y > self.top_from {
+            // the top: white_point raised to white_top along a smoothstep from top_from (the curve's own slope at both ends,
+            // steeper between: increasing)
+            let t = ((y - self.top_from) / (self.wp - self.top_from)).min(1.0);
+            return y + (self.top - self.wp) * t * t * (3.0 - 2.0 * t);
+        }
+        y
+    }
+
+    /// The curve's level, 0..1 between the black and white points.
+    fn level(&self, x: f64) -> f64 {
         let x = x.clamp(0.0, 1.0);
+        if let Some(soft) = &self.soft {
+            if x > 0.5 {
+                return soft.at(x);
+            }
+        }
         let y = self.pre(x);
         let mut o = self.shoulder(y) / self.shoulder_one;
         if self.hl_on {
@@ -658,7 +731,7 @@ impl Gradation {
             let (gain, rise) = HIGHLIGHT_UP;
             o = 1.0 - (1.0 - o) * (1.0 - self.hl * gain * sm(u / rise));
         }
-        self.bp + (self.wp - self.bp) * o
+        o
     }
 }
 
@@ -700,22 +773,6 @@ pub struct Stage {
     /// Whites key and the normalized density where it starts.
     whites: f64,
     whites_x0: f64,
-    /// Highlights key down: the extra normalized density brought under white (`SOFT_RANGE` x key) and where it starts.
-    soft: f64,
-    soft_x0: f64,
-    soft_x1: f64,
-}
-
-/// Highlights key down: normalized density shift for a pixel of (unclamped) mean density `xm`: 0 below `x0`, above it
-/// u -> u / (1 + k u) (u = xm - x0) with k such that x = `x1` + `extra` lands on `x1`.
-fn soft_shift(extra: f64, x0: f64, x1: f64, xm: f64) -> f64 {
-    let u = xm - x0;
-    if extra <= 0.0 || u <= 0.0 {
-        return 0.0;
-    }
-    let u0 = (x1 - x0).max(1e-6);
-    let k = 1.0 / u0 - 1.0 / (u0 + extra);
-    u / (1.0 + k * u) - u
 }
 
 /// Whites key: normalized density shift for a pixel of mean density `xm`, 0 below `x0`.
@@ -813,12 +870,6 @@ impl Stage {
         let mut y = [0.0f64; 3];
         for c in 0..3 {
             x[c] = 0.5 + (d[c] + self.shift[c] - self.d_ref) / self.range;
-        }
-        if self.soft > 0.0 {
-            // before the clamp: the densities past the range are what it brings back. One shift for the three channels (hue
-            // kept); its slope is within (-1, 0], so every channel stays increasing in its own density (>= 2/3)
-            let s = soft_shift(self.soft, self.soft_x0, self.soft_x1, (x[0] + x[1] + x[2]) / 3.0);
-            x = x.map(|v| v + s);
         }
         x = x.map(|v| v.clamp(0.0, 1.0));
         if let Some(tone) = &self.tone {
@@ -1452,27 +1503,59 @@ mod tests {
         }
     }
 
-    /// Highlights key down (density compression before the curve): nothing below its start, continuous with slope 1 there,
-    /// increasing, `extra` past `x1` lands on `x1`, and every channel stays increasing in its own density.
+    /// Highlights key down (a softer sigmoid above mid grey): identity at 0, mid grey and shadows kept, C1 at mid grey, the same
+    /// white at x = 1, increasing, the lights lower and the top of the range steeper than the standard curve.
     #[test]
-    fn soft_highlights_bring_the_density_past_white_back_and_keep_the_rest() {
-        for (extra, x0, x1) in [(0.3, 0.62, 0.75), (0.15, 0.55, 0.7), (0.3, 0.7, 1.0)] {
-            assert_eq!(super::soft_shift(extra, x0, x1, x0 - 0.1), 0.0);
-            assert_eq!(super::soft_shift(0.0, x0, x1, 0.9), 0.0);
-            assert!((super::soft_shift(extra, x0, x1, x1 + extra) - (-extra)).abs() < 1e-12, "x1 + extra must land on x1");
-            assert!(super::soft_shift(extra, x0, x1, x0 + 1e-6).abs() < 1e-9, "not C0 at the start");
-            let mut prev = f64::NEG_INFINITY;
-            for i in 0..=2000 {
-                let xm = x0 - 0.1 + (1.2 + extra) * i as f64 / 2000.0;
-                let y = xm + super::soft_shift(extra, x0, x1, xm);
-                assert!(y > prev, "mean not increasing at {xm}");
-                prev = y;
-                // one channel moving alone moves the mean by a third: its own output keeps increasing
-                let d = 1e-5;
-                let dy = (xm + d + super::soft_shift(extra, x0, x1, xm + d / 3.0)) - (xm + super::soft_shift(extra, x0, x1, xm));
-                assert!(dy > 0.0, "a channel decreases at {xm}");
+    fn soft_highlights_soften_the_upper_half_and_keep_the_rest() {
+        let mut p = crate::params::FrontierModelParams::default();
+        (p.gradation_a, p.shoulder_start, p.shoulder_sharpness, p.white_point) = (11.15, 0.95, 0.0, 0.97);   // the v4 Frontier's shape
+        (p.white_top, p.white_top_from) = (1.0, 0.92);
+        for model in [crate::params::FrontierModelParams::default(), p] {
+            let base = super::Gradation::solve(model.gradation_a, model.shoulder_sharpness, &model);
+            assert_eq!(base.with_soft(0.0).curve(0.8).to_bits(), base.curve(0.8).to_bits());
+            for s in [0.25f64, 0.5, 1.0] {
+                let g = base.with_soft(s);
+                let mut prev = -1.0;
+                for i in 0..=2000 {
+                    let y = g.curve(i as f64 / 2000.0);
+                    assert!(y >= prev - 1e-12, "not monotone at s={s} i={i}");
+                    prev = y;
+                }
+                for x in [0.1, 0.3, 0.5] {
+                    assert!((g.curve(x) - base.curve(x)).abs() < 1e-12, "mids / shadows moved at s={s} x={x}");
+                }
+                assert!((g.curve(1.0) - base.curve(1.0)).abs() < 1e-9, "white moved at s={s}");
+                let h = 1e-4;
+                let (left, right) = ((g.curve(0.5) - g.curve(0.5 - h)) / h, (g.curve(0.5 + h) - g.curve(0.5)) / h);
+                assert!((right / left - 1.0).abs() < 2e-3, "not C1 at mid grey at s={s}: {left} {right}");
+                assert!(g.curve(0.7) < base.curve(0.7), "lights not lower at s={s}");
+                let top = |c: &super::Gradation| c.curve(0.95) - c.curve(0.85);
+                assert!(top(&g) > top(&base), "top of the range not steeper at s={s}");
             }
         }
+    }
+
+    /// White top: nothing below `white_top_from`, the end of the range on `white_top`, increasing, steeper in between.
+    #[test]
+    fn white_top_raises_only_the_top() {
+        let mut p = crate::params::FrontierModelParams::default();
+        (p.gradation_a, p.shoulder_start, p.shoulder_sharpness, p.white_point) = (11.15, 0.95, 0.0, 0.97);
+        let base = super::Gradation::solve(p.gradation_a, p.shoulder_sharpness, &p);
+        (p.white_top, p.white_top_from) = (1.0, 0.92);
+        let g = super::Gradation::solve(p.gradation_a, p.shoulder_sharpness, &p);
+        let mut prev = -1.0;
+        for i in 0..=2000 {
+            let x = i as f64 / 2000.0;
+            let (y, y0) = (g.curve(x), base.curve(x));
+            assert!(y >= prev - 1e-12, "not monotone at {x}");
+            prev = y;
+            if y0 <= 0.92 {
+                assert_eq!(y.to_bits(), y0.to_bits(), "moved below white_top_from at {x}");
+            }
+        }
+        assert!((g.curve(1.0) - 1.0).abs() < 1e-12 && (base.curve(1.0) - 0.97).abs() < 1e-12);
+        let top = |c: &super::Gradation| c.curve(0.95) - c.curve(0.85);
+        assert!(top(&g) > top(&base));
     }
 
     #[test]

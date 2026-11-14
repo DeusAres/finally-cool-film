@@ -241,7 +241,8 @@ pub struct FrontierParams {
     pub contrast: f32,
     /// Colour saturation, 1 = standard.
     pub saturation: f32,
-    /// Highlight shoulder, 0 = standard (`shoulder *= 1 + highlight`).
+    /// Highlights key, -1..1, 0 = standard: + opens the lights towards white, - softens the curve above mid grey (frontier.rs
+    /// HIGHLIGHT_UP / SOFT_FULL).
     pub highlight: f32,
     /// Whites key, -1..1, 0 = standard: shifts only the top of the density range (above the
     /// shoulder knee) on the pixel's mean density; - pulls the brightest tones out of the shoulder
@@ -313,6 +314,11 @@ pub struct FrontierModelParams {
     /// Encoded black / white points of the curve.
     pub black_point: f64,
     pub white_point: f64,
+    /// Encoded level the end of the range reaches when above `white_point` (0 = off: the curve ends on `white_point`): from
+    /// the encoded level `white_top_from` up, the curve's output is raised smoothly (C1 at both ends) so that `white_point`
+    /// lands on `white_top`; below `white_top_from` nothing moves (see `Gradation::curve`).
+    pub white_top: f64,
+    pub white_top_from: f64,
     /// Encoded black raised by `black_lift = 1` (lowered by as much at -1, the deepest tones clipping at 0).
     pub black_lift_max: f64,
     /// Saturation about Rec.709 luminance (linear light) at `saturation = 1`.
@@ -377,6 +383,8 @@ impl Default for FrontierModelParams {
             shoulder_sharpness: 1.7142,
             black_point: 0.022,
             white_point: 0.9908,
+            white_top: 0.0,
+            white_top_from: 1.0,
             black_lift_max: 0.25,
             saturation: 1.12,
             saturation_blue: 0.0,
