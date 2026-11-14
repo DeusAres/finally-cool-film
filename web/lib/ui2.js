@@ -123,7 +123,13 @@ export function initUI2(api) {
   const place = () => {
     if (DESK.matches) { u2.prepend($('histo')); u2.append(st); } else { $('stage').append($('histo'), st); }
     document.body.classList.toggle('u2desk', DESK.matches);
+    coverSync();
   };
+  // phone: the panel lies over the photo's bottom, see-through (user 2026-11-14: "semi opaca, si vede la foto dietro, non
+  // troppo trasparente né troppo scura"). --u2h, its height, lifts what sits on the stage's bottom edge and tells the fit
+  // (viewport.js cover) how much of the stage it covers; 0 on the desktop (the panel is a column there).
+  const coverSync = () => document.body.style.setProperty('--u2h', DESK.matches ? '0px' : `${u2.offsetHeight}px`);
+  new ResizeObserver(coverSync).observe(u2);
   place();
   DESK.addEventListener('change', () => { place(); draw(false); });
   // Movie (desktop; user, 2026-11-11): the photo and the column move to the right, the left of the window stays empty for
@@ -385,9 +391,12 @@ export function initUI2(api) {
       };
       s.querySelector('#u2qr').oninput = (e) => { q.value = e.target.value; q.dispatchEvent(new Event('input')); sync(); };
       const run = (ig) => {
-        s.querySelector('#u2full').disabled = s.querySelector('#u2ig').disabled = true;
+        const btns = [s.querySelector('#u2full'), s.querySelector('#u2ig')];
+        btns.forEach((b) => b.disabled = true);
+        s.querySelector('#u2share')?.remove();   // a new export replaces the file a previous one offered
         s.querySelector('#u2prog').hidden = false; haptic();
         const st = $('status'), bar = s.querySelector('#u2bar'), lab = s.querySelector('#u2st');
+        bar.style.width = ''; bar.parentElement.hidden = false;
         const watch = new MutationObserver(() => {
           const t = st.textContent, m = t.match(/tile (\d+)\/(\d+)/);
           lab.textContent = t.replace(/^Esporto[^:]*: ?/, '') || t;
@@ -395,14 +404,21 @@ export function initUI2(api) {
           else if (/JPEG|ridimensiono/.test(t)) bar.style.width = '95%';
         });
         watch.observe(st, { childList: true, characterData: true, subtree: true });
-        let file = null;
+        let file = null, sent = false;
         const deliver = (blob, name) => {
           const f = new File([blob], name, { type: 'image/jpeg' });
-          if (SHARE_SAVE && navigator.canShare?.({ files: [f] })) file = f; else download(blob, name);
+          if (SHARE_SAVE && navigator.canShare?.({ files: [f] })) file = f; else { download(blob, name); sent = true; }
         };
         Promise.resolve(api.exportFull(ig, deliver)).finally(() => {
-          watch.disconnect(); bar.style.width = '100%'; haptic();
-          if (file) offerShare(s, file); else setTimeout(close, 700);
+          watch.disconnect(); haptic();
+          if (sent) { bar.style.width = '100%'; setTimeout(close, 700); return; }   // desktop: downloaded, done
+          // The sheet stays open (share button, or a failure: exportFull resolves without deliver): the bar was
+          // progress, not a result, so it goes; the label keeps the status line (size and time, or the error); the
+          // buttons come back for another export.
+          lab.textContent = st.textContent.replace(/ \(tocca qui[^)]*\)$/, '');   // the log tap is on #status, not here
+          bar.parentElement.hidden = true;
+          btns.forEach((b) => b.disabled = false);
+          if (file) offerShare(s, file);
         });
       };
       s.querySelector('#u2full').onclick = () => run(false);
@@ -419,7 +435,7 @@ export function initUI2(api) {
   const SHARE_SAVE = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
   function offerShare(s, file) {
     const b = document.createElement('button');
-    b.className = 'u2go u2gopri';
+    b.className = 'u2go u2gopri'; b.id = 'u2share';
     b.innerHTML = `${svg('share')}<span><b>Salva nelle Foto</b><i>poi «Salva immagine»</i></span>`;
     b.onclick = () => navigator.share({ files: [file] }).catch((e) => { if (e?.name !== 'AbortError') download(file, file.name); });
     s.querySelector('#u2prog').after(b);
@@ -493,6 +509,12 @@ body.ui2 header h1 { flex: 1; font-size: 11px; }
 .u2pri { background: var(--accent); color: #1a1307; display: flex; gap: 6px; font-weight: 600; font-size: 15px; margin-left: 4px; }
 body.ui2 #histo { left: auto; right: 8px; }
 #u2 { flex: none; background: var(--card); border-top: 1px solid var(--line); }
+/* phone: over the photo (negative margin: the stage runs on under it), --card at 72 % (a choice: the photo shows through, the
+   white labels and the sliders stay readable over a bright sky) */
+body.ui2:not(.u2desk) #u2 { position: relative; z-index: 7; margin-top: calc(-1 * var(--u2h, 0px)); background: rgb(23 21 19 / .72); }
+body.ui2:not(.u2desk) #tools { bottom: calc(10px + var(--u2h, 0px)); }
+body.ui2:not(.u2desk) #zoomLabel { bottom: calc(16px + var(--u2h, 0px)); }
+body.ui2:not(.u2desk) #u2mascot { bottom: calc(34px + var(--u2h, 0px)); }
 .u2slot { position: relative; overflow: hidden; height: 196px; }
 .u2page { position: absolute; inset: 0; padding-top: 10px; display: flex; flex-direction: column; }
 .u2tool { padding: 2px 16px 0; height: 102px; position: relative; }

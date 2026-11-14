@@ -1,10 +1,12 @@
 // Zoom & pan of the preview (CSS transform; the canvas stays centred in the stage): wheel, mouse drag, touch drag and pinch,
 // double tap / double click between fit and 100 % (one image pixel per device pixel). From app.js (4.45).
 // `layers`: the canvas and the overlays moved with it; `label`: the zoom percentage; `margins()`: the frame + mat around the
-// image (a fit includes them); `active()`: a photo is open; `onChange()`: after every move (the crop box follows it).
+// image (a fit includes them); `active()`: a photo is open; `onChange()`: after every move (the crop box follows it);
+// `cover()`: px of the stage's bottom under a see-through panel (UI 2 on the phone, 0 elsewhere). A fit takes the whole stage:
+// an image that fits above the panel is centred there (as without it), a taller one starts at the top and goes on under it.
 const MIN_ZOOM = 0.05, MAX_ZOOM = 6;
 
-export function initViewport({ stage, view, layers, label, margins, active, onChange }) {
+export function initViewport({ stage, view, layers, label, margins, active, onChange, cover = () => 0 }) {
   let zoom = 1, panX = 0, panY = 0, fitted = true;
 
   function applyTransform() {
@@ -18,7 +20,8 @@ export function initViewport({ stage, view, layers, label, margins, active, onCh
     const r = stage.getBoundingClientRect(), pad = 8, m = margins();
     const fw = view.width + 2 * m.mx, fh = view.height + 2 * m.my;   // the image with its film frame
     zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min((r.width - pad * 2) / fw, (r.height - pad * 2) / fh)));
-    panX = panY = 0; fitted = true;
+    const c = cover(), above = r.height - c, h = fh * zoom;   // the canvas is centred in the stage: panY moves it from there
+    panX = 0; panY = h <= above - pad * 2 ? -c / 2 : pad + h / 2 - r.height / 2; fitted = true;
     applyTransform();
   }
 

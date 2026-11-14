@@ -600,7 +600,8 @@ compare.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ---------- zoom & pan (lib/viewport.js) ----------
 const viewport = initViewport({ stage, view, layers: [view, dustLayer, frameLayer, matLayer], label: $('zoomLabel'),
-  margins: () => frameM, active: () => !!photo, onChange: () => cropUI.place() });
+  margins: () => frameM, active: () => !!photo, onChange: () => cropUI.place(),
+  cover: () => parseFloat(getComputedStyle(document.body).getPropertyValue('--u2h')) || 0 });   // UI 2's panel (ui2.js)
 const fitToScreen = viewport.fit;
 $('fit').addEventListener('click', fitToScreen);
 
