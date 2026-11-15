@@ -8,9 +8,10 @@ export const frontierCmy = (u) => [0, -u.mshift * FRONTIER_KEY, -u.yshift * FRON
 
 // Hyper Tone (Scanner, Frontier): a recovery for the extremes (user), with the machine's separate Highlight and Shadow levels,
 // 5 steps each (SP-3000: Lower, Low, Normal, High, Higher; 0 here = off). Each level moves an area's light by level / 5 x
-// HYPER_MAX of its map EV beyond the mids' dead zone (lib/hypertone.js DEAD_EV), in the input pass before the film (v4.9; it was
-// a density lift in the scanner: milky, mottled shadows, hypertone.js). Fujifilm publishes no gains: HYPER_MAX (the top level) is
-// a choice; with the dead zone the mids are untouched (the first version flattened whole photos, user).
+// HYPER_MAX of its map EV beyond the mids' dead zone (lib/hypertone.js DEAD_EV_HI / DEAD_EV_LO), in the input pass before the
+// film (v4.9; it was a density lift in the scanner: milky, mottled shadows, hypertone.js). Fujifilm publishes no gains: HYPER_MAX
+// (the top level) is a choice; with the dead zone the mids near grey are untouched (the first version flattened whole photos,
+// user).
 export const HYPER_MAX = 0.8, HYPER_LEVELS = 5;
 export const hyperLevel = (v) => (v / HYPER_LEVELS) * HYPER_MAX;
 export const HYPER_NAMES = ['off', 'molto basso', 'basso', 'normale', 'alto', 'molto alto'];
