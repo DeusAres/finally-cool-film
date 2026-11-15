@@ -14,6 +14,14 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.56**: **Più dettaglio nelle luci (Frontier)**: il pelo bianco o le nuvole al sole perdevano texture non nella
+  pellicola (lineare fino a +5 EV) ma nella curva dello scanner, piatta negli ultimi stop: 2-5 L* per stop contro ~22 nei
+  medi. Tre cambi: (1) la cima della curva Frontier sale fino al bianco pieno sopra L* 93 (il patch più chiaro della carta
+  colori usata per tararla; le scansioni vere arrivano a L* 98-100, noi 96), sotto invariata; (2) **Tono luci Soft** ora è
+  la metà alta della curva più morbida invece di comprimere il negativo; (3) **Hyper Tone luci** agisce da +0,5 EV sopra il
+  grigio invece che da +1 (la soglia era una scelta a occhio): a parità di livello dettaglio nelle luci 1,2-1,4x, luci più
+  scure e un po' più d'alone sui contorni scuri. Pendenza a +2,5 / +3 EV con D+1 Hard1: 3,3 / 1,8 -> 5,1 / 3,6 L*/EV.
+  Baseline dei check aggiornate (luci Frontier, casi Hyper Tone, slider Gradazione / Tono luci / HT luci).
 - **v4.55**: **Spessore del carrier limato**: in Trasforma → Cornice → Limato un righello regola il nero da 0,1 % a 1 % del
   lato lungo (default 0,25 %, la scelta dell'8/11; doppio tocco: torna lì), ricordato tra le foto come il Bordo, uguale in
   anteprima ed export. Si allarga la banda, la limatura resta della stessa irregolarità. I pulsanti della Cornice ora hanno
