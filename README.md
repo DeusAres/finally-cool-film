@@ -14,6 +14,13 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.57**: **Bordi senza orlo chiaro**: su un contorno netto (pelo bianco su fondo scuro, cielo contro una collina)
+  la pellicola disegnava un orlo chiaro di ~7 L* all'export, con meno grana dentro, contro 0,3-1 L* delle scansioni vere
+  Gold 200. Era l'effetto bordo degli accoppiatori DIR con una diffusione di 20 µm ereditata da spektrafilm senza fonte:
+  misurato, l'orlo cresce col raggio; ora 7 µm (orlo 0,9 L*, grana normale vicino al bordo). Prezzo: un filo meno
+  micro-contrasto (texture fini più morbide, soprattutto negli ORF: -20 %; foto del telefono -1/-2 %), Texture / Nitidezza /
+  Hyper Sharpness un po' meno incisivi sul dettaglio fine. Grana (forza, colore, grumi) invariata. Baseline dei check
+  aggiornate.
 - **v4.56**: **Più dettaglio nelle luci (Frontier)**: il pelo bianco o le nuvole al sole perdevano texture non nella
   pellicola (lineare fino a +5 EV) ma nella curva dello scanner, piatta negli ultimi stop: 2-5 L* per stop contro ~22 nei
   medi. Tre cambi: (1) la cima della curva Frontier sale fino al bianco pieno sopra L* 93 (il patch più chiaro della carta
