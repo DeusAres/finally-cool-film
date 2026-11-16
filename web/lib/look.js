@@ -63,7 +63,17 @@ export const V4_FILM = { grain: 3.1, halation: 1 };
 // real Gold 200 (eval/gold200, eval/V4.md): the film's chroma on the same registered pixels, 0.84 / 0.88 -> 0.91 / 0.97 of the
 // film's; 1.2 overshoots the film's strongest colours. The old values had no Gold data behind them (eval/calib/CALIB.md).
 // First calibration step, to be refined as more references come in. v3 keeps the engine's defaults (its look was tuned on them).
-export const V4_DIR = { inhibition_samelayer: 1.0, inhibition_interlayer: 1.0 };
+// 4.57, the inhibitor's reach (diffusion_size_um, the gaussian core; the engine's 20 um core / 200 um tail at 6 % are spektrafilm's
+// defaults, no source): a 20 um core turns a crisp edge into a light rim on its bright side (adjacency effect), 1.7-3.8 L* on
+// screen and 7.0 L* at export on a step (sky blue / near-black, scratch edges/: grainfield.py, exact grain = render - Grana 0),
+// with up to half less grain inside it on near-whites (the rim pushes them into the white end); the 19 kg200 scans' edges
+// overshoot 0.3-0.7 L* (median; p75 ~1). The rim's height grows with the core relative to the edge's own blur, so a wider core
+// is worse (60 um: 12 L* on screen): core 20 / 10 / 7 / 5 um -> rim at export 7.0 / 2.3 / 0.9 / 0.5 L*. At 7 um the grain
+// inside the rim on near-whites 0.65 -> 1.03 of its tone's, the grain colour at 1-2 / 3-5 px from a sky edge 2.3 / 1.7 -> 2.0 /
+// 1.3 of far away (by tone); flat areas and soft photo edges (cat) do not move. The price is the acutance the core gave fine
+// texture (check.py tex, a 27 um scale): Olympus ORF -19 % (10 um: -14 %), phone DNGs -1..-2 %. 7 um: the widest core within
+// ~1 L* of rim (the real scans' p75), a choice; the 200 um tail (the area-scale inter-image effect) is kept.
+export const V4_DIR = { inhibition_samelayer: 1.0, inhibition_interlayer: 1.0, diffusion_size_um: 7 };
 // v4 Scanner 'Nessuno': the narrowband scan with the film-type setup (engine NarrowbandParams.setup: each channel on the stock's
 // grey axis, per level of its grey ramp, base and mask removed), inverted with one black / white for the three channels (invert.js,
 // shared). The per-channel inversion it replaces took each channel's range from the frame and stretched the one with the least:

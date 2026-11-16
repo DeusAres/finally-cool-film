@@ -792,6 +792,9 @@ pub struct DirCouplersParams {
     pub gamma_interlayer_g_to_rb: [f64; 2],
     #[serde(default = "default_gamma_b_rg_f64")]
     pub gamma_interlayer_b_to_rg: [f64; 2],
+    /// The inhibitor's diffusion: a gaussian core (`diffusion_size_um`) plus an exponential tail (`diffusion_tail_um`,
+    /// weight `diffusion_tail_weight`). The defaults (20 / 200 um / 0.06) are spektrafilm's, without a source; the v4 app
+    /// sets the core to 7 um (web/lib/look.js V4_DIR: the 20 um core drew a light rim along crisp edges).
     #[serde(default = "default_20_f64")]
     pub diffusion_size_um: f64,
     #[serde(default = "default_200_f64")]
