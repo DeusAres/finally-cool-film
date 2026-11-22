@@ -134,7 +134,13 @@ export function hyperToneMap(rgb, w, h, luma, gain = 1, noise = 0) {
 // the red light getting SHADOW_CYAN less of a shadow lift (in EV): per AREA (the map), smooth, so no pixel of grain decides
 // it (the per-pixel version came out in blotches). 0.18 = Gold 200's red toe shortfall, 1 - 0.283 / 0.346 (the red and green
 // toe slopes, engine pipeline.rs stock_toe, which measures it from the stock's curves; eval/V4.md).
-const HDR = 4, SHADOW_CYAN = 0.18;
+// Olive (2026-11-22, user: the Frontier's lifted shadows go olive green, cause unknown to them): the red shortfall alone gives
+// teal; olive is green with yellow, so the blue light gets SHADOW_YELLOW less of the lift too. Not in Gold 200's curves (the
+// profile's blue slope stays >= green's down to -5 EV, red falls to 0.76 of green), so probably the scanner's: a look choice,
+// by eye on the dome IDG_20261022_182651_466 at Ombre 5. Unverified against a real Frontier scan. With it SHADOW_CYAN 0.18
+// (measured) gave a pure green (lifted shadows R:G:B 47:58:31, night-vision), 0.06 a brown (58:55:31), 0 more so; 0.12 / 0.35
+// give olive (52:58:30; the alley P5282720 47:44:32). So SHADOW_CYAN is now a choice too, near its measured 0.18.
+const HDR = 4, SHADOW_CYAN = 0.12, SHADOW_YELLOW = 0.35;
 
 /** The input pass's storage array: `lut` (color.js DISPLAY_GAIN_LUT), then the header and the map `hyper` ({ map, w, h }). */
 export function hyperArray(lut, hyper, kHi, kLo) {
@@ -154,7 +160,8 @@ fn hyperGain(pos: vec2<f32>) -> vec3<f32> {
   let W = u32(mw); let o = ${at0}u + ${HDR}u;
   let m = mix(mix(${arr}[o + i0.y * W + i0.x], ${arr}[o + i0.y * W + i1.x], f.x), mix(${arr}[o + i1.y * W + i0.x], ${arr}[o + i1.y * W + i1.x], f.x), f.y);
   let ev = -m * select(${arr}[${at0}u + 3u], ${arr}[${at0}u + 2u], m > 0.0);
-  return exp2(vec3<f32>(ev * select(1.0, ${1 - SHADOW_CYAN}, ev > 0.0), ev, ev));
+  let lo = ev > 0.0;
+  return exp2(vec3<f32>(ev * select(1.0, ${1 - SHADOW_CYAN}, lo), ev, ev * select(1.0, ${1 - SHADOW_YELLOW}, lo)));
 }`;
 
 /** CPU twin of hyperWGSL: the gains [R, G, B] at output-frame px (x, y) of an fw×fh frame, into `out`. */
@@ -166,6 +173,6 @@ export function hyperGainCPU(arr, at0, x, y, fw, fh, out) {
   const b = arr[o + y1 * mw + x0] + (arr[o + y1 * mw + x1] - arr[o + y1 * mw + x0]) * fx;
   const m = a + (b - a) * fy;
   const ev = -m * (m > 0 ? arr[at0 + 2] : arr[at0 + 3]);
-  out[0] = 2 ** (ev > 0 ? ev * (1 - SHADOW_CYAN) : ev); out[1] = out[2] = 2 ** ev;
+  out[0] = 2 ** (ev > 0 ? ev * (1 - SHADOW_CYAN) : ev); out[1] = 2 ** ev; out[2] = 2 ** (ev > 0 ? ev * (1 - SHADOW_YELLOW) : ev);
   return out;
 }

@@ -26,7 +26,7 @@ import { tiltRuler } from './lib/ruler.js';
 import { hyperToneMap, hyperArray, hyperGainCPU } from './lib/hypertone.js';
 import { attachTips } from './lib/tips.js';
 import { initUI2 } from './lib/ui2.js';
-import { GRAIN_BLUR, GRAIN_UNIT, HS_MAX, HS_T0, HS_T1, HS_UM, HYPER_THUMB_PX, LAB_D_EV, NARROWBAND, SCATTER_SCALE, V4_AUTO, V4_DIR, V4_FILM, V4_FRONTIER, V4_GRAIN, V4_GRAIN_SCALE, V4_NEUTRAL_SIGMA, V4_NORITSU, V4_NORITSU_AUTO, V4_STOCK, V4_TOE_SLOPE, frontierCmy, hyperLevel, labKeys, labModel } from './lib/look.js';
+import { GRAIN_BLUR, GRAIN_UNIT, HS_MAX, HS_T0, HS_T1, HS_UM, HYPER_MAX_HI, HYPER_MAX_LO, HYPER_THUMB_PX, LAB_D_EV, NARROWBAND, SCATTER_SCALE, V4_AUTO, V4_DIR, V4_FILM, V4_FRONTIER, V4_GRAIN, V4_GRAIN_SCALE, V4_NEUTRAL_SIGMA, V4_NORITSU, V4_NORITSU_AUTO, V4_STOCK, V4_TOE_SLOPE, frontierCmy, hyperLevel, labKeys, labModel } from './lib/look.js';
 
 // Engine default; sets the physical pixel size of the engine's own effects (grain, halation, DIR diffusion) as the frame's
 // long side in mm. Not util.js FRAME_UM (36 mm, the 24×36 frame, for the JS effects): the engine's look was tuned at 35,
@@ -366,7 +366,7 @@ function syncHyperMap(u) {
  * re-renders without rebuilding the ~1 MB array). */
 function hyperPassArray(u) {
   syncHyperMap(u);
-  const kHi = hyperLevel(u.htHi), kLo = hyperLevel(u.htLo), c = photo.hyperArr;
+  const kHi = hyperLevel(u.htHi, HYPER_MAX_HI), kLo = hyperLevel(u.htLo, HYPER_MAX_LO), c = photo.hyperArr;
   if (c?.hyper !== photo.hyper || c.kHi !== kHi || c.kLo !== kLo) photo.hyperArr = { hyper: photo.hyper, kHi, kLo, arr: hyperArray(DISPLAY_GAIN_LUT, photo.hyper, kHi, kLo) };
   return photo.hyperArr.arr;
 }
