@@ -6,7 +6,7 @@
 // The input pass gives each pixel 2^(-level x this map) of light (hyperWGSL), so large bright areas reach the film darker and
 // large dark ones lighter while the detail inside them stays (it is not in the map).
 //
-// Edges: a self-guided filter (He et al. 2010) on log2 luminance. Inside a window whose variance is below EDGE_EV² the
+// Edges: a self-guided filter (He et al. 2010) on log2 luminance (EDGE_EV for the lights, EDGE_EV_LO for the shadows). Inside a window whose variance is below EDGE_EV² the
 // output is the window mean (texture and small detail are flattened out of the base); across a step much larger than that
 // it follows the step, so the base does not bleed over a skyline (no halo).
 // No DOM: shared by app.js and node eval scripts.
@@ -18,6 +18,12 @@ import { NOISE_FLOOR_SIGMAS } from './util.js';
 // so a step in the map is spread over frame / MAP_LONG pixels: at 96 that was a visible light rim on a 2000 px rock against
 // the sky; 512 keeps it to ~4 px; built once per photo, transform and level of the scan, app.js syncHyperMap).
 const RADIUS_FRAC = 1 / 10, EDGE_EV = 1, MAP_LONG = 512;
+// The shadows' map is smoother (2026-11-22, user: Ombre "non è uniforme"): with EDGE_EV 1 a shadow area kept its own texture
+// in the map (log2 of a dark luminance swings over more than 1 EV: shutters, roof tiles, a dome's carving at dusk, P5282720 /
+// IDG_20261022_182651_466), so each pixel got its own lift, an HDR-like mottle instead of an area lifted evenly. 2 EV: the lift
+// is even inside the area and still follows a strong silhouette (the dome against the sky); 3 bled past it (by eye on the node
+// prototype of this map, Ombre 5). A choice, not a measurement. The lights keep EDGE_EV (their numbers below were measured with it).
+const EDGE_EV_LO = 2;
 // Recovery, not flattening (user, v4, 3f88b0b: the first map, from the frame's median with no dead zone, flattened whole
 // photos): areas within the dead zone around mid grey are left alone (the mids keep their contrast); beyond it only the excess
 // acts (a sky 2.5 EV over mid grey moved as if it were 1.5 EV over). 1 EV each side was a choice, never measured.
@@ -34,6 +40,9 @@ const RADIUS_FRAC = 1 / 10, EDGE_EV = 1, MAP_LONG = 512;
 // (L* 66 at level 5); a larger EDGE_EV or a smaller radius widen the rim. The shadows keep 1 (their side was not asked; its
 // SHADOW_CYAN lift was measured with it).
 const DEAD_EV_HI = 0.5, DEAD_EV_LO = 1;
+// The shadows' dead zone ends in a soft knee KNEE_EV wide (quadratic, C1): with a hard corner, an area whose base hovers around
+// -1 EV broke into lifted and unlifted islands. 0.5 a choice (same prototype).
+const KNEE_EV = 0.5;
 const MID_GREY = 0.18;   // scene-linear mid grey (the engine's meter target)
 const Y_MIN = 1e-5;   // floor of the luminance before log2 (black pixels)
 
@@ -74,18 +83,9 @@ function shrink(src, w, h, tw, th) {
   return out;
 }
 
-/**
- * The Hyper Tone map of a scene-linear thumb (`rgb` w×h×3, upright as rendered) with luminance weights `luma`, exposed for the
- * film by `gain` (the exposure gain the render applies): { map: Float32Array (EV beyond the dead zone from mid grey, bright > 0), w, h }
- * at MAP_LONG on the long side. `noise`: the thumb's luminance noise floor (dng.js noiseFloor at its pitch; 0: unknown), the
- * log's offset (util.js NOISE_FLOOR_SIGMAS): in log2 of the bare luminance, a frame's darkest areas, all sensor noise, spread
- * over many stops, the filter kept that as edges and the map lifted it as speckle (night frame IDG_20261028_222823_718).
- */
-export function hyperToneMap(rgb, w, h, luma, gain = 1, noise = 0) {
-  const n = w * h, L = new Float32Array(n), off = NOISE_FLOOR_SIGMAS * noise;
-  for (let i = 0; i < n; i++) L[i] = Math.log2(Math.max(Y_MIN, off + luma[0] * rgb[3 * i] + luma[1] * rgb[3 * i + 1] + luma[2] * rgb[3 * i + 2]));
-  const r = Math.max(1, Math.round(RADIUS_FRAC * Math.max(w, h))), eps = EDGE_EV * EDGE_EV;
-  const LL = L.map((v) => v * v), mL = box(L, w, h, r), mLL = box(LL, w, h, r);
+/** Self-guided filter (He et al. 2010) of `L` (w×h), window radius `r`, edge threshold `edge` (EV): the area base. */
+function guided(L, w, h, r, edge) {
+  const n = w * h, eps = edge * edge, mL = box(L, w, h, r), mLL = box(L.map((v) => v * v), w, h, r);
   const a = new Float32Array(n), b = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const v = Math.max(0, mLL[i] - mL[i] * mL[i]);
@@ -93,10 +93,36 @@ export function hyperToneMap(rgb, w, h, luma, gain = 1, noise = 0) {
   }
   const ma = box(a, w, h, r), mb = box(b, w, h, r), base = new Float32Array(n);
   for (let i = 0; i < n; i++) base[i] = ma[i] * L[i] + mb[i];
+  return base;
+}
+
+/** The shadows' excess beyond the dead zone (`d` EV below mid grey, > 0), through the soft knee: 0 up to DEAD_EV_LO - KNEE_EV/2,
+ * then d - DEAD_EV_LO beyond DEAD_EV_LO + KNEE_EV/2. */
+function shadowExcess(d) {
+  const t = KNEE_EV / 2, x = d - DEAD_EV_LO;
+  return x <= -t ? 0 : x >= t ? x : (x + t) * (x + t) / (4 * t);
+}
+
+/**
+ * The Hyper Tone map of a scene-linear thumb (`rgb` w×h×3, upright as rendered) with luminance weights `luma`, exposed for the
+ * film by `gain` (the exposure gain the render applies): { map: Float32Array (EV beyond the dead zone from mid grey, bright > 0), w, h }
+ * at MAP_LONG on the long side. `noise`: the thumb's luminance noise floor (dng.js noiseFloor at its pitch; 0: unknown), the
+ * log's offset (util.js NOISE_FLOOR_SIGMAS): in log2 of the bare luminance, a frame's darkest areas, all sensor noise, spread
+ * over many stops, the filter kept that as edges and the map lifted it as speckle (night frame IDG_20261028_222823_718).
+ * Two bases: the lights' (EDGE_EV) and the smoother shadows' (EDGE_EV_LO); where the lights' says bright it wins (a sky next to
+ * a dark roof is never lifted by the shadows' wider base).
+ */
+export function hyperToneMap(rgb, w, h, luma, gain = 1, noise = 0) {
+  const n = w * h, L = new Float32Array(n), off = NOISE_FLOOR_SIGMAS * noise;
+  for (let i = 0; i < n; i++) L[i] = Math.log2(Math.max(Y_MIN, off + luma[0] * rgb[3 * i] + luma[1] * rgb[3 * i + 1] + luma[2] * rgb[3 * i + 2]));
+  const r = Math.max(1, Math.round(RADIUS_FRAC * Math.max(w, h))), ref = Math.log2(MID_GREY / gain);
+  const hi = guided(L, w, h, r, EDGE_EV), lo = guided(L, w, h, r, EDGE_EV_LO), full = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const up = hi[i] - ref - DEAD_EV_HI;
+    full[i] = up > 0 ? up : -shadowExcess(ref - lo[i]);
+  }
   const s = Math.min(1, MAP_LONG / Math.max(w, h)), mw = Math.max(1, Math.round(w * s)), mh = Math.max(1, Math.round(h * s));
-  const map = shrink(base, w, h, mw, mh), ref = Math.log2(MID_GREY / gain);
-  for (let i = 0; i < map.length; i++) { const m = map[i] - ref; map[i] = m - Math.max(-DEAD_EV_LO, Math.min(DEAD_EV_HI, m)); }
-  return { map, w: mw, h: mh };
+  return { map: shrink(full, w, h, mw, mh), w: mw, h: mh };
 }
 
 // In the input pass (v4.9): the map moves the LIGHT that reaches the film, scene x 2^(-k x map) before the exposure gain, k the
