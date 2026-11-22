@@ -137,10 +137,11 @@ export function hyperToneMap(rgb, w, h, luma, gain = 1, noise = 0) {
 // Olive (2026-11-22, user: the Frontier's lifted shadows go olive green, cause unknown to them): the red shortfall alone gives
 // teal; olive is green with yellow, so the blue light gets SHADOW_YELLOW less of the lift too. Not in Gold 200's curves (the
 // profile's blue slope stays >= green's down to -5 EV, red falls to 0.76 of green), so probably the scanner's: a look choice,
-// by eye on the dome IDG_20261022_182651_466 at Ombre 5. Unverified against a real Frontier scan. With it SHADOW_CYAN 0.18
-// (measured) gave a pure green (lifted shadows R:G:B 47:58:31, night-vision), 0.06 a brown (58:55:31), 0 more so; 0.12 / 0.35
-// give olive (52:58:30; the alley P5282720 47:44:32). So SHADOW_CYAN is now a choice too, near its measured 0.18.
-const HDR = 4, SHADOW_CYAN = 0.12, SHADOW_YELLOW = 0.35;
+// matched to a real Frontier scan of Gold the user gave as right (dog in a kitchen, 2026-11-22, dark wood cabinets): its
+// shadows R:G:B over G 0.72-0.81 : 1 : 0.22-0.56 (L 15-55 of 255). With the measured SHADOW_CYAN 0.18, SHADOW_YELLOW 0.35
+// gives 0.81 : 1 : 0.53 on the lifted dome (IDG_20261022_182651_466, Ombre 5); SHADOW_CYAN 0.12 drifted to 0.90 (too warm),
+// 0.06 to brown. The yellow part's cause is not known (scanner?): unverified beyond that one scan.
+const HDR = 4, SHADOW_CYAN = 0.18, SHADOW_YELLOW = 0.35;
 
 /** The input pass's storage array: `lut` (color.js DISPLAY_GAIN_LUT), then the header and the map `hyper` ({ map, w, h }). */
 export function hyperArray(lut, hyper, kHi, kLo) {
