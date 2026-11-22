@@ -18,7 +18,7 @@ const { CA_TAPS, ANISO_Y, VIG_T, VIG_KNEE, WARM_R, WARM_B } = LENS_CONST;
 // Colour-noise reduction (always on): ring radii (frame px), luminance range k (per stop²). Where Hyper Tone gives an area more
 // light the sensor's colour noise is lifted with it, into blotches wider than the rings (blue / magenta on dark clothes, user
 // v4.10 screenshot): per EV of lift the rings widen by CHROMA_LIFT_UM (inner; outer x2), on the film (µm), so preview and export
-// agree, and the luminance range k falls by (1 + lift)^2 (the lifted luminance noise no longer shuts the neighbours out).
+// agree, and the luminance range k falls by (1 + lift)^CHROMA_LIFT_POW (the lifted luminance noise no longer shuts the neighbours out).
 // 120 µm (~7 px per EV at the preview) is a choice, by eye on the pub frame IDG_20261026_204630_265 at Ombre 5.
 // The chroma is the ratio of the weighted sums (RGB over luminance), not the mean of per-tap ratios: near black a tap's
 // luminance is noise around 0 and its ratio explodes (simulated, 17 taps, SNR 1: median chroma error 45 vs 0.5; the night
@@ -53,7 +53,9 @@ const CHROMA_R1 = 1.5, CHROMA_R2 = 3.0, CHROMA_K = 8.0, CHROMA_LIFT_UM = 120, NR
 // scans (HQ Noritsu) carry more with their grain, 0.66-2.4. No bleeding at iso-luminant edges by eye (pink flowers on leaves).
 const CHROMA_JPEG = 3;
 const NR_KEEP = [3, 6];
-const CHROMA_LIFT_POW = 2;   // PLACEHOLDER
+// The range k's fall with the lift, (1 + lift)^CHROMA_LIFT_POW: 3 (was 2), a choice with the 2026-11-22 shadows rework, measured on
+// the cafe / pub blotch metric only together with it (not isolated: unverified on its own).
+const CHROMA_LIFT_POW = 3;
 // Texture = micro-contrast: scale (µm), range k (per stop²), midtone width (stops), strength at ±1.
 const MICRO_UM = 60, MICRO_K = 0.4, MICRO_MID_STOPS = 2.5, MICRO_MAX = 0.8;
 // Chiarezza (v3.26, bipolar, replaces the old Orton glow): local midtone contrast (Lightroom-like Clarity) at CLAR_UM, edge-aware

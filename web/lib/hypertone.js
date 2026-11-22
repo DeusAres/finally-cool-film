@@ -34,9 +34,26 @@ const RADIUS_FRAC = 1 / 10, EDGE_EV = 1, MAP_LONG = 512;
 // (L* 66 at level 5); a larger EDGE_EV or a smaller radius widen the rim. The shadows keep 1 (their side was not asked; its
 // SHADOW_CYAN lift was measured with it).
 const DEAD_EV_HI = 0.5, DEAD_EV_LO = 1;
-// Shadows (CALIBRATION PLACEHOLDER: comments and values to be finalised)
-const SIGMA_FRAC_LO = 1 / 20, SIGMA_EV_LO = 1.5, KNEE_EV_LO = 0.5, LIFT_SLOPE = 0.85, LIFT_MAX_EV = 2.5, SNR_MIN = 8;
-const OLIVE_RB = [0.43, 0.45], TOE_EV = [3, 4.5], TOE_DESAT = 0.7;
+// Shadows (2026-11-22, calibrated on Frontier at Ombre 3 / 5: pub IDG_20261026_204630_265, cafe IDG_20261027_115516_955,
+// synthetic flash frame synth3; image metrics in output L*a*b*, scratchpad htsh/metrics.py). The base is a bilateral grid
+// (areas, not windows: no halo, a dark area next to a bright one is lifted as much as one in the middle of the dark).
+// SIGMA_FRAC_LO / SIGMA_EV_LO: the grid's spatial (fraction of the long side) and range (EV) sigma; choice, kept from the
+// first version (CPU map sweep: 1/10 halves the synthetic frame's spread but opens holes on pub, 0.08 of the area; 2.5 EV
+// lets the bright side bleed in, synth3 spread 0.39 -> 0.82).
+// KNEE_EV_LO: half width (EV) of the quadratic entry below the dead zone; choice (1 EV: no change in the CPU map sweep).
+// LIFT_SLOPE / LIFT_MAX_EV: EV of light per EV of depth, and the ceiling. Slope 1 / ceiling 3 (batch 2) took cafe's colour
+// blotches 0.98 -> 1.78 and the dots 0.6 -> 11.6 at Ombre 5; 0.85 / 2.5 keep them near the old map's (cafe 1.22 vs 0.93).
+// SNR_MIN: the lift's ceiling keeps the area SNR_MIN x its noise floor above it (raw only: a JPEG has no noise floor);
+// 8 left cafe's face in shadow at L* 4 (old map 16), 4 a choice between that and no cap (L* 10, blotches 1.08).
+const SIGMA_FRAC_LO = 1 / 20, SIGMA_EV_LO = 1.5, KNEE_EV_LO = 0.5, LIFT_SLOPE = 0.85, LIFT_MAX_EV = 2.5, SNR_MIN = 4;
+// The toe's colour: where an area is TOE_EV (EV below mid grey, smoothstep) deep its lift brings Gold's olive shadow with it,
+// R and B down by OLIVE_RB EV per EV of lift (G up, below), the scene colour first desaturated by TOE_DESAT at the ceiling
+// (the sensor's colour noise lifted with the light). Target: the kg200 real scans' shadows, L* 12-22 at a* ~ -10, b* ~ +14,
+// C* 17-19; measured cafe Ombre 5 a* -10.5 b* +13.4 C* 17.7 (old map -3.4 / +5.8 / 7.5). TOE_DESAT 0.7: 0.4 took cafe's
+// dots 0.6 -> 11.6 (batch 2). OLIVE_RB [0.6, 0.7] from 2 EV overshot (cafe C* 23), [1.0, 1.2] more (C* 25).
+// WARM / WARM_GUARD: a warm pixel ((R - B) / (R + G + B), smoothstep; skin ~0.2) keeps 1 - WARM_GUARD of the cast, so a face
+// in shadow is not turned green (cafe face a* -7.6 vs +0.7 unguarded at [0.6, 0.7]; -2.4 guarded); choice, first values.
+const OLIVE_RB = [0.55, 0.6], TOE_EV = [2, 3.5], TOE_DESAT = 0.7, WARM = [0.08, 0.2], WARM_GUARD = 0.7;
 // G gets the luminance back (Rec.2020 weights): the cast moves the colour, not the lift
 const OLIVE = [OLIVE_RB[0], -(0.2627 * OLIVE_RB[0] + 0.0593 * OLIVE_RB[1]) / 0.678, OLIVE_RB[1]];
 const MID_GREY = 0.18;   // scene-linear mid grey (the engine's meter target)
@@ -133,9 +150,9 @@ function bilateral(L, w, h, ss, sr) {
 
 /**
  * The Hyper Tone map of a scene-linear thumb (`rgb` w×h×3, upright as rendered) with luminance weights `luma`, exposed for the
- * film by `gain` (the exposure gain the render applies): { map, w, h } at MAP_LONG on the long side, `map` two channels per
- * texel: the lights' EV beyond the dead zone from mid grey (> 0; x the level's strength in hyperArray) and the shadows' lift at
- * the top level (EV >= 0, shadowLift). `noise`: the thumb's luminance noise floor (dng.js noiseFloor at its pitch; 0: unknown),
+ * film by `gain` (the exposure gain the render applies): { map, w, h } at MAP_LONG on the long side, `map` MAP_CH channels per
+ * texel: the lights' EV beyond the dead zone from mid grey (> 0; x the level's strength in hyperArray), the shadows' lift at
+ * the top level (EV >= 0, shadowLift) and its share in the toe (0..1, TOE_EV). `noise`: the thumb's luminance noise floor (dng.js noiseFloor at its pitch; 0: unknown),
  * the log's offset (util.js NOISE_FLOOR_SIGMAS): in log2 of the bare luminance, a frame's darkest areas, all sensor noise, spread
  * over many stops, the filter kept that as edges and the map lifted it as speckle (night frame IDG_20261028_222823_718); and the
  * shadows' cap (SNR_MIN).
@@ -175,7 +192,6 @@ function shadowLift(depth, y, noise) {
 // version) a shadow left in the film's toe came out milky grey-green with the fog and grain of a thin negative, mottled (user,
 // cafe IDG_20261027_115516_955); given light, the film renders the shadow's own detail with its own toe and colours. The map
 // rides after the display-gain LUT in the pass's storage array: header [map w, map h], then the map (EV per texel).
-// SHADOW_GAIN: each channel's share of a shadow lift (PLACEHOLDER).
 const HDR = 2, MAP_CH = 3;
 
 /** The input pass's storage array: `lut` (color.js DISPLAY_GAIN_LUT), then the header and the map of `hyper` ({ map, w, h },
@@ -207,7 +223,9 @@ fn hyperEv(pos: vec2<f32>) -> f32 { return hyperMap(pos).x; }
 fn hyperTone(pos: vec2<f32>, c: vec3<f32>) -> vec3<f32> {   // the scene colour c with the map's light (and the toe's cast) at pos
   let m = hyperMap(pos);
   let d = ${wf(TOE_DESAT)} * clamp(m.y / ${wf(LIFT_MAX_EV)}, 0.0, 1.0);
-  return mix(c, vec3<f32>(dot(c, p.luma.xyz)), d) * exp2(vec3<f32>(m.x) - m.y * ${wv3(OLIVE)});
+  let warm = (c.r - c.b) / max(c.r + c.g + c.b, ${wf(Y_MIN)});
+  let ol = m.y * (1.0 - ${wf(WARM_GUARD)} * smoothstep(${wf(WARM[0])}, ${wf(WARM[1])}, warm));
+  return mix(c, vec3<f32>(dot(c, p.luma.xyz)), d) * exp2(vec3<f32>(m.x) - ol * ${wv3(OLIVE)});
 }`;
 
 /** CPU twin of hyperWGSL's hyperTone: the scene colour `c` (RGB, luminance weights `luma`) at output-frame px (x, y) of an
@@ -219,6 +237,7 @@ export function hyperToneCPU(arr, at0, x, y, fw, fh, c, luma) {
   const at = (k, ch) => arr[o + 2 * k + ch], lerp = (a, b, t) => a + (b - a) * t;
   const [ev, toe] = [0, 1].map((ch) => lerp(lerp(at(y0 * mw + x0, ch), at(y0 * mw + x1, ch), fx), lerp(at(y1 * mw + x0, ch), at(y1 * mw + x1, ch), fx), fy));
   const d = TOE_DESAT * Math.min(1, Math.max(0, toe / LIFT_MAX_EV)), Y = luma[0] * c[0] + luma[1] * c[1] + luma[2] * c[2];
-  for (let k = 0; k < 3; k++) c[k] = (c[k] + (Y - c[k]) * d) * 2 ** (ev - toe * OLIVE[k]);
+  const cast = toe * (1 - WARM_GUARD * smoothstep(WARM[0], WARM[1], (c[0] - c[2]) / Math.max(c[0] + c[1] + c[2], Y_MIN)));
+  for (let k = 0; k < 3; k++) c[k] = (c[k] + (Y - c[k]) * d) * 2 ** (ev - cast * OLIVE[k]);
   return c;
 }
