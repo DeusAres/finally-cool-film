@@ -11,7 +11,7 @@
 // it follows the step, so the base does not bleed over a skyline (no halo).
 // No DOM: shared by app.js and node eval scripts.
 
-import { NOISE_FLOOR_SIGMAS } from './util.js';
+import { NOISE_FLOOR_SIGMAS, wf, wv3 } from './util.js';
 
 // Choices, not measurements (first version, to tune on photos): window radius as a fraction of the thumb's long side
 // (the size of what counts as an "area"), the edge threshold in EV, the map's long side (the pass samples it bilinearly,
@@ -34,6 +34,11 @@ const RADIUS_FRAC = 1 / 10, EDGE_EV = 1, MAP_LONG = 512;
 // (L* 66 at level 5); a larger EDGE_EV or a smaller radius widen the rim. The shadows keep 1 (their side was not asked; its
 // SHADOW_CYAN lift was measured with it).
 const DEAD_EV_HI = 0.5, DEAD_EV_LO = 1;
+// Shadows (CALIBRATION PLACEHOLDER: comments and values to be finalised)
+const SIGMA_FRAC_LO = 1 / 20, SIGMA_EV_LO = 1.5, KNEE_EV_LO = 0.5, LIFT_SLOPE = 0.85, LIFT_MAX_EV = 2.5, SNR_MIN = 8;
+const OLIVE_RB = [0.43, 0.45], TOE_EV = [3, 4.5], TOE_DESAT = 0.7;
+// G gets the luminance back (Rec.2020 weights): the cast moves the colour, not the lift
+const OLIVE = [OLIVE_RB[0], -(0.2627 * OLIVE_RB[0] + 0.0593 * OLIVE_RB[1]) / 0.678, OLIVE_RB[1]];
 const MID_GREY = 0.18;   // scene-linear mid grey (the engine's meter target)
 const Y_MIN = 1e-5;   // floor of the luminance before log2 (black pixels)
 
@@ -58,7 +63,6 @@ function box(src, w, h, r) {
   }
   return out;
 }
-
 /** Area-average downscale of a w×h Float32Array to tw×th. */
 function shrink(src, w, h, tw, th) {
   const out = new Float32Array(tw * th);
@@ -73,19 +77,9 @@ function shrink(src, w, h, tw, th) {
   }
   return out;
 }
-
-/**
- * The Hyper Tone map of a scene-linear thumb (`rgb` w×h×3, upright as rendered) with luminance weights `luma`, exposed for the
- * film by `gain` (the exposure gain the render applies): { map: Float32Array (EV beyond the dead zone from mid grey, bright > 0), w, h }
- * at MAP_LONG on the long side. `noise`: the thumb's luminance noise floor (dng.js noiseFloor at its pitch; 0: unknown), the
- * log's offset (util.js NOISE_FLOOR_SIGMAS): in log2 of the bare luminance, a frame's darkest areas, all sensor noise, spread
- * over many stops, the filter kept that as edges and the map lifted it as speckle (night frame IDG_20261028_222823_718).
- */
-export function hyperToneMap(rgb, w, h, luma, gain = 1, noise = 0) {
-  const n = w * h, L = new Float32Array(n), off = NOISE_FLOOR_SIGMAS * noise;
-  for (let i = 0; i < n; i++) L[i] = Math.log2(Math.max(Y_MIN, off + luma[0] * rgb[3 * i] + luma[1] * rgb[3 * i + 1] + luma[2] * rgb[3 * i + 2]));
-  const r = Math.max(1, Math.round(RADIUS_FRAC * Math.max(w, h))), eps = EDGE_EV * EDGE_EV;
-  const LL = L.map((v) => v * v), mL = box(L, w, h, r), mLL = box(LL, w, h, r);
+/** Self-guided filter (He et al. 2010) of `L` (w×h), window radius `r` px, edge threshold `edge` EV: the base. */
+function guided(L, w, h, r, edge) {
+  const n = w * h, eps = edge * edge, LL = L.map((v) => v * v), mL = box(L, w, h, r), mLL = box(LL, w, h, r);
   const a = new Float32Array(n), b = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const v = Math.max(0, mLL[i] - mL[i] * mL[i]);
@@ -93,53 +87,138 @@ export function hyperToneMap(rgb, w, h, luma, gain = 1, noise = 0) {
   }
   const ma = box(a, w, h, r), mb = box(b, w, h, r), base = new Float32Array(n);
   for (let i = 0; i < n; i++) base[i] = ma[i] * L[i] + mb[i];
-  const s = Math.min(1, MAP_LONG / Math.max(w, h)), mw = Math.max(1, Math.round(w * s)), mh = Math.max(1, Math.round(h * s));
-  const map = shrink(base, w, h, mw, mh), ref = Math.log2(MID_GREY / gain);
-  for (let i = 0; i < map.length; i++) { const m = map[i] - ref; map[i] = m - Math.max(-DEAD_EV_LO, Math.min(DEAD_EV_HI, m)); }
-  return { map, w: mw, h: mh };
+  return base;
 }
 
-// In the input pass (v4.9): the map moves the LIGHT that reaches the film, scene x 2^(-k x map) before the exposure gain, k the
-// level's strength on the lights (map > 0) or the shadows (map < 0). As a density lift in the scanner (the first version) a
-// shadow left in the film's toe came out milky grey-green with the fog and grain of a thin negative, mottled (user, cafe
-// IDG_20261027_115516_955); given light, the film renders the shadow's own detail with its own toe and colours. The map rides
-// after the display-gain LUT in the pass's storage array: header [map w, map h, k lights, k shadows], then the map.
-// The machine's cool lifted shadows (wanted, user: its red layer records less in the toe, so a lift shows cyan) are kept as
-// the red light getting SHADOW_CYAN less of a shadow lift (in EV): per AREA (the map), smooth, so no pixel of grain decides
-// it (the per-pixel version came out in blotches). 0.18 = Gold 200's red toe shortfall, 1 - 0.283 / 0.346 (the red and green
-// toe slopes, engine pipeline.rs stock_toe, which measures it from the stock's curves; eval/V4.md).
-const HDR = 4, SHADOW_CYAN = 0.18;
-
-/** The input pass's storage array: `lut` (color.js DISPLAY_GAIN_LUT), then the header and the map `hyper` ({ map, w, h }). */
-export function hyperArray(lut, hyper, kHi, kLo) {
-  const out = new Float32Array(lut.length + HDR + hyper.map.length);
-  out.set(lut);
-  out.set([hyper.w, hyper.h, kHi, kLo], lut.length);
-  out.set(hyper.map, lut.length + HDR);
+/** Edge-preserving smoothing of `L` (w×h, log2 luminance): a bilateral grid (Chen, Paris & Durand 2007) with spatial sigma
+ * `ss` px and range sigma `sr` (EV): splatted into cells ss px and sr EV wide, blurred [1 4 6 4 1] / 16 along each axis (about
+ * one cell's sigma) and read back trilinearly. Areas within ~sr of each other average together whatever their texture; across a
+ * step of a few sr the two sides barely touch (no halo, unlike the guided filter, whose windows straddle the step). */
+function bilateral(L, w, h, ss, sr) {
+  let lo = Infinity, hi = -Infinity;
+  for (const v of L) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  const gx = Math.ceil(w / ss) + 3, gy = Math.ceil(h / ss) + 3, gz = Math.ceil((hi - lo) / sr) + 3, n = gx * gy * gz;
+  let sum = new Float32Array(n), cnt = new Float32Array(n);
+  const cell = (x, y, v) => ((Math.round(v) * gy + Math.round(y)) * gx + Math.round(x));
+  for (let y = 0, i = 0; y < h; y++) for (let x = 0; x < w; x++, i++) {
+    const c = cell(x / ss + 1, y / ss + 1, (L[i] - lo) / sr + 1);
+    sum[c] += L[i]; cnt[c] += 1;
+  }
+  const blur = (a, stride, len) => {   // [1 4 6 4 1] / 16 along one axis (cells `stride` apart, `len` of them), zero outside
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const k = Math.floor(i / stride) % len;
+      let s = 6 * a[i];
+      if (k > 0) s += 4 * a[i - stride]; if (k > 1) s += a[i - 2 * stride];
+      if (k < len - 1) s += 4 * a[i + stride]; if (k < len - 2) s += a[i + 2 * stride];
+      out[i] = s / 16;
+    }
+    return out;
+  };
+  for (const [st, len] of [[1, gx], [gx, gy], [gx * gy, gz]]) { sum = blur(sum, st, len); cnt = blur(cnt, st, len); }
+  const out = new Float32Array(w * h);
+  for (let y = 0, i = 0; y < h; y++) for (let x = 0; x < w; x++, i++) {
+    const fx = x / ss + 1, fy = y / ss + 1, fz = (L[i] - lo) / sr + 1;
+    const x0 = Math.floor(fx), y0 = Math.floor(fy), z0 = Math.floor(fz), tx = fx - x0, ty = fy - y0, tz = fz - z0;
+    let s = 0, c = 0;
+    for (let k = 0; k < 8; k++) {
+      const dx = k & 1, dy = (k >> 1) & 1, dz = k >> 2, wt = (dx ? tx : 1 - tx) * (dy ? ty : 1 - ty) * (dz ? tz : 1 - tz);
+      const j = ((z0 + dz) * gy + y0 + dy) * gx + x0 + dx;
+      s += wt * sum[j]; c += wt * cnt[j];
+    }
+    out[i] = c > 1e-6 ? s / c : L[i];
+  }
   return out;
 }
 
-/** WGSL: the gain at output-frame position `pos` (frame `p.frame`), from the array `arr` with the header at `at0`. */
+/**
+ * The Hyper Tone map of a scene-linear thumb (`rgb` w×h×3, upright as rendered) with luminance weights `luma`, exposed for the
+ * film by `gain` (the exposure gain the render applies): { map, w, h } at MAP_LONG on the long side, `map` two channels per
+ * texel: the lights' EV beyond the dead zone from mid grey (> 0; x the level's strength in hyperArray) and the shadows' lift at
+ * the top level (EV >= 0, shadowLift). `noise`: the thumb's luminance noise floor (dng.js noiseFloor at its pitch; 0: unknown),
+ * the log's offset (util.js NOISE_FLOOR_SIGMAS): in log2 of the bare luminance, a frame's darkest areas, all sensor noise, spread
+ * over many stops, the filter kept that as edges and the map lifted it as speckle (night frame IDG_20261028_222823_718); and the
+ * shadows' cap (SNR_MIN).
+ */
+export function hyperToneMap(rgb, w, h, luma, gain = 1, noise = 0) {
+  const n = w * h, L = new Float32Array(n), off = NOISE_FLOOR_SIGMAS * noise, long = Math.max(w, h);
+  for (let i = 0; i < n; i++) L[i] = Math.log2(Math.max(Y_MIN, off + luma[0] * rgb[3 * i] + luma[1] * rgb[3 * i + 1] + luma[2] * rgb[3 * i + 2]));
+  const s = Math.min(1, MAP_LONG / long), mw = Math.max(1, Math.round(w * s)), mh = Math.max(1, Math.round(h * s));
+  const hi = shrink(guided(L, w, h, Math.max(1, Math.round(RADIUS_FRAC * long)), EDGE_EV), w, h, mw, mh);
+  const lo = shrink(bilateral(L, w, h, Math.max(1, SIGMA_FRAC_LO * long), SIGMA_EV_LO), w, h, mw, mh);
+  const map = new Float32Array(MAP_CH * mw * mh), ref = Math.log2(MID_GREY / gain);
+  for (let i = 0, j = 0; i < mw * mh; i++, j += MAP_CH) {
+    map[j] = Math.max(0, hi[i] - ref - DEAD_EV_HI);
+    map[j + 1] = shadowLift(ref - lo[i], 2 ** lo[i] - off, noise);
+    map[j + 2] = smoothstep(TOE_EV[0], TOE_EV[1], ref - lo[i]);
+  }
+  return { map, w: mw, h: mh };
+}
+
+/** The shadows' lift at the top level (EV) of an area `depth` EV below mid grey with mean luminance `y` (thumb units) and noise
+ * floor `noise` (0: unknown, no cap): a graded entry around DEAD_EV_LO (a quadratic knee KNEE_EV_LO wide each side: no area
+ * just below the dead zone is cut off while its neighbour is lifted), rising with LIFT_SLOPE (< 1: a deeper area stays darker,
+ * a falloff keeps its order) towards the ceiling LIFT_MAX_EV (every deep area gets about the same lift: its own gradients and
+ * contrast stay), the ceiling lowered to the area's signal: log2(y / (SNR_MIN x noise)), so no area is lifted into its own
+ * sensor noise. tanh for both: smooth, never steeper than the line it bends. */
+const smoothstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+function shadowLift(depth, y, noise) {
+  const e = depth - DEAD_EV_LO, x = e <= -KNEE_EV_LO ? 0 : e >= KNEE_EV_LO ? e : (e + KNEE_EV_LO) ** 2 / (4 * KNEE_EV_LO);
+  const up = LIFT_MAX_EV * Math.tanh(LIFT_SLOPE * x / LIFT_MAX_EV);
+  if (!(noise > 0)) return up;
+  const cap = Math.log2(Math.max(y, 0) / (SNR_MIN * noise));
+  return cap > 0 ? cap * Math.tanh(up / cap) : 0;
+}
+
+// In the input pass (v4.9): the map moves the LIGHT that reaches the film, scene x 2^ev before the exposure gain, ev the
+// lights' map x minus their level's strength plus the shadows' lift x their level. As a density lift in the scanner (the first
+// version) a shadow left in the film's toe came out milky grey-green with the fog and grain of a thin negative, mottled (user,
+// cafe IDG_20261027_115516_955); given light, the film renders the shadow's own detail with its own toe and colours. The map
+// rides after the display-gain LUT in the pass's storage array: header [map w, map h], then the map (EV per texel).
+// SHADOW_GAIN: each channel's share of a shadow lift (PLACEHOLDER).
+const HDR = 2, MAP_CH = 3;
+
+/** The input pass's storage array: `lut` (color.js DISPLAY_GAIN_LUT), then the header and the map of `hyper` ({ map, w, h },
+ * hyperToneMap) at the lights' strength `kHi` (look.js hyperLevel) and the shadows' level `fLo` (0..1 of the top level). */
+export function hyperArray(lut, hyper, kHi, fLo) {
+  const n = hyper.w * hyper.h, out = new Float32Array(lut.length + HDR + 2 * n), o = lut.length + HDR, m = hyper.map;
+  out.set(lut);
+  out.set([hyper.w, hyper.h], lut.length);
+  for (let i = 0, j = 0; i < n; i++, j += MAP_CH) {
+    const up = fLo * m[j + 1];
+    out[o + 2 * i] = up - kHi * m[j]; out[o + 2 * i + 1] = up * m[j + 2];
+  }
+  return out;
+}
+
+/** WGSL: the gain at output-frame position `pos` (frame `p.frame`), from the array `arr` with the header at `at0`, and the
+ * EV it adds (hyperLift: > 0 in the shadows). */
 export const hyperWGSL = (arr, at0) => /* wgsl */`
-fn hyperGain(pos: vec2<f32>) -> vec3<f32> {
+fn hyperMap(pos: vec2<f32>) -> vec2<f32> {   // [EV added, its part in the toe] at pos, bilinear
   let mw = ${arr}[${at0}u]; let mh = ${arr}[${at0}u + 1u];
   let q = clamp((pos + 0.5) / p.frame * vec2<f32>(mw, mh) - 0.5, vec2<f32>(0.0), vec2<f32>(mw - 1.0, mh - 1.0));
   let i0 = vec2<u32>(floor(q)); let i1 = min(i0 + 1u, vec2<u32>(u32(mw) - 1u, u32(mh) - 1u)); let f = q - floor(q);
   let W = u32(mw); let o = ${at0}u + ${HDR}u;
-  let m = mix(mix(${arr}[o + i0.y * W + i0.x], ${arr}[o + i0.y * W + i1.x], f.x), mix(${arr}[o + i1.y * W + i0.x], ${arr}[o + i1.y * W + i1.x], f.x), f.y);
-  let ev = -m * select(${arr}[${at0}u + 3u], ${arr}[${at0}u + 2u], m > 0.0);
-  return exp2(vec3<f32>(ev * select(1.0, ${1 - SHADOW_CYAN}, ev > 0.0), ev, ev));
+  let t00 = o + 2u * (i0.y * W + i0.x); let t01 = o + 2u * (i0.y * W + i1.x); let t10 = o + 2u * (i1.y * W + i0.x); let t11 = o + 2u * (i1.y * W + i1.x);
+  return mix(mix(vec2<f32>(${arr}[t00], ${arr}[t00 + 1u]), vec2<f32>(${arr}[t01], ${arr}[t01 + 1u]), f.x),
+             mix(vec2<f32>(${arr}[t10], ${arr}[t10 + 1u]), vec2<f32>(${arr}[t11], ${arr}[t11 + 1u]), f.x), f.y);
+}
+fn hyperEv(pos: vec2<f32>) -> f32 { return hyperMap(pos).x; }
+fn hyperTone(pos: vec2<f32>, c: vec3<f32>) -> vec3<f32> {   // the scene colour c with the map's light (and the toe's cast) at pos
+  let m = hyperMap(pos);
+  let d = ${wf(TOE_DESAT)} * clamp(m.y / ${wf(LIFT_MAX_EV)}, 0.0, 1.0);
+  return mix(c, vec3<f32>(dot(c, p.luma.xyz)), d) * exp2(vec3<f32>(m.x) - m.y * ${wv3(OLIVE)});
 }`;
 
-/** CPU twin of hyperWGSL: the gains [R, G, B] at output-frame px (x, y) of an fw×fh frame, into `out`. */
-export function hyperGainCPU(arr, at0, x, y, fw, fh, out) {
+/** CPU twin of hyperWGSL's hyperTone: the scene colour `c` (RGB, luminance weights `luma`) at output-frame px (x, y) of an
+ * fw×fh frame, changed in place. */
+export function hyperToneCPU(arr, at0, x, y, fw, fh, c, luma) {
   const mw = arr[at0], mh = arr[at0 + 1], o = at0 + HDR;
   const qx = Math.min(mw - 1, Math.max(0, (x + 0.5) / fw * mw - 0.5)), qy = Math.min(mh - 1, Math.max(0, (y + 0.5) / fh * mh - 0.5));
   const x0 = Math.floor(qx), y0 = Math.floor(qy), x1 = Math.min(x0 + 1, mw - 1), y1 = Math.min(y0 + 1, mh - 1), fx = qx - x0, fy = qy - y0;
-  const a = arr[o + y0 * mw + x0] + (arr[o + y0 * mw + x1] - arr[o + y0 * mw + x0]) * fx;
-  const b = arr[o + y1 * mw + x0] + (arr[o + y1 * mw + x1] - arr[o + y1 * mw + x0]) * fx;
-  const m = a + (b - a) * fy;
-  const ev = -m * (m > 0 ? arr[at0 + 2] : arr[at0 + 3]);
-  out[0] = 2 ** (ev > 0 ? ev * (1 - SHADOW_CYAN) : ev); out[1] = out[2] = 2 ** ev;
-  return out;
+  const at = (k, ch) => arr[o + 2 * k + ch], lerp = (a, b, t) => a + (b - a) * t;
+  const [ev, toe] = [0, 1].map((ch) => lerp(lerp(at(y0 * mw + x0, ch), at(y0 * mw + x1, ch), fx), lerp(at(y1 * mw + x0, ch), at(y1 * mw + x1, ch), fx), fy));
+  const d = TOE_DESAT * Math.min(1, Math.max(0, toe / LIFT_MAX_EV)), Y = luma[0] * c[0] + luma[1] * c[1] + luma[2] * c[2];
+  for (let k = 0; k < 3; k++) c[k] = (c[k] + (Y - c[k]) * d) * 2 ** (ev - toe * OLIVE[k]);
+  return c;
 }

@@ -53,6 +53,7 @@ const CHROMA_R1 = 1.5, CHROMA_R2 = 3.0, CHROMA_K = 8.0, CHROMA_LIFT_UM = 120, NR
 // scans (HQ Noritsu) carry more with their grain, 0.66-2.4. No bleeding at iso-luminant edges by eye (pink flowers on leaves).
 const CHROMA_JPEG = 3;
 const NR_KEEP = [3, 6];
+const CHROMA_LIFT_POW = 2;   // PLACEHOLDER
 // Texture = micro-contrast: scale (µm), range k (per stop²), midtone width (stops), strength at ±1.
 const MICRO_UM = 60, MICRO_K = 0.4, MICRO_MID_STOPS = 2.5, MICRO_MAX = 0.8;
 // Chiarezza (v3.26, bipolar, replaces the old Orton glow): local midtone contrast (Lightroom-like Clarity) at CLAR_UM, edge-aware
@@ -254,7 +255,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let nf = max(${wf(NOISE_FLOOR_SIGMAS)} * p.nr.x, ${wf(NR_Y_MIN)});
     let y0 = dot(c, p.luma.xyz); let lift = chromaLift(pos);
     var sc = c; var sy = y0; var wt = 1.0; var w2 = 1.0; var lr = y0;
-    let reach = lift * ${wf(CHROMA_LIFT_UM)} * p.fx.w; let ck = ${wf(CHROMA_K)} / ((1.0 + lift) * (1.0 + lift));
+    let reach = lift * ${wf(CHROMA_LIFT_UM)} * p.fx.w; let ck = ${wf(CHROMA_K)} / pow(1.0 + lift, ${wf(CHROMA_LIFT_POW)});
     let rs = max(1.0, p.fx.w / ${wf(PREVIEW_KPX)}) * select(1.0, ${wf(CHROMA_JPEG)}, p.nr.x == 0.0);
     var gq: array<vec3<f32>, ${NR_GRID * NR_GRID}>;
     if (lift > 0.0) {
@@ -391,8 +392,8 @@ export const INPUT_WGSL_V3 = patch(patch(INPUT_WGSL, 'fn at(pos', `${dodgeWGSL('
   '\n  c *= p.expo;\n', '\n  c = dodge(c, pos);\n  c *= p.expo;\n');
 // v4 Hyper Tone (Frontier): the same pass with its map's gain on the scene light (hypertone.js hyperWGSL), riding after the LUT.
 export const INPUT_WGSL_HT = patch(patch(INPUT_WGSL, 'fn chromaLift(pos: vec2<f32>) -> f32 { return 0.0; }',
-  `${hyperWGSL('inv', DISPLAY_GAIN_LUT.length)}\nfn chromaLift(pos: vec2<f32>) -> f32 { return max(0.0, log2(hyperGain(pos).g)); }`),
-  '\n  c *= p.expo;\n', '\n  c *= hyperGain(pos);\n  c *= p.expo;\n');
+  `${hyperWGSL('inv', DISPLAY_GAIN_LUT.length)}\nfn chromaLift(pos: vec2<f32>) -> f32 { return max(0.0, hyperEv(pos)); }`),
+  '\n  c *= p.expo;\n', '\n  c = hyperTone(pos, c);\n  c *= p.expo;\n');
 
 const IDENTITY = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
 const UNIFORM_FLOATS = 56;
