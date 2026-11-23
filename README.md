@@ -14,6 +14,12 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.58**: **Hyper Tone ombre uniforme**: la mappa delle ombre si portava dietro la texture dell'area (serrande, tegole,
+  una cupola al tramonto: nel buio il log della luminanza oscilla più di 1 EV), così ogni pixel riceveva il suo lift e
+  l'ombra veniva a chiazze, effetto HDR. Ora la mappa delle ombre si legge da una luminanza prima ammorbidita (1 % del
+  fotogramma): lift uniforme dentro l'area, netto sulla sagoma; il passaggio dalla zona morta è graduale (niente isole).
+  Sul vicolo il contrasto locale nelle ombre a Ombre 5 resta (0,97 EV contro 0,80 prima, 0,89 a Ombre 0). Luci, colore
+  e forza invariati. Baseline dei check aggiornate.
 - **v4.57**: **Bordi senza orlo chiaro**: su un contorno netto (pelo bianco su fondo scuro, cielo contro una collina)
   la pellicola disegnava un orlo chiaro di ~7 L* all'export, con meno grana dentro, contro 0,3-1 L* delle scansioni vere
   Gold 200. Era l'effetto bordo degli accoppiatori DIR con una diffusione di 20 µm ereditata da spektrafilm senza fonte:
