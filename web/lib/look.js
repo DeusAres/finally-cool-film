@@ -11,11 +11,9 @@ export const frontierCmy = (u) => [0, -u.mshift * FRONTIER_KEY, -u.yshift * FRON
 // HYPER_MAX of its map EV beyond the mids' dead zone (lib/hypertone.js DEAD_EV_HI / DEAD_EV_LO), in the input pass before the
 // film (v4.9; it was a density lift in the scanner: milky, mottled shadows, hypertone.js). Fujifilm publishes no gains: HYPER_MAX
 // (the top level) is a choice; with the dead zone the mids near grey are untouched (the first version flattened whole photos,
-// user). The shadows' top: tried 1.2 (user "alza", 2026-11-22), then back to 0.8 against the user's Lightroom grade of the dome
-// (IDG_20261022_182651_466: its shadows stay at L 22-39 of 255, 1.2 took them to 60-80 and showed the grain). WIP.
-export const HYPER_MAX_HI = 0.8, HYPER_MAX_LO = 0.8, HYPER_LEVELS = 5;
-/** The level's strength: slider `v` (0..HYPER_LEVELS) of the side's top `max`. */
-export const hyperLevel = (v, max) => (v / HYPER_LEVELS) * max;
+// user).
+export const HYPER_MAX = 0.8, HYPER_LEVELS = 5;
+export const hyperLevel = (v) => (v / HYPER_LEVELS) * HYPER_MAX;
 export const HYPER_NAMES = ['off', 'molto basso', 'basso', 'normale', 'alto', 'molto alto'];
 export const HYPER_THUMB_PX = 512;   // the map's source thumb: its resolution is the map's (lib/hypertone.js MAP_LONG)
 // The lab operator's keys (Scanner tab, Frontier and Noritsu; SP-3000 manual, "Condition Setup and Maintenance" PP3-B1271E2:
