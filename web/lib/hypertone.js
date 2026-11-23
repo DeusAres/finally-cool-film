@@ -142,9 +142,11 @@ export function hyperToneMap(rgb, w, h, luma, gain = 1, noise = 0) {
 // gives 0.81 : 1 : 0.53 on the lifted dome (IDG_20261022_182651_466, Ombre 5); SHADOW_CYAN 0.12 drifted to 0.90 (too warm),
 // 0.06 to brown. The yellow part's cause is not known (scanner?): unverified beyond that one scan.
 // TINT_CAP_EV (WIP, awaiting user review): the shortfalls act on at most 1 EV of the lift; uncapped, a 3 EV lift painted the
-// area one flat green (the dome's blue tarp went green). Capped, the lifted shadows come out near neutral-warm (R/G 1.03):
-// the olive of the user's scan sits in the deep blacks, not in lifted areas (next step to decide).
-const HDR = 4, SHADOW_CYAN = 0.18, SHADOW_YELLOW = 0.35, TINT_CAP_EV = 1;
+// area one flat green (the dome's blue tarp went green). The film alone, given more light, warms a lifted shadow (its red slope
+// above green's at -2..-3 EV), so the shortfalls are larger than the measured 0.18: 0.5 / 0.45 matched to the user's Lightroom
+// grade of the dome (shadows R:G:B / G 0.77 : 1 : 0.72 at L 15-30) and their Frontier scan (0.72-0.81 : 1 : 0.22-0.56):
+// 0.77 : 1 : 0.67 on the dome at Ombre 5. Choices by eye and these two references, not measured on the machine.
+const HDR = 4, SHADOW_CYAN = 0.5, SHADOW_YELLOW = 0.45, TINT_CAP_EV = 1;
 
 /** The input pass's storage array: `lut` (color.js DISPLAY_GAIN_LUT), then the header and the map `hyper` ({ map, w, h }). */
 export function hyperArray(lut, hyper, kHi, kLo) {
