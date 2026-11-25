@@ -14,6 +14,11 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.59**: **Hyper Tone ombre senza alone sui JPEG**: attorno alle zone nere (fessure tra travi illuminate, il bordo nero
+  di una scansione) la 4.58 schiariva anche i vicini, un orlo chiaro / lattiginoso. Due cause: nei JPEG il nero tagliato a
+  zero veniva letto ~16 EV sotto il grigio e schiarito di 5-10 EV (già nella 4.57), e la mappa ammorbidita della 4.58 lo
+  spalmava intorno. Ora il nero di un JPEG conta al massimo 6 EV sotto il grigio (più giù il Gold stampa nero comunque) e un
+  pixel non prende più lift di quanto gli spetti per la sua luminosità (+0,5 EV). Lift uniforme nelle aree invariato.
 - **v4.58**: **Hyper Tone ombre uniforme**: la mappa delle ombre si portava dietro la texture dell'area (serrande, tegole,
   una cupola al tramonto: nel buio il log della luminanza oscilla più di 1 EV), così ogni pixel riceveva il suo lift e
   l'ombra veniva a chiazze, effetto HDR. Ora la mappa delle ombre si legge da una luminanza prima ammorbidita (1 % del
