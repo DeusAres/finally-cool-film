@@ -46,8 +46,20 @@ const DEAD_EV_HI = 0.5, DEAD_EV_LO = 1;
 // The shadows' dead zone ends in a soft knee KNEE_EV wide (quadratic, C1): with a hard corner, an area whose base hovers around
 // -1 EV broke into lifted and unlifted islands. 0.5 a choice (same prototype).
 const KNEE_EV = 0.5;
+// Edge stop for the shadows' base: a pixel takes at most the lift of its own (bare log) level SPILL_EV darker. The shadows'
+// base, filtered on the pre-smoothed log, spilled a black area's lift onto its brighter neighbours as a bright rim (user, 4.58,
+// a night JPEG: rims round the black gaps between lit beams). Synthetic test (mid grey with texture next to a JPEG-black slot,
+// thumb px): lift 5 px off the slot 4.57 0, 4.58 0.99 EV; with this 1.5 / 1 EV 0.26, 0.75 0.21, 0.5 0.06. 0.5 keeps a dark
+// area even on the alley P5282720 (its shutter slats show a little in the map, by eye), a choice.
+const SPILL_EV = 0.5;
 const MID_GREY = 0.18;   // scene-linear mid grey (the engine's meter target)
 const Y_MIN = 1e-5;   // floor of the luminance before log2 (black pixels)
+// A frame with no sensor noise floor (JPEG: noise 0) has its blacks clipped at 0, and log2 of Y_MIN put them ~16 EV under mid
+// grey: the map read 6-11 EV of shadow there (kg200 IMG_1521 / IMG_1517) and lifted 5-9 EV, and the shadows' pre-smoothing
+// (PRE_FRAC) spread that onto the pixels around a black area as a bright glow (user, 4.58, a night JPEG). Its floor is
+// JPEG_FLOOR_EV under mid grey as exposed: Gold 200's curve is nearly flat by -5 EV (slope 0.18-0.23 against ~0.5 at mid
+// grey, profile density_curves), so a darker area prints black whatever its depth and is lifted as one at -6. A choice.
+const JPEG_FLOOR_EV = 6;
 
 /** Box filter (mean over a (2r+1)² window, clamped at the edges) of a w×h Float32Array, separable, O(n). */
 function box(src, w, h, r) {
@@ -117,13 +129,14 @@ function shadowExcess(d) {
  */
 export function hyperToneMap(rgb, w, h, luma, gain = 1, noise = 0) {
   const n = w * h, L = new Float32Array(n), off = NOISE_FLOOR_SIGMAS * noise;
-  for (let i = 0; i < n; i++) L[i] = Math.log2(Math.max(Y_MIN, off + luma[0] * rgb[3 * i] + luma[1] * rgb[3 * i + 1] + luma[2] * rgb[3 * i + 2]));
+  const yMin = noise > 0 ? Y_MIN : MID_GREY / gain * 2 ** -JPEG_FLOOR_EV;
+  for (let i = 0; i < n; i++) L[i] = Math.log2(Math.max(yMin, off + luma[0] * rgb[3 * i] + luma[1] * rgb[3 * i + 1] + luma[2] * rgb[3 * i + 2]));
   const r = Math.max(1, Math.round(RADIUS_FRAC * Math.max(w, h))), ref = Math.log2(MID_GREY / gain);
   const pr = Math.max(1, Math.round(PRE_FRAC * Math.max(w, h))), Ls = box(box(L, w, h, pr), w, h, pr);
   const hi = guided(L, w, h, r, EDGE_EV), lo = guided(Ls, w, h, r, EDGE_EV), full = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const up = hi[i] - ref - DEAD_EV_HI;
-    full[i] = up > 0 ? up : -shadowExcess(ref - lo[i]);
+    full[i] = up > 0 ? up : -shadowExcess(ref - Math.max(lo[i], L[i] - SPILL_EV));
   }
   const s = Math.min(1, MAP_LONG / Math.max(w, h)), mw = Math.max(1, Math.round(w * s)), mh = Math.max(1, Math.round(h * s));
   return { map: shrink(full, w, h, mw, mh), w: mw, h: mh };
