@@ -304,11 +304,18 @@ export const GRAIN_BLUR = 0.45;
 // halfway: blur_fast 1.2 -> 0.7, fast_count_frac 0.0023 -> 0.0068 (count ~ 1 / blur^2 keeps their std: amount unchanged).
 // Frontier greys at 29.6 um, mids -> lights, before -> after (real): r50 0.88 -> 0.65 / 0.63 -> 0.55 px (0.74 / 0.60),
 // Lstd 2.81 -> 2.84 / 1.32 -> 1.32, C / L 0.59 -> 0.54 / 0.65 -> 0.65. Finer than the real in the mids: the user's choice.
+// 4.60, the mids (user 2026-11-26: "la grana è troppo sporca", seen at full view and zoomed): measured at the preview's 18 um
+// (scratch gr/: a flat grey ramp JPEG through the app, Frontier; fine = std(L - gauss 4) per L* band on 64 px patches) the mids
+// carried ~3x the lights' grain (L* 20-60 4.1, 85-95 0.85), the real ~2x: the user's own 35 mm Gold 200 Frontier scans
+// (Düsseldorf bridge / Gehry buildings, 2576 px, resampled to 18 um) give 1.1-1.25 at L* 75-95, the kg200 set ~2.5 in the mids
+// at 18 um (median of 20 frames, range 0.8-5.3). The 4.47 lights' cut (grain_gain_dense 0.45) is dropped and the amount
+// 4.39 -> 3.12 (x 0.71): ramp L* 20-40 / 40-60 / 60-75 / 75-85 / 85-95, before -> after: 4.15 / 4.13 / 2.45 / 1.39 / 0.85 ->
+// 2.96 / 2.99 / 2.31 / 1.55 / 0.85. Mottle (gauss 4 - gauss 16) / fine unchanged (0.14 -> 0.14 mids), as is the clump size.
+// (grain_gain_dense 0.65 at the same amount: lights 0.68, too clean; 1.3: L* 75-85 1.91, over the real.)
 export const V4_GRAIN = {
   blur: 0.2, blur_fast: 0.7, fast_count_frac: 0.0068, layer_blur_fast: [1.3, 1, 1.6], scan_sharpen_um: HS_UM, scan_sharpen: 0.85,
   scan_noise: 0.005, scan_noise_slope: 0.6, scan_noise_chroma: 0.15,   // scan_noise per 10 um pixel
-  grain_gain_dense: 0.45, grain_gain_from: 0.43, grain_gain_to: 0.57,
 };
 
-export const V4_GRAIN_SCALE = 2.18;   // Grana's slider unit for this grain: the fitted amount (4.53: 4.39) at the default Grana (V4_FILM)
+export const V4_GRAIN_SCALE = 1.547;   // Grana's slider unit for this grain: the fitted amount (4.60: 3.12) at the default Grana (V4_FILM)
 export const GRAIN_UNIT = 0.65;   // slider 1× -> engine amount (= old slider 0.25 / old default 0.4)
