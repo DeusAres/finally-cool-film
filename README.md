@@ -14,6 +14,11 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.61**: **Preset**: nuova tab Preset. In alto un campo per il nome e Salva (salva l'attuale), sotto l'elenco
+  scorrevole dei preset salvati: un tocco sul nome lo applica (un passo di Annulla), il cestino a destra lo elimina. Un preset
+  tiene tutto lo Scanner (scanner e tasti del lab, Hyper Tone, Hyper Sharpness, Magenta / Giallo) e gli Effetti; Base
+  (esposizione, luce, vividezza, grana, halation) e Trasforma (raddrizza, ritaglio, bordo, cornice) restano della foto.
+  Salvati nel browser; lo stesso nome sostituisce il vecchio.
 - **v4.60**: **Grana più pulita nei medi**: misurata all'anteprima (18 µm), la grana dei toni medi e scuri era ~3 volte
   quella delle luci, nelle scansioni Gold 200 vere ~2 (le 35 mm Frontier dell'utente nei cieli chiari, le 20 di kg200 nei
   medi). Grana -29 % su tutti i toni e tolto il taglio nelle luci della 4.47: medi 4,1 -> 3,0, luci invariate (0,85-1,55).

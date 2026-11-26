@@ -11,6 +11,7 @@ import { initMascot } from './mascot.js';
 import { tiltRuler } from './ruler.js';
 import { FRAME_STYLES, FRAME_NAMES, FILED_DEFAULT } from './filmframe.js';
 import { onThumbDoubleTap } from './sliders.js';
+import { loadPresets, savePreset, deletePreset } from './presets.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -21,7 +22,12 @@ const GROUPS = [
   { id: 'scanner', name: 'Scanner', icon: 'look', tools: ['scan', 'labD', 'nbBright', 'labGrad', 'labHi', 'labLo', 'labSat', 'labBright', 'htLo', 'htHi', 'hypersharp', 'mshift', 'yshift'] },
   { id: 'transform', name: 'Trasforma', icon: 'crop', tools: [] },
   { id: 'effects', name: 'Effetti', icon: 'fx', tools: ['texture', 'clarity', 'sharp', 'ca', 'vignette', 'falloff', 'dust'] },
+  // Preset (lib/presets.js): the Scanner and Effetti tools saved as a look and applied in one tap
+  { id: 'presets', name: 'Preset', icon: 'preset', tools: [] },
 ];
+// What a preset holds: the scanner (scan) and every slider of the Scanner and Effetti groups (lib/presets.js says why)
+const PRESET_IDS = GROUPS.filter((g) => g.id === 'scanner' || g.id === 'effects').flatMap((g) => g.tools).filter((id) => id !== 'scan');
+const esc = (t) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 // Short names for the strip (the full label, from the row, is the big slider's title).
 const SCANS = ['scanNone', 'scanFrontier', 'scanNoritsu'];
 const SHORT = { scan: 'Scanner', ev: 'Esposiz.', labD: 'Densità', nbBright: 'Luminos.', temp: 'Luce', mshift: 'Magenta', yshift: 'Giallo', vibrance: 'Vividezza',
@@ -33,6 +39,9 @@ const I = {
   look: '<rect x="3" y="8" width="18" height="10" rx="2"/><path d="M6 13h12M8 5h8"/>',
   crop: '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M2 6h14a2 2 0 0 1 2 2v14"/>',
   fx: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
+  preset: '<path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4.5L5 21V4a1 1 0 0 1 1-1z"/>',
+  save: '<path d="M12 5v14M5 12h14"/>',
+  trash: '<path d="M4 7h16M9 7V4h6v3M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/>',
   ev: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/>',
   dens: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17A8.5 8.5 0 0 0 12 3.5z" fill="currentColor"/>',
   temp: '<path d="M10 14.5V5a2 2 0 0 1 4 0v9.5a4 4 0 1 1-4 0z"/>',
@@ -181,7 +190,16 @@ export function initUI2(api) {
       <span class="u2val">${valueOf(id)}</span>
       <div class="u2acts">${auto}<button class="u2reset" aria-label="Azzera"${modified(id) ? '' : ' disabled'}>${svg('reset')}<span>Azzera</span></button></div></div>`;
   }
+  function presetsPane() {
+    const list = loadPresets();
+    return `<div class="u2pre"><div class="u2pnew"><input type="text" class="u2pname" placeholder="Nome preset" maxlength="40" enterkeyhint="done" aria-label="Nome del preset">
+      <button class="u2psave">${svg('save')}<span>Salva</span></button></div>
+      <div class="u2plist">${list.length ? list.map((p, i) => `<div class="u2pitem"><button class="u2papply" data-i="${i}">${esc(p.name)}</button>
+        <button class="u2pdel" data-i="${i}" aria-label="Elimina ${esc(p.name)}">${svg('trash')}</button></div>`).join('')
+        : '<div class="u2pempty">Nessun preset: imposta Scanner ed Effetti e salva</div>'}</div></div>`;
+  }
   function body(g) {
+    if (g === 'presets') return presetsPane();
     if (g === 'transform') {
       if (DESK.matches) return `<div class="u2list">${Object.keys(TR).map((t) => `<div class="u2tool u2tr" data-tr="${t}"></div>`).join('')}</div>`;
       const t = sel.transform;
@@ -207,7 +225,29 @@ export function initUI2(api) {
   // cropped (user: the border and the frame belong around the cropped photo, not the whole one)
   const syncCrop = () => api.cropEditing(group === 'transform' && sel.transform === 'crop');
 
+  // Preset: save the current Scanner + Effetti tools under the typed name; a tap on a name applies it (one undo step),
+  // the bin deletes it
+  function wirePresets(pg) {
+    const name = pg.querySelector('.u2pname');
+    const save = () => {
+      const snap = api.snapshot();
+      const nm = name.value.trim() || `Preset ${loadPresets().length + 1}`;
+      savePreset({ name: nm, scanner: snap.scanner, v: Object.fromEntries(PRESET_IDS.map((id) => [id, snap.v[id]]).filter(([, v]) => v !== undefined)) });
+      haptic(); draw(false);
+    };
+    pg.querySelector('.u2psave').onclick = save;
+    name.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); name.blur(); save(); } };
+    pg.querySelectorAll('.u2papply').forEach((b) => b.onclick = async () => {
+      const p = loadPresets()[+b.dataset.i], snap = api.snapshot();
+      if (!p) return;
+      haptic();
+      await api.restore({ ...snap, scanner: p.scanner || snap.scanner, v: { ...snap.v, ...Object.fromEntries(Object.entries(p.v).filter(([id]) => PRESET_IDS.includes(id))) } });
+      commit();
+    });
+    pg.querySelectorAll('.u2pdel').forEach((b) => b.onclick = () => { const p = loadPresets()[+b.dataset.i]; if (p) { deletePreset(p.name); haptic(); draw(false); } });
+  }
   function wire(g, pg) {
+    if (g === 'presets') { wirePresets(pg); return; }
     const q = (sel) => pg.querySelector(sel);
     pg.querySelectorAll('.u2t').forEach((b) => b.onclick = () => {
       const t = b.dataset.t;
@@ -583,6 +623,20 @@ body.ui2:not(.u2desk) #u2mascot { bottom: calc(34px + var(--u2h, 0px)); }
 .u2track input::-webkit-slider-thumb, .u2sl input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 28px; height: 28px;
   margin-top: -12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 5px rgba(0,0,0,.5); }
 .u2none { color: var(--muted); font-size: 14px; display: grid; place-items: center; }
+/* Preset: name field + Salva on one row, the saved ones below in a scrolling list, each with its bin on the right */
+.u2pre { display: flex; flex-direction: column; min-height: 0; flex: 1; padding: 0 16px 8px; gap: 8px; }
+.u2pnew { display: flex; gap: 8px; flex: none; }
+.u2pname { flex: 1; min-width: 0; height: 36px; border: 1px solid var(--line); border-radius: 10px; background: #0f0e0d; color: var(--fg); padding: 0 12px; font: 16px -apple-system, system-ui, sans-serif; }
+.u2psave { flex: none; height: 36px; border: 0; border-radius: 10px; background: var(--accent); color: #1a1307; display: flex; gap: 4px; align-items: center; padding: 0 12px; font: 600 14px -apple-system, system-ui, sans-serif; }
+.u2psave svg { width: 18px; height: 18px; }
+.u2plist { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; border-top: 1px solid #262320; }
+.u2pitem { display: flex; align-items: center; border-bottom: 1px solid #262320; }
+.u2papply { flex: 1; min-width: 0; text-align: left; border: 0; background: none; color: var(--fg); padding: 10px 2px; font: 15px -apple-system, system-ui, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.u2papply:active { color: var(--accent); }
+.u2pdel { flex: none; width: 40px; height: 36px; border: 0; background: none; color: var(--muted); display: grid; place-items: center; }
+.u2pdel svg { width: 19px; height: 19px; }
+.u2pempty { color: var(--muted); font-size: 13.5px; padding: 14px 2px; }
+body.u2desk .u2pre { padding-top: 12px; }
 .u2tools { display: flex; gap: 6px; overflow-x: auto; padding: 2px 12px 8px; scrollbar-width: none; -webkit-mask: linear-gradient(90deg, transparent, #000 12px, #000 88%, transparent); }
 .u2tools::-webkit-scrollbar { display: none; }
 .u2t { flex: none; position: relative; width: 66px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0 5px; border: 0; border-radius: 12px; background: none; color: var(--muted); font: 11.5px -apple-system, system-ui, sans-serif; }
@@ -612,7 +666,8 @@ body.u2desk #u2 { grid-area: u2; display: flex; flex-direction: column; min-heig
 body.u2desk #histo { position: static; flex: none; width: auto; height: 104px; margin: 12px 16px 8px; background: #000; }
 body.u2desk .u2nav { order: -1; flex: none; border-top: 0; border-bottom: 1px solid var(--line); padding: 0 6px; }
 body.u2desk #histo { order: -2; }
-body.u2desk .u2nav button { flex-direction: row; justify-content: center; gap: 6px; font-size: 13px; padding: 10px 0; }
+/* five groups since Preset (4.61): icon over the name, as on the phone (side by side they no longer fit the column) */
+body.u2desk .u2nav button { gap: 3px; font-size: 12px; padding: 8px 0 7px; min-width: 0; }
 body.u2desk .u2nav button svg { width: 18px; height: 18px; }
 body.u2desk .u2slot { flex: 1; height: auto; min-height: 0; }
 body.u2desk .u2page { overflow-y: auto; padding: 0 0 12px; scrollbar-width: thin; }
