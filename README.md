@@ -14,6 +14,11 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.60**: **Grana più pulita nei medi**: misurata all'anteprima (18 µm), la grana dei toni medi e scuri era ~3 volte
+  quella delle luci, nelle scansioni Gold 200 vere ~2 (le 35 mm Frontier dell'utente nei cieli chiari, le 20 di kg200 nei
+  medi). Grana -29 % su tutti i toni e tolto il taglio nelle luci della 4.47: medi 4,1 -> 3,0, luci invariate (0,85-1,55).
+  Dimensione dei grani, colore e nitidezza invariati; il cursore Grana parte dallo stesso valore. Baseline dei check
+  aggiornate.
 - **v4.59**: **Hyper Tone ombre senza alone sui JPEG**: attorno alle zone nere (fessure tra travi illuminate, il bordo nero
   di una scansione) la 4.58 schiariva anche i vicini, un orlo chiaro / lattiginoso. Due cause: nei JPEG il nero tagliato a
   zero veniva letto ~16 EV sotto il grigio e schiarito di 5-10 EV (già nella 4.57), e la mappa ammorbidita della 4.58 lo
