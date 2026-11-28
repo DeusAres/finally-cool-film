@@ -14,6 +14,8 @@ di pellicola → scansione, nel browser via WebAssembly + WebGPU. Focus: Kodak G
 
 ## App (v4.0)
 
+- **v4.62**: **Icona**: favicon e icona per la schermata Home (iOS) dal rullino mascotte, in pixel art
+  (scripts/icons/make_icons.py le genera da web/lib/rullino.js).
 - **v4.61**: **Preset**: nuova tab Preset. In alto un campo per il nome e Salva (salva l'attuale), sotto l'elenco
   scorrevole dei preset salvati: un tocco sul nome lo applica (un passo di Annulla), il cestino a destra lo elimina. Un preset
   tiene tutto lo Scanner (scanner e tasti del lab, Hyper Tone, Hyper Sharpness, Magenta / Giallo) e gli Effetti; Base
